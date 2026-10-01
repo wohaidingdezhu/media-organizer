@@ -1,0 +1,392 @@
+import contextlib
+import io
+import json
+import os
+from pathlib import Path
+import struct
+import subprocess
+import tempfile
+import time
+import unittest
+from unittest import mock
+import zlib
+
+import media_scan as scan
+
+
+def sample_png(path, marker):
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+    pixels = b"".join(b"\0" + bytes((x * 31 + y * 17 + (x // 4 % 2) * 70) % 256 for x in range(32)) for y in range(32))
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 32, 32, 8, 0, 0, 0, 0))
+                     + chunk(b"tEXt", b"Comment\0" + marker.encode()) + chunk(b"IDAT", zlib.compress(pixels)) + chunk(b"IEND", b""))
+
+
+class MediaTests(unittest.TestCase):
+    def test_end_to_end_read_only_duplicates_and_reports(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            source, output = base / "media", base / "reports"
+            source.mkdir()
+            (source / "ABC-123-CD1.mp4").write_bytes(b"movie-one")
+            (source / "copy.mkv").write_bytes(b"movie-one")
+            (source / "ABC-123-CD2.mp4").write_bytes(b"movie-two")
+            (source / "IMG_20240229.jpg").write_bytes(b"not-a-real-photo")
+            (source / "empty.mov").touch()
+            (source / ".hidden.mp4").write_bytes(b"movie-one")
+            os.link(source / "ABC-123-CD1.mp4", source / "hard.mp4")
+            (source / "link.mp4").symlink_to(source / "ABC-123-CD1.mp4")
+            library = source / "Photos.photoslibrary"
+            library.mkdir()
+            (library / "private.mp4").write_bytes(b"movie-one")
+            before = {str(p): (p.read_bytes(), p.stat().st_mtime_ns) for p in source.rglob("*") if p.is_file()}
+            original_umask = os.umask(0o077)
+            os.umask(original_umask)
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = scan.main([str(source), str(source), "--output", str(output), "--no-image-metadata"])
+            self.assertEqual(os.umask(original_umask), original_umask)
+            self.assertEqual(code, 0)
+            report = next(output.glob("*/report.json"))
+            data = json.loads(report.read_text())
+            self.assertEqual(len(data["roots"]), 1)
+            self.assertEqual(data["summary"]["duplicate_groups"], 1)
+            self.assertEqual(len(data["duplicates"][0]["paths"]), 2)
+            self.assertEqual(data["summary"]["hardlinks"], 1)
+            self.assertEqual(data["summary"]["redundant_logical_bytes"], 9)
+            self.assertEqual(data["summary"]["files"], 6)
+            self.assertTrue(any("照片/2024/02" in r["suggested_path"] for r in data["files"]))
+            self.assertFalse(data["similar"]["enabled"])
+            self.assertEqual(before, {str(p): (p.read_bytes(), p.stat().st_mtime_ns) for p in source.rglob("*") if p.is_file()})
+            self.assertEqual(len(list(report.parent.glob("*"))), 9)
+
+    def test_same_folder_names_are_reported_and_suggested_paths_stay_distinct(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            first, second = base / "one" / "Movies", base / "two" / "Movies"
+            first.mkdir(parents=True)
+            second.mkdir(parents=True)
+            for name, filename in [("Trip:2024", "clip-a.mp4"), ("Trip?2024", "clip-b.mp4")]:
+                folder = first / name
+                folder.mkdir()
+                (folder / filename).write_bytes(filename.encode())
+            (second / "clip-c.mp4").write_bytes(b"third video")
+            originals = {p: (p.read_bytes(), p.stat().st_mtime_ns) for root in (first, second) for p in root.rglob("*.mp4")}
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = scan.main([str(first), str(second), "--output", str(base / "reports"),
+                                  "--video-rule", "folder", "--no-image-metadata"])
+            self.assertEqual(code, 0)
+            report = next((base / "reports").glob("scan-*/report.json"))
+            data = json.loads(report.read_text())
+            self.assertEqual({g["type"] for g in data["folder_groups"]}, {"同名", "整理后名称冲突"})
+            targets = {Path(r["path"]).name: Path(r["suggested_path"]).parts for r in data["files"]}
+            self.assertNotEqual(targets["clip-a.mp4"][2], targets["clip-c.mp4"][2])
+            self.assertNotEqual(targets["clip-a.mp4"][3], targets["clip-b.mp4"][3])
+            self.assertIn("文件夹名称冲突", next(r["reason"] for r in data["files"] if r["name"] == "clip-a.mp4"))
+            self.assertEqual(len((report.parent / "folder_names.csv").read_text().splitlines()), 5)
+            self.assertEqual(originals, {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in originals})
+
+    def test_same_folder_media_content_requires_complete_hashes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            roots = [base / name / "Album" for name in ("one", "two", "three", "four")]
+            for root in roots:
+                root.mkdir(parents=True)
+            roots = [root.resolve() for root in roots]
+            sample_png(roots[0] / "photo.png", "same")
+            sample_png(roots[1] / "renamed.png", "same")
+            sample_png(roots[2] / "photo.png", "same")
+            (roots[0] / "clip.mp4").write_bytes(b"video-A")
+            (roots[1] / "renamed.mov").write_bytes(b"video-A")
+            (roots[2] / "clip.mp4").write_bytes(b"video-B")
+            (roots[3] / "empty.mp4").touch()
+            originals = {p: (p.read_bytes(), p.stat().st_mtime_ns) for root in roots for p in root.iterdir()}
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = scan.main([*(str(root) for root in roots), "--output", str(base / "reports"),
+                                  "--no-image-metadata"])
+            self.assertEqual(code, 0)
+            report_dir = next((base / "reports").glob("scan-*"))
+            data = json.loads((report_dir / "report.json").read_text())
+            self.assertEqual(data["version"], 5)
+            group = next(group for group in data["folder_groups"] if group["name"] == "Album")
+            folders = {folder["path"]: folder for folder in group["folders"]}
+            self.assertEqual(folders[str(roots[0])]["content_match_example"], str(roots[1]))
+            self.assertEqual(folders[str(roots[1])]["content_match_example"], str(roots[0]))
+            self.assertIn("已确认", folders[str(roots[0])]["content_check"])
+            self.assertFalse(folders[str(roots[2])]["content_match_example"])
+            self.assertIn("未发现", folders[str(roots[2])]["content_check"])
+            self.assertFalse(folders[str(roots[3])]["content_match_example"])
+            self.assertIn("未确认", folders[str(roots[3])]["content_check"])
+            self.assertIn("匹配示例", (report_dir / "report.html").read_text())
+            self.assertIn("匹配文件夹示例", (report_dir / "folder_names.csv").read_text())
+            self.assertEqual(originals, {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in originals})
+
+    def test_nested_same_name_folders_do_not_match_themselves(self):
+        root = Path("/temporary/Album")
+        child = root / "Album"
+        record = {"root": str(root), "path": str(child / "movie.mp4"),
+                  "bytes": 5, "sha256": "a" * 64}
+        group = scan.related_folders([str(root), str(child)], [record])[0]
+        self.assertTrue(all(not folder["content_match_example"] for folder in group["folders"]))
+        peer = Path("/another/Album")
+        peer_record = {**record, "root": str(peer), "path": str(peer / "renamed.mov")}
+        group = scan.related_folders([str(root), str(child), str(peer)], [record, peer_record])[0]
+        folders = {folder["path"]: folder for folder in group["folders"]}
+        self.assertEqual(folders[str(root)]["content_match_example"], str(peer))
+        self.assertEqual(folders[str(child)]["content_match_example"], str(peer))
+        self.assertIn(folders[str(peer)]["content_match_example"], (str(root), str(child)))
+
+    def test_image_previews_and_video_groups_use_sample_files_only(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            source, output = base / "media", base / "reports"
+            source.mkdir()
+            for marker in "ABCDEF":
+                sample_png(source / f"sample-{marker}.png", marker)
+            (source / "ABC-123-CD1-1080p.mp4").write_bytes(b"part-one")
+            (source / "ABC-123-CD2-720p.mkv").write_bytes(b"part-two")
+            before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in source.iterdir()}
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = scan.main([str(source), "--output", str(output)])
+            self.assertEqual(code, 0)
+            report_dir = next(output.glob("scan-*"))
+            data = json.loads((report_dir / "report.json").read_text())
+            self.assertEqual(data["summary"]["duplicate_groups"], 0)
+            self.assertEqual(len(data["similar"]["pairs"]), 15)
+            self.assertEqual(len(data["previews"]), 6)
+            self.assertTrue(all((report_dir / relative).is_file() for relative in data["previews"].values()))
+            self.assertEqual(len(data["video_groups"]), 1)
+            self.assertEqual(data["video_groups"][0]["label"], "ABC-123")
+            self.assertTrue(all(file["modified_at"] and file["hash_status"] for file in data["video_groups"][0]["files"]))
+            self.assertEqual(len((report_dir / "video_groups.csv").read_text().splitlines()), 3)
+            page = (report_dir / "report.html").read_text()
+            self.assertIn("<img loading='lazy' src='previews/", page)
+            self.assertIn("筛选全部分类建议", page)
+            self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in source.iterdir()})
+
+    def test_image_worker_reuses_process_after_unreadable_sample(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            first, second, broken = base / "first.png", base / "中文\n照片.png", base / "broken.png"
+            sample_png(first, "A")
+            sample_png(second, "B")
+            broken.write_bytes(b"not an image")
+            worker = scan.ImageProbeWorker(scan.BASE / "native" / "image_probe")
+            try:
+                self.assertIsNotNone(worker.request(str(first))["dhash"])
+                process_id = worker.process.pid
+                with self.assertRaises(ValueError):
+                    worker.request(str(broken))
+                self.assertIsNotNone(worker.request(str(second))["dhash"])
+                self.assertEqual(worker.process.pid, process_id)
+            finally:
+                worker.close()
+
+    def test_image_worker_restarts_after_timeout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            helper = Path(temporary) / "slow_helper.py"
+            helper.write_text("#!/usr/bin/env python3\nimport json, sys, time\nfor line in sys.stdin:\n request = json.loads(line)\n if request['path'] == 'slow': time.sleep(5)\n print(json.dumps({'path': request['path']}), flush=True)\n")
+            helper.chmod(0o700)
+            worker = scan.ImageProbeWorker(helper)
+            try:
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    worker.request("slow", timeout=0.05)
+                self.assertEqual(worker.request("fast", timeout=5)["path"], "fast")
+            finally:
+                worker.close()
+
+    def test_image_worker_times_out_on_partial_response(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            helper = Path(temporary) / "partial_helper.py"
+            helper.write_text("#!/usr/bin/env python3\nimport json, sys, time\nfor line in sys.stdin:\n request = json.loads(line)\n if request['path'] == 'partial':\n  sys.stdout.write('{\"path\":')\n  sys.stdout.flush()\n  time.sleep(2)\n  print('\"partial\"}', flush=True)\n else:\n  print(json.dumps({'path': request['path']}), flush=True)\n")
+            helper.chmod(0o700)
+            worker = scan.ImageProbeWorker(helper)
+            try:
+                started = time.monotonic()
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    worker.request("partial", timeout=0.1)
+                self.assertLess(time.monotonic() - started, 1.5)
+                self.assertEqual(worker.request("fast", timeout=5)["path"], "fast")
+            finally:
+                worker.close()
+
+    def test_failed_image_preview_leaves_no_partial_report_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            source = base / "sample.png"
+            sample_png(source, "preview")
+            report = base / "report"
+            report.mkdir()
+            record = {"path": str(source), "_signature": scan.signature(source.stat())}
+            class PartialPreviewWorker:
+                def __init__(self, helper):
+                    pass
+                def request(self, path, thumbnail=None):
+                    Path(thumbnail).write_bytes(b"partial")
+                    raise ValueError("sample decode failure")
+                def close(self):
+                    pass
+            issues = []
+            with mock.patch.object(scan, "ImageProbeWorker", PartialPreviewWorker):
+                previews = scan.export_previews(report, [record],
+                                                {"pairs": [{"left": str(source), "right": str(source)}]},
+                                                base / "unused", issues)
+            self.assertEqual(previews, {})
+            self.assertEqual(list((report / "previews").iterdir()), [])
+            self.assertEqual(len(issues), 1)
+            self.assertTrue(source.is_file())
+
+    def test_native_image_helper_rejects_symlink_source_and_output(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            source = base / "source.png"
+            sample_png(source, "A")
+            original = source.read_bytes()
+            linked_source, linked_output = base / "linked.png", base / "preview.png"
+            linked_source.symlink_to(source)
+            linked_output.symlink_to(source)
+            helper = scan.BASE / "native" / "image_probe"
+            self.assertFalse(scan.helper_available(linked_source))
+            self.assertNotEqual(subprocess.run([str(helper), str(linked_source)], capture_output=True).returncode, 0)
+            self.assertNotEqual(subprocess.run([str(helper), "--thumbnail", str(source), str(linked_output)], capture_output=True).returncode, 0)
+            self.assertEqual(source.read_bytes(), original)
+            self.assertTrue(linked_output.is_symlink())
+
+    def test_changed_file_and_symlink_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "test.mp4"
+            path.write_bytes(b"first")
+            record = {"path": str(path), "name": path.name, "_signature": scan.signature(path.stat())}
+            path.write_bytes(b"second")
+            with self.assertRaises(ValueError):
+                scan.full_hash(record)
+            link = Path(temporary) / "link.mp4"
+            link.symlink_to(path)
+            record = {"path": str(link), "name": link.name, "_signature": scan.signature(path.stat())}
+            with self.assertRaises((ValueError, OSError)):
+                scan.full_hash(record)
+
+    def test_scan_root_rejects_symlink_and_package_subdirectory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            target = base / "photos"
+            target.mkdir()
+            link = base / "linked-photos"
+            link.symlink_to(target, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "符号链接"):
+                scan.normalize_roots([str(link)], base / "reports")
+            nested = base / "Library.photoslibrary" / "originals"
+            nested.mkdir(parents=True)
+            with self.assertRaisesRegex(ValueError, "资料库包"):
+                scan.normalize_roots([str(nested)], base / "reports")
+
+    def test_exif_filename_and_tiff_date_priority(self):
+        record = {"name": "IMG_20240229.jpg", "mtime": 0, "image": {"date_original": "2020:01:02 12:00:00", "date_source": "exif_original"}}
+        self.assertEqual(scan.month_for(record)[0], "2020/01")
+        record["image"]["date_source"] = "tiff_datetime"
+        self.assertEqual(scan.month_for(record)[0], "2024/02")
+        record["name"] = "IMG_20230230.jpg"
+        self.assertIn("修改时间", scan.month_for(record)[1])
+
+    def test_ids_and_csv_formula_escaping(self):
+        self.assertEqual(scan.video_id("ABC-123-CD2-1080p"), "ABC-123")
+        self.assertEqual(scan.video_id("IMG_20240101"), "")
+        self.assertEqual(scan.video_id("FC2-PPV-1234567"), "FC2-PPV-1234567")
+        self.assertEqual(scan.csv_cell(" =HYPERLINK(x)"), "' =HYPERLINK(x)")
+
+    def test_related_video_titles_keep_distinct_works_apart(self):
+        def video(name):
+            return {"kind": "视频", "name": name, "path": "/tmp/" + name,
+                    "hardlink_to": "", "bytes": 7, "extension": "mp4"}
+        records = [video("Family.Trip.CD1.1080p.mp4"), video("Family.Trip.CD2.720p.mp4"),
+                   video("Family.Dinner.1080p.mp4"), video("ABC-123-CD1.mp4"), video("ABC-123-CD2.mp4")]
+        groups = scan.related_videos(records)
+        self.assertEqual({g["label"] for g in groups}, {"Family Trip", "ABC-123"})
+
+    def test_ambiguous_live_photo_name_is_not_paired_automatically(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            (root / "IMG_0001.heic").write_bytes(b"photo one")
+            (root / "IMG_0001.jpg").write_bytes(b"photo two")
+            (root / "IMG_0001.mov").write_bytes(b"video one")
+            (root / "IMG_0002.jpg").write_bytes(b"photo three")
+            (root / "IMG_0002.mov").write_bytes(b"video two")
+            records, _ = scan.discover([root], root / "reports", False, [])
+            scan.classify(records, "auto")
+            by_name = {record["name"]: record for record in records}
+            self.assertTrue(by_name["IMG_0001.mov"]["suggested_path"].startswith("视频/"))
+            self.assertIn("不唯一", by_name["IMG_0001.mov"]["reason"])
+            self.assertTrue(by_name["IMG_0002.mov"]["suggested_path"].startswith("照片/"))
+
+    def test_optional_video_header_check_reports_uncertainty(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            source = base / "media"
+            source.mkdir()
+            (source / "good.mp4").write_bytes(b"\x00\x00\x00\x18ftypisom" + b"\0" * 12)
+            os.link(source / "good.mp4", source / "hard.mp4")
+            (source / "suspicious.mp4").write_bytes(b"just sample bytes")
+            (source / "renamed-photo.mp4").write_bytes(b"\x00\x00\x00\x18ftypheic" + b"\0" * 12)
+            (source / "unsupported.ts").write_bytes(b"sample transport stream")
+            originals = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in source.iterdir()}
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = scan.main([str(source), "--output", str(base / "reports"),
+                                  "--no-image-metadata", "--check-video-headers"])
+            self.assertEqual(code, 0)
+            report_dir = next((base / "reports").glob("scan-*"))
+            data = json.loads((report_dir / "report.json").read_text())
+            self.assertEqual(data["video_inspection"], {"enabled": True, "checked": 3,
+                                                         "recognized": 1, "unrecognized": 2})
+            by_name = {record["name"]: record for record in data["files"]}
+            self.assertIn("识别到", by_name["good.mp4"]["video_header_status"])
+            self.assertIn("硬链接：识别到", by_name["hard.mp4"]["video_header_status"])
+            self.assertIn("未识别", by_name["suspicious.mp4"]["video_header_status"])
+            self.assertIn("未识别", by_name["renamed-photo.mp4"]["video_header_status"])
+            self.assertIn("未检查", by_name["unsupported.ts"]["video_header_status"])
+            self.assertEqual(len(data["issues"]), 2)
+            self.assertIn("视频文件头状态", (report_dir / "inventory.csv").read_text())
+            self.assertIn("本次轻量检查 3 个视频文件头", (report_dir / "report.html").read_text())
+            self.assertEqual(originals, {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in source.iterdir()})
+
+    def test_report_search_data_includes_every_row_and_escapes_filenames(self):
+        files = [{"kind": "照片", "path": f"/sample/photo-{i}.jpg",
+                  "suggested_path": f"照片/photo-{i}.jpg", "reason": "样例"} for i in range(1000)]
+        files.append({"kind": "视频", "path": "/sample/</script><script>alert(1)</script>.mp4",
+                      "suggested_path": "视频/last.mp4", "reason": "最后一条"})
+        data = {"summary": {"files": len(files), "duplicate_groups": 0, "hardlinks": 0, "redundant_logical_bytes": 0},
+                "duplicates": [], "similar": {"pairs": [], "eligible": 0, "truncated": False},
+                "previews": {}, "video_groups": [], "files": files, "issues": [], "skipped": {},
+                "roots": ["/sample"], "created_at": "2026-10-01", "options": {"distance": 6},
+                "image_inspection": {"note": "样例"}}
+        page = scan.render_report(data)
+        self.assertIn("视频/last.mp4", page)
+        self.assertIn(r"\u003c/script\u003e", page)
+        self.assertNotIn("</script><script>alert(1)", page)
+
+    def test_similarity_threshold_and_exact_exclusion(self):
+        def record(path, value, sha=""):
+            return {"path": path, "hardlink_to": "", "sha256": sha, "image": {"dhash": f"{value:016x}", "low_detail": False, "width": 100, "height": 80}}
+        data = [record("a", 0x1234, "same"), record("b", 0x1235), record("c", 0x1234, "same")]
+        result = scan.similar_images(data, 1, 100, True)
+        self.assertEqual(len(result["pairs"]), 2)
+        self.assertFalse(any(p["left"] == "a" and p["right"] == "c" for p in result["pairs"]))
+        self.assertTrue(scan.similar_images(data, 1, 1, True)["truncated"])
+        self.assertFalse(scan.similar_images(data, 1, 2, True)["truncated"])
+
+    def test_output_exclusion_and_target_collision(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "reports"
+            output.mkdir()
+            (output / "ignored.mp4").write_bytes(b"report")
+            for directory in ["a", "b"]:
+                (root / directory).mkdir()
+                (root / directory / "IMG_20240101.jpg").write_bytes(b"image")
+            records, skipped = scan.discover([root], output, False, [])
+            self.assertEqual(len(records), 2)
+            self.assertEqual(skipped["报告目录"], 1)
+            scan.classify(records, "auto")
+            self.assertEqual(len({r["suggested_path"].casefold() for r in records}), 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

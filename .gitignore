@@ -1,0 +1,5 @@
+__pycache__/
+reports/
+.DS_Store
+native/image_probe
+PROJECT_STATUS.md
