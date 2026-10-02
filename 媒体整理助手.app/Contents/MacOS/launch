@@ -1,3 +1,3 @@
 #!/bin/zsh
-cd -- "${0:A:h:h:h:h}" || exit 1
-exec /usr/bin/python3 ./media_gui.py
+project=${0:A:h:h:h:h}
+exec /usr/bin/open "$project/开始扫描.command"
