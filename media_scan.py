@@ -604,6 +604,68 @@ def related_videos(records):
     return sorted(result, key=lambda g: (-len(g["files"]), g["type"], g["label"].casefold()))
 
 
+def build_video_library(records, sidecars, duplicates, issues, folder_groups):
+    """Build a read-only, per-scan film index from already collected facts."""
+    videos = [record for record in records if record["kind"] == "视频"]
+    video_paths = {record["path"] for record in videos}
+    by_path_issues = collections.defaultdict(list)
+    review = []
+    for item in issues:
+        if item["path"] in video_paths:
+            by_path_issues[item["path"]].append(item["reason"])
+            review.append({"path": item["path"], "reason": item["reason"], "type": "视频"})
+    duplicate_numbers = {}
+    for number, group in enumerate(duplicates, 1):
+        for path in group["paths"]:
+            if path in video_paths:
+                duplicate_numbers[path] = number
+                review.append({"path": path, "reason": f"精确重复第 {number} 组；需人工核对保留哪份", "type": "精确重复"})
+    attachments = collections.defaultdict(list)
+    for item in sidecars:
+        if item["status"] == "已关联" and item["media_paths"][0] in video_paths:
+            attachments[item["media_paths"][0]].append(item["path"])
+        elif item["extension"] in VIDEO_SIDECAR_EXT:
+            review.append({"path": item["path"], "reason": "附属文件" + item["status"], "type": "附属文件"})
+    video_folders = set()
+    for record in videos:
+        parent = Path(record["path"]).parent
+        root = Path(record["root"])
+        while inside(parent, root):
+            video_folders.add(str(parent))
+            if parent == root:
+                break
+            parent = parent.parent
+    for group in folder_groups:
+        if any(folder["path"] in video_folders for folder in group["folders"]):
+            review.append({"path": "；".join(folder["path"] for folder in group["folders"]),
+                           "reason": f"{group['type']}文件夹候选，需核对目录内容", "type": "文件夹"})
+    grouped = collections.defaultdict(list)
+    labels = {}
+    for record in videos:
+        path = Path(record["path"])
+        identifier = video_id(path.stem)
+        title = identifier or video_title(path.stem) or path.stem
+        # Titles without an identifier are only joined within the same source folder.
+        key = ("编号", identifier) if identifier else ("原目录名称", str(path.parent), unicodedata.normalize("NFC", title).casefold())
+        labels[key] = ("编号" if identifier else "原目录名称", title)
+        grouped[key].append({"path": record["path"], "extension": record["extension"],
+                             "bytes": record["bytes"], "modified_at": dt.datetime.fromtimestamp(record["mtime"]).strftime("%Y-%m-%d %H:%M"),
+                             "suggested_path": record["suggested_path"], "hash_status": record["hash_status"],
+                             "video_header_status": record.get("video_header_status", "未检查"),
+                             "sidecars": sorted(attachments[record["path"]]),
+                             "issues": by_path_issues[record["path"]],
+                             "duplicate_group": duplicate_numbers.get(record["path"], 0)})
+    groups = []
+    for key, files in grouped.items():
+        kind, title = labels[key]
+        groups.append({"type": kind, "title": title, "files": sorted(files, key=lambda item: item["path"]),
+                       "needs_review": any(item["issues"] or item["duplicate_group"] for item in files),
+                       "has_sidecars": any(item["sidecars"] for item in files)})
+    groups.sort(key=lambda group: (group["title"].casefold(), group["files"][0]["path"]))
+    return {"groups": groups, "issues": review, "video_files": len(videos),
+            "duplicate_files": len(duplicate_numbers)}
+
+
 def classify(records, video_rule):
     image_stems = collections.defaultdict(list)
     for record in records:
@@ -843,7 +905,7 @@ def render_report(data):
     return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' file: data:"><title>媒体整理助手 · 扫描报告</title><style>
     :root{{color-scheme:light}}*{{box-sizing:border-box}}body{{margin:0;background:#f3f6f8;color:#1d2939;font:15px/1.65 -apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif}}main{{max-width:1280px;margin:38px auto;padding:0 28px}}header{{padding:30px;background:#14352f;color:white;border-radius:20px}}h1{{margin:8px 0;font-size:32px}}header p{{color:#d5e9e2;margin:6px 0}}.badge{{font-size:12px;letter-spacing:2px;color:#9ee2c7}}.cards{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:20px 0}}.card,section{{background:white;border:1px solid #dde5e6;border-radius:14px;padding:22px}}.card span{{display:block;color:#607076;font-size:13px}}.card strong{{font-size:27px}}nav{{display:flex;gap:18px;flex-wrap:wrap;margin:20px 0}}a{{color:#126653}}section{{margin:18px 0}}h2{{margin:0 0 8px;font-size:22px}}small,.muted{{color:#627378}}.notice{{background:#fff5dc;padding:12px 16px;border-radius:8px}}input,select,button{{padding:10px;border:1px solid #a8babc;border-radius:8px;font:inherit}}button{{background:white;cursor:pointer}}button:disabled{{opacity:.45;cursor:default}}.controls,.pager{{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0}}.controls input{{flex:1;min-width:240px}}.scroll{{overflow:auto;max-height:650px}}table{{border-collapse:collapse;width:100%;font-size:13px}}td,th{{padding:12px;text-align:left;vertical-align:top;border-bottom:1px solid #e4eaec;overflow-wrap:anywhere;min-width:150px}}th{{background:#f1f5f4;position:sticky;top:0}}td:first-child{{max-width:460px}}details,.pair{{border:1px solid #dce5e5;border-radius:8px;padding:14px;margin:12px 0;overflow-wrap:anywhere}}summary{{cursor:pointer;font-weight:600}}li{{margin:8px 0}}.empty{{color:#627378;padding:12px 0}}.pair-grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:10px}}.image-tile{{min-width:0;overflow-wrap:anywhere;font-size:12px}}.image-tile img,.no-preview{{display:block;width:100%;height:220px;object-fit:contain;background:#f1f5f4;border-radius:8px}}.no-preview{{display:grid;place-items:center;color:#627378}}@media(max-width:900px){{.cards{{grid-template-columns:repeat(2,1fr)}}}}@media(max-width:700px){{main{{padding:0 14px}}h1{{font-size:27px}}.pair-grid{{grid-template-columns:1fr}}}}[hidden]{{display:none!important}}
     </style></head><body><main><header><div class="badge">LOCAL MEDIA AUDIT / 只读扫描</div><h1>让媒体库清楚一点</h1><p>精确重复 · 图片相似候选 · 分类预览</p><p>生成时间：{e(data['created_at'])}　原文件未被移动、重命名或删除。</p></header><div class="cards">{cards}</div>
-    <nav><a href="#duplicates">精确重复</a><a href="#similar">图片相似</a><a href="#video-groups">相关视频</a><a href="#sidecars">附属文件</a><a href="#folder-groups">文件夹名称</a><a href="#plan">分类预览</a><a href="#issues">跳过与错误</a><a href="inventory.csv">完整清单 CSV</a><a href="classification.csv">分类计划 CSV</a><a href="report.json">完整 JSON</a></nav>
+    <nav><a href="library.html"><strong>打开影片资料库 →</strong></a><a href="#duplicates">精确重复</a><a href="#similar">图片相似</a><a href="#video-groups">相关视频</a><a href="#sidecars">附属文件</a><a href="#folder-groups">文件夹名称</a><a href="#plan">分类预览</a><a href="#issues">跳过与错误</a><a href="inventory.csv">完整清单 CSV</a><a href="classification.csv">分类计划 CSV</a><a href="report.json">完整 JSON</a></nav>
     <p class="muted">扫描目录：{'；'.join(e(p) for p in data['roots'])}</p><p class="notice">这是一份人工核对报告。多余副本大小是逻辑估算，硬链接已排除；APFS 克隆、压缩和云盘会影响实际可释放空间。报告含本地完整路径，请妥善保存。</p>
     <section id="duplicates"><h2>内容完全重复</h2><p>先按大小筛选，再读取整个文件计算 SHA-256。名称相同、编号相同或同一视频的不同编码不会据此算重复。页面最多展示 300 组，全部结果见 <a href="duplicates.csv">重复明细 CSV</a>。</p>{duplicates}</section>
     <section id="similar"><h2>图片相似候选</h2><p>64 位 dHash 距离阈值：{data['options']['distance']}，同时限制宽高比差异。视觉相似只供对照，不能作为删除依据；裁剪、旋转、连拍和纯色图片可能漏检或误报。</p><p class="muted">{e(data['image_inspection']['note'])} 可比较图片 {data['similar']['eligible']} 张；硬链接 {s['hardlinks']} 项未重复计算。</p>{'<p class="notice">候选达到数量上限，结果可能不完整。可以缩小扫描目录或提高 --max-similar。</p>' if data['similar']['truncated'] else ''}{similarity}<p><a href="similar.csv">全部已生成候选 CSV</a> · 页面最多展示 300 对</p></section>
@@ -852,6 +914,77 @@ def render_report(data):
     <section id="folder-groups"><h2>文件夹名称候选</h2><p>列出同名（大小写视为相同）或整理后名称可能冲突的文件夹，并统计其下媒体和附属文件项。仅在两处已扫描媒体均有完整 SHA-256、字节内容集合一致且文件夹互不包含时标记匹配；附属文件只计数，不比较内容。文件名、其他非媒体文件和跳过项也未比较，因此不代表整个文件夹完全相同。页面最多展示 300 组，全部见 <a href="folder_names.csv">文件夹名称 CSV</a>。</p>{folder_sections}</section>
     <section id="plan"><h2>分类建议 · 仅预览</h2><p>照片优先使用 EXIF 拍摄日期，其次文件名日期，最后修改时间。视频按编号、名称或原目录归组。目标重名会加路径标识。实况照片配对仅按同目录同名推测。</p><div class="controls"><input id="search" type="search" aria-label="筛选全部分类建议" placeholder="搜索全部文件名、目录或建议"><select id="kind-filter" aria-label="按媒体类型筛选"><option value="">全部类型</option><option value="照片">照片</option><option value="视频">视频</option></select></div>{plan}<div class="pager"><button id="previous" type="button">上一页</button><span id="plan-count"></span><button id="next" type="button">下一页</button></div><p class="muted">可筛选全部 {s['files']} 条建议，每页显示 100 条。完整建议见 classification.csv；本工具没有执行移动或删除的功能。</p></section>
     <section id="issues"><h2>跳过与错误</h2><p>读取问题 {len(data['issues'])} 条（页面最多展示 500 条，完整列表见 <a href="issues.csv">问题 CSV</a>）。目录不可读或文件变化会使结果不完整。</p><p class="muted">按规则跳过：{skipped}。隐藏项、符号链接、照片资料库包和可识别的云端占位项默认不读取。</p>{problems}</section><footer class="muted">离线生成 · 不上传媒体 · 不访问远程元数据 · 完整记录见同目录 CSV / JSON</footer></main><script id="classification-data" type="application/json">{browse_data}</script><script>{script}</script></body></html>'''
+
+
+def render_video_library(data):
+    library = data["video_library"]
+    payload = json.dumps(library, ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    template = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'"><title>影片资料库 · 媒体整理助手</title><style>
+    *{box-sizing:border-box}body{margin:0;background:#f3f6f8;color:#1d2939;font:15px/1.65 -apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif}main{max-width:1180px;margin:32px auto;padding:0 24px}header{background:#14352f;color:white;padding:28px;border-radius:18px}h1{font-size:31px;margin:4px 0}header p{margin:4px 0;color:#d5e9e2}a{color:#126653}header a{color:#b9f0d8}.stats{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0}.stat{background:white;border:1px solid #dce5e5;border-radius:12px;padding:13px 20px;min-width:170px}.stat strong{display:block;font-size:25px}.controls{display:flex;gap:10px;flex-wrap:wrap;margin:20px 0}input,select,button{font:inherit;border:1px solid #a8babc;border-radius:8px;padding:9px;background:white}input{flex:1;min-width:220px}.card,section{background:white;border:1px solid #dce5e5;border-radius:12px;padding:18px;margin:12px 0;overflow-wrap:anywhere}.card h3{margin:0 0 4px;font-size:19px}.meta{color:#627378;font-size:13px}.badge{display:inline-block;background:#e5f3ec;color:#205640;border-radius:999px;padding:2px 9px;margin:5px 6px 5px 0;font-size:12px}.alert{background:#fff0d7;color:#80520c}.file{border-top:1px solid #e3eaeb;padding:10px 0}.path{font-weight:600;overflow-wrap:anywhere}.minor{color:#607076;font-size:13px;overflow-wrap:anywhere}.issue{border-bottom:1px solid #e3eaeb;padding:10px 0}.pager{display:flex;align-items:center;gap:10px;margin:12px 0}.muted{color:#627378}.empty{padding:15px;color:#627378}@media(max-width:650px){main{padding:0 12px}h1{font-size:25px}}
+    </style></head><body><main><header><a href="report.html">← 返回扫描总报告</a><h1>影片资料库</h1><p>本次扫描快照 · @@CREATED@@</p><p>只读浏览和问题核对；重新扫描会生成新快照，不修改原片。</p></header>
+    <div class="stats"><div class="stat">影片分组<strong id="group-total">0</strong></div><div class="stat">视频文件<strong>@@VIDEO_FILES@@</strong></div><div class="stat">精确重复涉及视频<strong>@@DUPLICATE_FILES@@</strong></div><div class="stat">待核对项目<strong>@@ISSUE_TOTAL@@</strong></div></div>
+    <section><h2>浏览影片</h2><p class="muted">同编号跨目录归组；没有编号时，仅将同一原目录内的同名变体归组。分组只靠文件名，不表示内容相同。每页 50 组。</p><div class="controls"><input id="search" type="search" aria-label="搜索影片、路径和附属文件" placeholder="搜索编号、影片名、路径、字幕…"><select id="filter" aria-label="筛选影片"><option value="all">全部影片</option><option value="review">有视频问题或精确重复</option><option value="duplicates">精确重复涉及视频</option><option value="sidecars">有附属文件</option></select></div><div id="groups"></div><div class="pager"><button id="previous" type="button">上一页</button><span id="page-label"></span><button id="next" type="button">下一页</button></div></section>
+    <section><h2>待核对清单</h2><p class="muted">包含本次扫描发现的视频读取或文件头问题、精确重复、未唯一关联的字幕/NFO，以及同名文件夹候选。未启用文件头检查时，不会据此判断视频能否播放。下方显示与搜索词匹配的前 200 条；完整数据见 <a href="library_issues.csv">问题 CSV</a>。</p><div id="issues"></div></section>
+    <p class="muted">本页面仅使用本次扫描结果。其他跳过项与照片问题请查看<a href="report.html#issues">总报告</a>；完整原始数据见 <a href="report.json">JSON</a>。</p></main>
+    <script id="library-data" type="application/json">@@DATA@@</script><script>
+    const library = JSON.parse(document.getElementById('library-data').textContent);
+    const search = document.getElementById('search');
+    const filter = document.getElementById('filter');
+    const groups = document.getElementById('groups');
+    const issues = document.getElementById('issues');
+    let page = 0;
+    const make = (tag, className, value) => { const node = document.createElement(tag); if (className) node.className = className; if (value !== undefined) node.textContent = value; return node; };
+    function render() {
+      const query = search.value.trim().toLocaleLowerCase();
+      const visible = library.groups.filter(group => {
+        if (filter.value === 'review' && !group.needs_review) return false;
+        if (filter.value === 'duplicates' && !group.files.some(file => file.duplicate_group)) return false;
+        if (filter.value === 'sidecars' && !group.has_sidecars) return false;
+        return !query || [group.title, ...group.files.flatMap(file => [file.path, file.suggested_path, ...file.sidecars])].some(value => value.toLocaleLowerCase().includes(query));
+      });
+      const pages = Math.max(1, Math.ceil(visible.length / 50)); page = Math.min(page, pages - 1);
+      groups.replaceChildren();
+      for (const group of visible.slice(page * 50, page * 50 + 50)) {
+        const card = make('article', 'card');
+        card.append(make('h3', '', group.title), make('div', 'meta', `${group.type} · ${group.files.length} 个视频`));
+        if (group.needs_review) card.append(make('span', 'badge alert', '待核对'));
+        if (group.has_sidecars) card.append(make('span', 'badge', '有附属文件'));
+        for (const file of group.files) {
+          const row = make('div', 'file');
+          row.append(make('div', 'path', file.path), make('div', 'minor', `${file.extension.toUpperCase()} · ${(file.bytes / 1048576).toFixed(1)} MB · 修改于 ${file.modified_at} · ${file.hash_status}`));
+          if (file.duplicate_group) row.append(make('div', 'badge alert', `精确重复第 ${file.duplicate_group} 组`));
+          if (file.video_header_status !== '未检查') row.append(make('div', 'minor', `文件头：${file.video_header_status}`));
+          if (file.sidecars.length) row.append(make('div', 'minor', `附属文件：${file.sidecars.join('；')}`));
+          for (const reason of file.issues) row.append(make('div', 'badge alert', reason));
+          row.append(make('div', 'minor', `分类建议：${file.suggested_path}`));
+          card.append(row);
+        }
+        groups.append(card);
+      }
+      if (!visible.length) groups.append(make('p', 'empty', '没有符合条件的影片。'));
+      document.getElementById('page-label').textContent = `共 ${visible.length} 组 · 第 ${page + 1}/${pages} 页`;
+      document.getElementById('previous').disabled = page === 0;
+      document.getElementById('next').disabled = page >= pages - 1;
+      const matches = library.issues.filter(item => !query || [item.path, item.reason, item.type].some(value => value.toLocaleLowerCase().includes(query)));
+      issues.replaceChildren();
+      for (const item of matches.slice(0, 200)) {
+        const row = make('div', 'issue');
+        row.append(make('span', 'badge alert', item.type), make('div', 'path', item.path), make('div', 'minor', item.reason));
+        issues.append(row);
+      }
+      if (!matches.length) issues.append(make('p', 'empty', '没有符合条件的待核对项目。'));
+      if (matches.length > 200) issues.append(make('p', 'muted', `还有 ${matches.length - 200} 条，见问题 CSV。`));
+    }
+    search.addEventListener('input', () => { page = 0; render(); });
+    filter.addEventListener('change', () => { page = 0; render(); });
+    document.getElementById('previous').addEventListener('click', () => { page--; render(); });
+    document.getElementById('next').addEventListener('click', () => { page++; render(); });
+    document.getElementById('group-total').textContent = library.groups.length;
+    render();
+    </script></body></html>'''
+    replacements = {"CREATED": html.escape(data["created_at"], quote=True), "VIDEO_FILES": str(library["video_files"]),
+                    "DUPLICATE_FILES": str(library["duplicate_files"]), "ISSUE_TOTAL": str(len(library["issues"])), "DATA": payload}
+    return re.sub(r"@@(CREATED|VIDEO_FILES|DUPLICATE_FILES|ISSUE_TOTAL|DATA)@@", lambda match: replacements[match.group(1)], template)
 
 
 def write_reports(directory, data):
@@ -880,10 +1013,13 @@ def write_reports(directory, data):
               ({"type": group["type"], "name": group["name"], **folder}
                for group in data["folder_groups"] for folder in group["folders"]))
     write_csv(directory / "issues.csv", [("path", "路径"), ("reason", "说明")], data["issues"])
+    write_csv(directory / "library_issues.csv", [("type", "类别"), ("path", "路径"), ("reason", "核对原因")], data["video_library"]["issues"])
     with (directory / "report.json").open("x", encoding="utf-8") as stream:
         json.dump(data, stream, ensure_ascii=False, indent=2)
     with (directory / "report.html").open("x", encoding="utf-8") as stream:
         stream.write(render_report(data))
+    with (directory / "library.html").open("x", encoding="utf-8") as stream:
+        stream.write(render_video_library(data))
 
 
 def choose_folders():
@@ -939,11 +1075,12 @@ def main(argv=None):
         similarity = similar_images(records, args.distance, args.max_similar, not args.no_similar and not args.no_image_metadata and image_inspection["available"])
         video_groups = related_videos(records)
         folder_groups = related_folders(folders_seen, records, sidecars)
+        video_library = build_video_library(records, sidecars, duplicates, issues, folder_groups)
         directory = output / dt.datetime.now().strftime("scan-%Y%m%d-%H%M%S-%f")
         directory.mkdir(parents=True, exist_ok=False, mode=0o700)
         previews = export_previews(directory, records, similarity, BASE / "native" / "image_probe", issues)
         clean_records = [{k: v for k, v in r.items() if not k.startswith("_")} for r in records]
-        data = {"version": 7, "created_at": dt.datetime.now().astimezone().isoformat(), "roots": [str(r) for r in roots],
+        data = {"version": 8, "created_at": dt.datetime.now().astimezone().isoformat(), "roots": [str(r) for r in roots],
                 "summary": {"files": len(records), "duplicate_groups": len(duplicates), "hardlinks": sum(bool(r["hardlink_to"]) for r in records),
                             "redundant_logical_bytes": sum(g["redundant_logical_bytes"] for g in duplicates)},
                 "options": {"distance": args.distance, "video_rule": args.video_rule, "include_hidden": args.include_hidden,
@@ -951,7 +1088,7 @@ def main(argv=None):
                 "image_inspection": image_inspection, "video_inspection": video_inspection,
                 "files": clean_records, "duplicates": duplicates,
                 "similar": similarity, "previews": previews, "video_groups": video_groups, "sidecars": sidecars,
-                "folder_groups": folder_groups, "issues": issues, "skipped": skipped}
+                "folder_groups": folder_groups, "video_library": video_library, "issues": issues, "skipped": skipped}
         write_reports(directory, data)
         print(f"\n完成：{len(records)} 个媒体文件，{len(duplicates)} 组精确重复，{len(similarity['pairs'])} 对图片相似候选，{len(video_groups)} 组相关视频候选，{len(sidecars)} 个附属文件，{len(folder_groups)} 组文件夹名称候选。")
         print(f"读取问题 {len(issues)} 条。报告：{directory / 'report.html'}")
