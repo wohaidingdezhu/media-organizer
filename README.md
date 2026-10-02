@@ -4,11 +4,15 @@
 
 ## 开始使用
 
-1. 在 Finder 打开本文件夹，双击 `开始扫描.command`。
-2. 选择需要扫描的照片或视频文件夹，可以多选。首次使用建议选一个较小目录。
-3. 等待扫描结束，浏览器会打开报告。点击页面顶部的“打开影片资料库”，浏览影片和待核对清单。报告同时保存在 `reports/scan-日期时间/`。
+1. 在 Finder 打开本文件夹，双击 **`媒体整理助手.app`**。它会在默认浏览器打开本机图形控制台。也可以双击 `开始扫描.command`，但它会同时打开终端。
+2. 点击“添加文件夹…”，选择照片或视频目录；需要多个目录可继续添加。首次使用建议先选一个较小目录。
+3. 点击“开始只读扫描”。页面会显示扫描记录；完成后点击“打开影片资料库”进入海报墙。可搜索、筛选、编辑标签，并从页面返回扫描总报告。报告同时保存在 `reports/scan-日期时间/`。
 
-需要 macOS 和 Python 3.9 或更新版本。图片组件使用系统 ImageIO，不需要额外下载 Python 库；首次双击启动时会尝试用本机 `swiftc` 编译，缺少 Swift 编译器时仍可进行 SHA-256 精确查重。若启动文件不能双击，可在终端运行 `python3 media_scan.py --open`。扫描过程中按 Ctrl+C 可取消，不会改动原文件；导出阶段取消可能留下未完成报告。
+编辑标签时请保持本机服务运行；在控制台点击“退出本机服务”会停止页面访问，已保存标签不会消失。以后再次双击应用，点击“打开影片资料库”即可继续使用，无需重新扫描；`打开资料库.command` 也可单独打开最近一次资料库。
+
+需要 macOS 和 Python 3.9 或更新版本。图形控制台由 Python 标准库在本机 `127.0.0.1` 提供，无须安装 Tk 或第三方网页服务。封面和图片组件使用系统 ImageIO、AVFoundation，不需要额外下载 Python 库；首次扫描时会尝试用本机 `swiftc` 编译，缺少 Swift 编译器时仍可进行 SHA-256 精确查重。若应用打不开，可在终端输入 `cd /Users/xijiajie/Desktop/media-organizer` 后运行 `python3 media_gui.py`；命令行扫描仍可用 `python3 media_scan.py --edit-tags`。扫描过程中可点击“取消扫描”，不会改动原文件；导出阶段取消可能留下未完成报告。
+
+终端路径必须从开头的 `/` 写起，例如 `open "/Users/xijiajie/Desktop/media-organizer/媒体整理助手.app"`。少了 `/` 会出现“no such file or directory”。
 
 ## 查重方式
 
@@ -21,11 +25,15 @@
 
 ## 影片资料库
 
-每次扫描都会在报告目录生成 `library.html`，从总报告顶部进入。它按编号归组影片；没有编号的影片只在同一原目录内按名称归组，避免不同目录的同名视频被误并。页面可以搜索编号、影片名、路径和附属文件，并筛选待核对、精确重复或有附属文件的影片。
+每次扫描都会在报告目录生成 `library.html`。它按编号归组影片；没有编号的影片只在同一原目录内按名称归组，避免不同目录的同名视频被误并。海报墙可以搜索编号、影片名、路径、标签和附属文件，并筛选待核对、精确重复、有附属文件、有封面或缺少封面的影片。
+
+封面优先使用同目录与影片或编号同名的图片，也识别 `-poster`、`-cover` 后缀；仅当一个目录属于同一影片分组时，才使用 `poster`、`folder`、`cover` 等通用名称。没有本地封面时，默认尝试用 macOS AVFoundation 截取视频约 10% 位置的一帧，单次最多处理 500 个影片分组；不支持、无法解码或超过上限时显示占位图。海报小图只生成在报告目录 `covers/` 中，不改动原图或视频。截帧不代表真正的官方海报，也不能证明视频完整或可播放。可用 `--no-video-covers` 关闭视频截帧，或用 `--max-video-covers` 调整上限；`--no-image-metadata` 会连同封面解码一起关闭。
+
+在图形界面打开的本机资料库页面中，点击影片卡片上的“编辑标签”，用逗号分隔多个标签；清空输入可删除标签。标签立即保存到 `reports/library-tags.json`，新一次扫描会继续读取。同编号影片共用标签；无编号影片按原目录与名称保存标签，改名或搬动后需重新设置。直接双击旧报告的 `library.html` 仍可查看扫描时的标签，但编辑需要从图形窗口或 `.command` 入口打开本机服务。
 
 待核对清单汇总视频读取与可选文件头检查发现的问题、完整 SHA-256 确认的重复视频、未唯一关联的字幕/NFO，以及同名文件夹候选。页面展示与搜索词匹配的前 200 条，完整清单在 `library_issues.csv`。未启用 `--check-video-headers` 时不检查视频容器头；即使识别到常见文件头，也不能保证可播放。没有字幕/NFO 不自动视为问题。
 
-资料库是本次扫描的**只读快照**；新增或移走影片后需重新扫描。它没有播放、在线抓取资料、自动封面、标签或收藏功能，也不自动移动、重命名和删除原片。
+资料库是本次扫描的**只读快照**；新增或移走影片后需重新扫描。它没有播放或在线抓取资料的功能，也不自动移动、重命名和删除原片。
 
 ## 分类预览
 
@@ -39,7 +47,7 @@
 
 ## 报告文件
 
-`report.html` 为中文总报告；`library.html` 为可搜索的影片资料库；`library_issues.csv` 为影片待核对清单；`inventory.csv` 为完整清单；`duplicates.csv` 为精确重复明细；`similar.csv` 为相似图候选；`video_groups.csv` 为相关视频候选；`sidecars.csv` 为 XMP、AAE、字幕及 NFO 附属文件关联清单；`folder_names.csv` 为文件夹名称及已扫描媒体内容校验；`classification.csv` 为分类建议；`issues.csv` 为读取问题；`report.json` 保存完整结构化结果。`previews/` 存放报告所需的相似图片小预览图，不写入原媒体目录。
+`report.html` 为中文总报告；`library.html` 为可搜索的影片海报墙；`library_issues.csv` 为影片待核对清单；`inventory.csv` 为完整清单；`duplicates.csv` 为精确重复明细；`similar.csv` 为相似图候选；`video_groups.csv` 为相关视频候选；`sidecars.csv` 为 XMP、AAE、字幕及 NFO 附属文件关联清单；`folder_names.csv` 为文件夹名称及已扫描媒体内容校验；`classification.csv` 为分类建议；`issues.csv` 为读取问题；`report.json` 保存完整结构化结果。`previews/` 和 `covers/` 存放报告所需小图，不写入原媒体目录。`reports/library-tags.json` 保存跨扫描标签，默认不上传 GitHub。
 
 照片解析复用最多两个本机 ImageIO 进程，减少大量照片逐张启动程序的开销。每张照片仍有独立的读取期限；工作进程只返回部分响应、响应过长或超时会被终止，单张失败会记录问题并继续后续扫描。失败的图片预览不会在报告中留下半成品文件。
 
@@ -51,7 +59,7 @@ HTML 为便于浏览，最多显示 300 组重复、300 对相似图、300 组�
 
 默认跳过隐藏项、符号链接、应用包、Apple 照片资料库包和系统能识别的云端占位项；直接选择符号链接目录或资料库包内部目录也会拒绝。不直接扫描 Apple“照片”资料库：请先从照片应用导出原片，再选择导出目录。不同云盘的占位标记不统一，读取其他云盘的占位文件仍可能触发下载，建议扫描已下载到本地的目录。扩展名用于判断是否为媒体，不能验证视频是否可播放。
 
-每次生成独立报告，不覆盖旧报告，不缓存未经本轮校验的文件哈希。原媒体只读打开，图片组件拒绝符号链接输入；预览图只新建在私有报告目录，拒绝覆盖已有文件。不会扫描未选择的整台电脑，也不跟踪远程 `.strm` 链接。对来源不可信的图片，可用 `--no-image-metadata` 跳过系统图片解码，仅做文件字节查重。
+每次生成独立报告，不覆盖旧报告，不缓存未经本轮校验的文件哈希。原媒体只读打开，图片组件拒绝符号链接输入；预览图只新建在私有报告目录，拒绝覆盖已有文件。标签编辑页面仅监听本机 `127.0.0.1` 的随机端口，并用随机地址令牌限制访问；标签只写入报告根目录。不会扫描未选择的整台电脑，也不跟踪远程 `.strm` 链接。对来源不可信的图片或视频，可用 `--no-image-metadata --no-video-covers` 跳过封面解码，仅做文件字节查重。
 
 ## 命令行（可选）
 
@@ -64,14 +72,17 @@ python3 media_scan.py "/路径/视频" --video-rule folder
 python3 media_scan.py "/路径/媒体" --no-image-metadata --no-similar
 python3 media_scan.py "/路径/照片" --distance 4 --max-similar 10000
 python3 media_scan.py "/路径/视频" --check-video-headers
+python3 media_scan.py "/路径/视频" --edit-tags
+python3 media_scan.py --serve-library
 ```
 
-`--output` 改变报告存放位置，`--include-hidden` 包含隐藏媒体。`--no-similar` 只关闭图片比较，仍读取照片日期；`--no-image-metadata` 同时跳过照片日期解析和相似检测。`--check-video-headers` 只做轻量文件头识别，不解析视频画面、音轨或播放时长。没有图片组件时精确文件查重仍可用。`python3 media_scan.py --help` 查看所有参数。
+`--output` 改变报告存放位置，`--include-hidden` 包含隐藏媒体。`--no-similar` 只关闭图片比较，仍读取照片日期；`--no-image-metadata` 同时跳过照片日期解析、相似检测及封面生成。`--check-video-headers` 只做轻量文件头识别，不解析视频画面、音轨或播放时长。`--edit-tags` 在扫描后启动本机标签页面，`--serve-library` 不扫描而打开最近一次报告。没有图片或视频组件时精确文件查重仍可用。`python3 media_scan.py --help` 查看所有参数。
 
-图片组件源码是 `native/image_probe.swift`，编译后的本机程序不提交到 GitHub。双击启动文件会在需要时自动编译；手动运行 Python 脚本前也可自行编译：
+图片和视频组件源码分别是 `native/image_probe.swift` 与 `native/video_cover.swift`，编译后的本机程序不提交到 GitHub。图形界面首次扫描时会按需自动编译；手动运行命令行扫描前也可自行编译：
 
 ```sh
 swiftc native/image_probe.swift -o native/image_probe
+swiftc native/video_cover.swift -o native/video_cover
 ```
 
 ## 两个参考项目：借鉴的管理思路
@@ -84,8 +95,12 @@ swiftc native/image_probe.swift -o native/image_probe
 ## 项目文件
 
 - `media_scan.py`：扫描、查重、分类和报告生成。
+- `media_gui.py` / `dashboard.html` / `媒体整理助手.app`：用本机浏览器选择文件夹、设置扫描选项、查看进度并打开影片资料库。
 - `native/image_probe.swift` / `native/image_probe`：图片解析组件源码和本机程序。
-- `开始扫描.command`：Mac 双击启动入口。
+- `native/video_cover.swift` / `native/video_cover`：视频截帧组件源码和本机程序。
+- `开始扫描.command`：兼容的 Mac 双击入口，打开同一图形界面。
+- `打开资料库.command`：不重新扫描，打开最近一次海报墙与标签编辑。
+- `library_server.py`：仅在本机提供报告和标签保存服务。
 - `test_media_scan.py`：使用临时样例数据的安全性与结果测试。
 - `PROJECT_STATUS.md`：后续项目对话的交接记录。
 

@@ -12,6 +12,8 @@ from unittest import mock
 import zlib
 
 import media_scan as scan
+import media_gui
+from library_server import clean_tags, load_tags, save_tags
 
 
 def sample_png(path, marker):
@@ -23,6 +25,26 @@ def sample_png(path, marker):
 
 
 class MediaTests(unittest.TestCase):
+    def test_graphical_launcher_uses_selected_folders_and_latest_sample_report(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            first, second = base / "one", base / "two"
+            first.mkdir()
+            second.mkdir()
+            args = media_gui.scan_arguments([first, second], image_analysis=False,
+                                            video_headers=True, video_rule="folder")
+            self.assertEqual(args[1:3], [str(first), str(second)])
+            self.assertIn("--no-image-metadata", args)
+            self.assertIn("--check-video-headers", args)
+            self.assertEqual(args[-2:], ["--no-image-metadata", "--check-video-headers"])
+            self.assertIsNone(media_gui.latest_library(base))
+            for name in ("scan-20260101", "scan-20260102"):
+                report = base / name
+                report.mkdir()
+                (report / "library.html").write_text("sample")
+                (report / "report.json").write_text("{}")
+            self.assertEqual(media_gui.latest_library(base).name, "scan-20260102")
+
     def test_end_to_end_read_only_duplicates_and_reports(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
@@ -110,7 +132,7 @@ class MediaTests(unittest.TestCase):
             self.assertEqual(code, 0)
             report_dir = next((base / "reports").glob("scan-*"))
             data = json.loads((report_dir / "report.json").read_text())
-            self.assertEqual(data["version"], 8)
+            self.assertEqual(data["version"], 9)
             group = next(group for group in data["folder_groups"] if group["name"] == "Album")
             folders = {folder["path"]: folder for folder in group["folders"]}
             self.assertEqual(folders[str(roots[0])]["content_match_example"], str(roots[1]))
@@ -136,24 +158,32 @@ class MediaTests(unittest.TestCase):
             good_header = b"\x00\x00\x00\x18ftypisom" + b"\0" * 12
             (source / "ABC-123-CD1.mp4").write_bytes(good_header)
             (source / "ABC-123-CD2.mp4").write_bytes(good_header)
+            sample_png(source / "ABC-123.png", "poster-A")
+            sample_png(source / "First" / "folder.png", "poster-B")
+            sample_png(source / "folder.png", "ambiguous-folder-poster")
             (source / "bad.mp4").write_bytes(b"invalid video header")
             (source / "bad.en.srt").write_bytes(b"subtitle")
             (source / "orphan.srt").write_bytes(b"orphan subtitle")
             originals = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in source.rglob("*") if p.is_file()}
             with contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(scan.main([str(source), "--output", str(output), "--no-image-metadata", "--check-video-headers"]), 0)
+                self.assertEqual(scan.main([str(source), "--output", str(output), "--check-video-headers"]), 0)
             report_dir = next(output.glob("scan-*"))
             data = json.loads((report_dir / "report.json").read_text())
             library = data["video_library"]
             self.assertEqual(library["video_files"], 5)
             self.assertEqual(library["duplicate_files"], 2)
             self.assertEqual(len(library["groups"]), 4)
+            self.assertEqual(library["poster_count"], 2)
+            self.assertTrue(all((report_dir / group["poster"]).is_file() for group in library["groups"] if group["poster"]))
+            self.assertFalse(next(group for group in library["groups"] if group["title"] == "bad")["poster"])
             self.assertEqual(len([group for group in library["groups"] if group["title"] == "Holiday"]), 2)
             self.assertTrue(any("orphan.srt" in item["path"] for item in library["issues"]))
             self.assertTrue(any("bad.mp4" in item["path"] and "文件头" in item["reason"] for item in library["issues"]))
             self.assertTrue(any(file["sidecars"] for group in library["groups"] for file in group["files"]))
             page = (report_dir / "library.html").read_text()
-            self.assertIn("搜索影片、路径和附属文件", page)
+            self.assertIn("搜索影片、路径、标签和附属文件", page)
+            self.assertIn("tag-editor", page)
+            self.assertNotIn("prompt(", page)
             self.assertIn("library_issues.csv", page)
             self.assertIn("打开影片资料库", (report_dir / "report.html").read_text())
             self.assertEqual(originals, {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in originals})
@@ -166,6 +196,29 @@ class MediaTests(unittest.TestCase):
         page = scan.render_video_library(data)
         self.assertNotIn(title, page)
         self.assertIn("\\u003c/script\\u003e", page)
+
+    def test_tags_survive_new_scan_without_touching_video(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, output = root / "media", root / "reports"
+            source.mkdir()
+            video = source / "ABC-123.mp4"
+            video.write_bytes(b"sample film")
+            original = (video.read_bytes(), video.stat().st_mtime_ns)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(scan.main([str(source), "--output", str(output), "--no-image-metadata"]), 0)
+            first = next(output.glob("scan-*/report.json"))
+            key = json.loads(first.read_text())["video_library"]["groups"][0]["tag_key"]
+            save_tags(output / "library-tags.json", {key: ["收藏", "周末"]})
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(scan.main([str(source), "--output", str(output), "--no-image-metadata"]), 0)
+            latest = sorted(output.glob("scan-*/report.json"))[-1]
+            self.assertEqual(json.loads(latest.read_text())["video_library"]["groups"][0]["tags"], ["收藏", "周末"])
+            self.assertEqual(load_tags(output / "library-tags.json")[key], ["收藏", "周末"])
+            self.assertEqual((video.read_bytes(), video.stat().st_mtime_ns), original)
+            self.assertEqual(clean_tags([" 收藏 ", "收藏", "周末"]), ["收藏", "周末"])
+            with self.assertRaises(ValueError):
+                clean_tags(["bad\nname"])
 
     def test_sidecars_are_read_only_and_ambiguous_matches_stay_unresolved(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>媒体整理助手</title>
+  <style>
+    :root{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif;color:#e9eef5;background:#111722}
+    *{box-sizing:border-box} body{margin:0;background:radial-gradient(circle at 12% 0%,#23354b 0,#111722 45%);min-height:100vh}
+    main{max-width:1060px;margin:auto;padding:42px 24px 70px} header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:28px}
+    .eyebrow{color:#89c9b3;font-size:12px;letter-spacing:.18em;font-weight:700} h1{margin:9px 0 9px;font-size:clamp(30px,4vw,46px);letter-spacing:-.04em} h2{font-size:18px;margin:0 0 16px}
+    p{color:#aab7c9;line-height:1.65;margin:0}.safe{border:1px solid #426957;border-radius:30px;color:#a7e9ca;padding:9px 13px;font-size:13px;white-space:nowrap;background:#173a31}
+    .grid{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(300px,.85fr);gap:18px}.panel{background:#1a2330;border:1px solid #344353;border-radius:18px;padding:24px;box-shadow:0 20px 40px #03080f2b}
+    .folder-list{list-style:none;padding:0;margin:0 0 15px;min-height:92px}.folder-list li{display:flex;align-items:center;gap:10px;background:#121b27;border:1px solid #344353;border-radius:10px;padding:9px 10px;margin-bottom:8px}
+    .folder-list .path{flex:1;min-width:0;overflow-wrap:anywhere;font-size:13px}.empty{color:#8292a5;padding:23px 0;text-align:center;border:1px dashed #45576a;border-radius:10px}
+    button{cursor:pointer;border:1px solid #52677b;background:#28394b;color:#eaf2fa;border-radius:10px;padding:11px 15px;font:inherit;font-size:14px;font-weight:650;transition:background .15s,transform .15s}
+    button:hover{background:#35506a}button:active{transform:translateY(1px)}button:disabled{cursor:not-allowed;opacity:.45}.primary{background:#79d5ae;color:#0a2019;border-color:#79d5ae}.primary:hover{background:#9be7c4}.ghost{background:transparent}.danger{color:#ffb3af;border-color:#7c5353}.small{padding:6px 9px;font-size:12px}
+    .row{display:flex;gap:9px;flex-wrap:wrap;align-items:center}.sub{font-size:13px;color:#95a7ba;margin-top:10px}
+    .option{display:flex;gap:10px;align-items:flex-start;margin:0 0 14px;line-height:1.5;font-size:14px}.option input{accent-color:#80dbb5;margin-top:3px;width:16px;height:16px}.option small{display:block;color:#95a7ba;font-size:12px;margin-top:3px}
+    select{background:#121b27;border:1px solid #52677b;color:#e9eef5;border-radius:9px;padding:9px 12px;font:inherit;width:100%;margin-top:6px}.field{font-size:13px;color:#aab7c9}
+    .actions{margin-top:17px;display:flex;gap:9px;flex-wrap:wrap}.wide{grid-column:1/-1}.status{display:flex;align-items:center;gap:10px;line-height:1.5;color:#dce7f2}.dot{width:9px;height:9px;flex:none;border-radius:50%;background:#7ddbb5;box-shadow:0 0 0 4px #7ddbb524}.busy .dot{background:#eec879;box-shadow:0 0 0 4px #eec87924}
+    .bar{height:5px;background:#314253;border-radius:20px;overflow:hidden;margin:17px 0 18px}.bar span{display:block;width:30%;height:100%;background:#80dbb5;border-radius:20px;animation:move 1.2s linear infinite}.bar[hidden]{display:none}@keyframes move{from{transform:translateX(-110%)}to{transform:translateX(340%)}}
+    .log{height:190px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#101823;border:1px solid #354353;border-radius:10px;padding:13px;color:#b6c6d6;font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0}
+    .latest{display:flex;justify-content:space-between;align-items:center;gap:16px;background:#162b30;border:1px solid #365d56;border-radius:12px;padding:16px}.latest strong{display:block;margin-bottom:4px}.latest p{font-size:13px}.latest[hidden]{display:none}
+    .notice{min-height:20px;color:#ffb3af;font-size:13px;margin-top:10px}
+    footer{margin-top:26px;color:#8292a5;font-size:12px;line-height:1.7}a{color:#95e3c0}
+    @media(max-width:760px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}header{display:block}.safe{display:inline-block;margin-top:15px}.panel{padding:18px}.latest{display:block}.latest button{margin-top:12px}}
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><div class="eyebrow">LOCAL MEDIA LIBRARY</div><h1>媒体整理助手</h1><p>照片查重、视频清点、海报墙与标签，集中在一个本机界面。</p></div>
+    <span class="safe">● 原始媒体只读</span>
+  </header>
+  <div class="grid">
+    <section class="panel">
+      <h2>1. 选择扫描文件夹</h2>
+      <ul id="folders" class="folder-list"><li class="empty">尚未选择文件夹</li></ul>
+      <button id="add-folder" class="ghost">＋ 添加文件夹…</button>
+      <p class="sub">可在 Mac 弹出的窗口中一次选择多个文件夹。首次建议先试一个较小目录。</p>
+    </section>
+    <section class="panel">
+      <h2>2. 扫描选项</h2>
+      <label class="option"><input id="images" type="checkbox" checked><span>解析照片日期与相似候选<small>同时生成本地图片封面；完整 SHA-256 查重始终开启。</small></span></label>
+      <label class="option"><input id="covers" type="checkbox" checked><span>无本地封面时截取视频画面<small>封面只保存在报告目录。</small></span></label>
+      <label class="option"><input id="headers" type="checkbox"><span>检查常见视频文件头<small>只提示容器类型，不保证能播放。</small></span></label>
+      <label class="field">视频分类建议
+        <select id="rule"><option value="auto">自动识别</option><option value="name">按名称</option><option value="folder">保留原目录</option></select>
+      </label>
+    </section>
+    <section class="panel wide">
+      <h2>3. 开始扫描</h2>
+      <div class="actions"><button id="scan" class="primary">开始只读扫描</button><button id="cancel" class="danger" disabled>取消扫描</button><button id="reports">打开报告文件夹</button></div>
+      <div id="status" class="status" style="margin-top:19px"><span class="dot"></span><span id="status-text">准备就绪。</span></div>
+      <div id="bar" class="bar" hidden><span></span></div>
+      <pre id="log" class="log" aria-label="扫描记录">扫描记录会显示在这里。</pre>
+      <div id="notice" class="notice" role="alert"></div>
+    </section>
+    <section id="latest" class="latest wide" hidden>
+      <div><strong>影片资料库已就绪</strong><p id="report-name"></p><p>打开海报墙，可浏览封面、搜索、筛选问题和编辑标签。</p></div>
+      <button id="library" class="primary">打开影片资料库 →</button>
+    </section>
+  </div>
+  <footer>扫描只读原始照片和视频。报告及标签保存在本机 <strong>reports</strong> 文件夹。<button id="quit" class="small ghost" style="margin-left:8px">退出本机服务</button></footer>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let lastLog = '', previousRunning = false;
+async function request(path, body) {
+  const options = body === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)};
+  const response = await fetch('api/' + path, options);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || '操作失败');
+  return data;
+}
+function notice(error) { $('notice').textContent = error ? String(error.message || error) : ''; }
+function render(data) {
+  $('folders').replaceChildren();
+  if (!data.folders.length) { const li=document.createElement('li'); li.className='empty'; li.textContent='尚未选择文件夹'; $('folders').append(li); }
+  data.folders.forEach((path,index) => {
+    const li=document.createElement('li'), name=document.createElement('span'), remove=document.createElement('button');
+    name.className='path'; name.textContent=path; remove.className='small ghost'; remove.textContent='移除'; remove.disabled=data.running;
+    remove.onclick=()=>act('folders/remove',{index}); li.append(name,remove); $('folders').append(li);
+  });
+  $('scan').disabled=data.running || !data.folders.length;
+  $('cancel').disabled=!data.running;
+  $('add-folder').disabled=data.running;
+  $('status').classList.toggle('busy',data.running);
+  $('status-text').textContent=data.status;
+  $('bar').hidden=!data.running;
+  const joined=data.logs.join('\n');
+  if (lastLog !== joined) { $('log').textContent=joined || '扫描记录会显示在这里。'; $('log').scrollTop=$('log').scrollHeight; lastLog=joined; }
+  $('latest').hidden=!data.latest_report;
+  $('report-name').textContent=data.latest_report || '';
+  if (previousRunning && !data.running && data.latest_report && data.status.startsWith('扫描完成')) $('latest').scrollIntoView({behavior:'smooth',block:'nearest'});
+  previousRunning=data.running;
+}
+async function refresh(){try{render(await request('status'));}catch(error){notice(error);}}
+async function act(path,body={}){notice();try{const data=await request(path,body); if(data.folders)render(data); return data;}catch(error){notice(error);return null;}}
+$('add-folder').onclick=()=>act('folders/add');
+$('scan').onclick=()=>act('scan/start',{image_analysis:$('images').checked,video_covers:$('covers').checked,video_headers:$('headers').checked,video_rule:$('rule').value});
+$('cancel').onclick=()=>act('scan/cancel');
+$('reports').onclick=()=>act('reports/open');
+$('library').onclick=async()=>{const data=await act('library/open');if(data) window.location.href=data.url;};
+$('quit').onclick=async()=>{if(await act('quit')){document.body.innerHTML='<main><h1>媒体整理助手已退出</h1><p>重新打开应用即可继续使用。</p></main>';}};
+$('images').onchange=()=>{ $('covers').disabled=!$('images').checked; };
+refresh(); setInterval(refresh,1000);
+</script>
+</body>
+</html>

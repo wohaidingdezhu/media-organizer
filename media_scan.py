@@ -19,6 +19,7 @@ import threading
 import time
 import unicodedata
 import webbrowser
+from library_server import load_tags, serve_library
 
 BASE = Path(__file__).resolve().parent
 IMAGE_EXT = set("jpg jpeg png heic heif tif tiff gif bmp webp avif dng cr2 cr3 nef arw raf orf rw2 pef srw".split())
@@ -604,7 +605,7 @@ def related_videos(records):
     return sorted(result, key=lambda g: (-len(g["files"]), g["type"], g["label"].casefold()))
 
 
-def build_video_library(records, sidecars, duplicates, issues, folder_groups):
+def build_video_library(records, sidecars, duplicates, issues, folder_groups, saved_tags=None):
     """Build a read-only, per-scan film index from already collected facts."""
     videos = [record for record in records if record["kind"] == "视频"]
     video_paths = {record["path"] for record in videos}
@@ -639,6 +640,7 @@ def build_video_library(records, sidecars, duplicates, issues, folder_groups):
         if any(folder["path"] in video_folders for folder in group["folders"]):
             review.append({"path": "；".join(folder["path"] for folder in group["folders"]),
                            "reason": f"{group['type']}文件夹候选，需核对目录内容", "type": "文件夹"})
+    saved_tags = saved_tags or {}
     grouped = collections.defaultdict(list)
     labels = {}
     for record in videos:
@@ -658,7 +660,9 @@ def build_video_library(records, sidecars, duplicates, issues, folder_groups):
     groups = []
     for key, files in grouped.items():
         kind, title = labels[key]
-        groups.append({"type": kind, "title": title, "files": sorted(files, key=lambda item: item["path"]),
+        tag_key = hashlib.sha256(json.dumps(key, ensure_ascii=False).encode("utf-8")).hexdigest()
+        groups.append({"type": kind, "title": title, "tag_key": tag_key, "tags": saved_tags.get(tag_key, []),
+                       "files": sorted(files, key=lambda item: item["path"]),
                        "needs_review": any(item["issues"] or item["duplicate_group"] for item in files),
                        "has_sidecars": any(item["sidecars"] for item in files)})
     groups.sort(key=lambda group: (group["title"].casefold(), group["files"][0]["path"]))
@@ -841,6 +845,150 @@ def export_previews(directory, records, similarity, helper, issues, displayed_pa
     return previews
 
 
+def local_cover_candidates(groups, records):
+    """Prefer exact or identifier images; only use generic folder art for one work."""
+    photos = collections.defaultdict(list)
+    for record in records:
+        if record["kind"] == "照片":
+            path = Path(record["path"])
+            photos[(str(path.parent), unicodedata.normalize("NFC", path.stem).casefold())].append(record)
+    extension_order = {name: index for index, name in enumerate(("jpg", "jpeg", "png", "webp", "heic", "heif", "tif", "tiff"))}
+    folder_groups = collections.defaultdict(set)
+    for index, group in enumerate(groups):
+        for file in group["files"]:
+            folder_groups[str(Path(file["path"]).parent)].add(index)
+    result = []
+    for index, group in enumerate(groups):
+        candidates, seen = [], set()
+        folders = list(dict.fromkeys(str(Path(file["path"]).parent) for file in group["files"]))
+        stems = [group["title"]] if group["type"] == "编号" else []
+        stems += [Path(file["path"]).stem for file in group["files"]]
+        stems += [stem + suffix for stem in list(stems) for suffix in ("-poster", "-cover")]
+        for folder in folders:
+            for stem in stems:
+                for photo in sorted(photos.get((folder, unicodedata.normalize("NFC", stem).casefold()), []),
+                                    key=lambda item: (extension_order.get(item["extension"], 99), item["path"])):
+                    if photo["path"] not in seen:
+                        candidates.append(photo)
+                        seen.add(photo["path"])
+            if len(folder_groups[folder]) == 1:
+                for stem in ("poster", "folder", "cover", "封面"):
+                    for photo in sorted(photos.get((folder, stem.casefold()), []),
+                                        key=lambda item: (extension_order.get(item["extension"], 99), item["path"])):
+                        if photo["path"] not in seen:
+                            candidates.append(photo)
+                            seen.add(photo["path"])
+        result.append(candidates)
+    return result
+
+
+def export_local_covers(directory, groups, records, helper, issues, enabled=True):
+    for group in groups:
+        group["poster"] = ""
+        group["poster_source"] = ""
+    candidates = local_cover_candidates(groups, records)
+    if not enabled or not any(candidates) or not helper_available(helper):
+        return 0
+    cover_dir = directory / "covers"
+    cover_dir.mkdir(mode=0o700)
+    workers = [ImageProbeWorker(helper) for _ in range(2)]
+    count = 0
+    def export_one(item):
+        index, options = item
+        destination = cover_dir / f"poster-{index + 1:05d}.png"
+        for record in options:
+            try:
+                before = os.stat(record["path"], follow_symlinks=False)
+                if not stat.S_ISREG(before.st_mode) or signature(before) != record["_signature"]:
+                    raise ValueError("封面图片自扫描后发生变化")
+                workers[index % 2].request(record["path"], thumbnail=str(destination))
+                after = os.stat(record["path"], follow_symlinks=False)
+                if signature(after) != record["_signature"] or not destination.is_file():
+                    raise ValueError("封面图片导出时发生变化")
+                return index, f"covers/{destination.name}", record["path"], ""
+            except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+                try:
+                    destination.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                last_error = f"本地封面未生成：{error}"
+        return index, "", "", last_error if options else ""
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            for index, relative, source, error in pool.map(export_one, enumerate(candidates)):
+                groups[index]["poster"] = relative
+                groups[index]["poster_source"] = source
+                if relative:
+                    count += 1
+                elif error:
+                    issue(issues, candidates[index][0]["path"], error)
+    finally:
+        for worker in workers:
+            worker.close()
+    return count
+
+
+def export_video_frame_covers(directory, groups, records, helper, issues, limit=500, enabled=True):
+    """Use macOS AVFoundation for missing posters, bounded by group count."""
+    if not enabled or not helper_available(helper):
+        return 0
+    by_path = {record["path"]: record for record in records if record["kind"] == "视频"}
+    supported = {"mp4", "mov", "m4v", "3gp", "mpg", "mpeg"}
+    pending = []
+    for index, group in enumerate(groups):
+        if group["poster"]:
+            continue
+        options = [by_path[file["path"]] for file in group["files"]
+                   if file["extension"] in supported and not by_path[file["path"]]["hardlink_to"]]
+        if options:
+            if len(pending) >= limit:
+                group["poster_status"] = "超过本次视频截帧数量上限"
+            else:
+                pending.append((index, options))
+    if not pending:
+        return 0
+    cover_dir = directory / "covers"
+    cover_dir.mkdir(mode=0o700, exist_ok=True)
+    workers = [ImageProbeWorker(helper) for _ in range(2)]
+    def export_one(item):
+        index, options = item
+        destination = cover_dir / f"frame-{index + 1:05d}.png"
+        last_error = ""
+        for record in options:
+            try:
+                before = os.stat(record["path"], follow_symlinks=False)
+                if not stat.S_ISREG(before.st_mode) or signature(before) != record["_signature"]:
+                    raise ValueError("视频自扫描后发生变化")
+                workers[index % 2].request(record["path"], thumbnail=str(destination), timeout=25)
+                after = os.stat(record["path"], follow_symlinks=False)
+                if signature(after) != record["_signature"] or not destination.is_file():
+                    raise ValueError("视频截帧时发生变化")
+                return index, f"covers/{destination.name}", record["path"], ""
+            except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+                try:
+                    destination.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                last_error = str(error)
+        return index, "", "", last_error
+    count = 0
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            for index, relative, source, error in pool.map(export_one, pending):
+                if relative:
+                    groups[index]["poster"] = relative
+                    groups[index]["poster_source"] = "视频截帧：" + source
+                    count += 1
+                else:
+                    groups[index]["poster_status"] = "无法生成视频封面；视频是否可播放仍需人工确认"
+                    if error:
+                        issue(issues, groups[index]["files"][0]["path"], f"视频封面未生成：{error}")
+    finally:
+        for worker in workers:
+            worker.close()
+    return count
+
+
 def render_report(data):
     e = lambda value: html.escape(str(value), quote=True)
     s = data["summary"]
@@ -919,36 +1067,80 @@ def render_report(data):
 def render_video_library(data):
     library = data["video_library"]
     payload = json.dumps(library, ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
-    template = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'"><title>影片资料库 · 媒体整理助手</title><style>
-    *{box-sizing:border-box}body{margin:0;background:#f3f6f8;color:#1d2939;font:15px/1.65 -apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif}main{max-width:1180px;margin:32px auto;padding:0 24px}header{background:#14352f;color:white;padding:28px;border-radius:18px}h1{font-size:31px;margin:4px 0}header p{margin:4px 0;color:#d5e9e2}a{color:#126653}header a{color:#b9f0d8}.stats{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0}.stat{background:white;border:1px solid #dce5e5;border-radius:12px;padding:13px 20px;min-width:170px}.stat strong{display:block;font-size:25px}.controls{display:flex;gap:10px;flex-wrap:wrap;margin:20px 0}input,select,button{font:inherit;border:1px solid #a8babc;border-radius:8px;padding:9px;background:white}input{flex:1;min-width:220px}.card,section{background:white;border:1px solid #dce5e5;border-radius:12px;padding:18px;margin:12px 0;overflow-wrap:anywhere}.card h3{margin:0 0 4px;font-size:19px}.meta{color:#627378;font-size:13px}.badge{display:inline-block;background:#e5f3ec;color:#205640;border-radius:999px;padding:2px 9px;margin:5px 6px 5px 0;font-size:12px}.alert{background:#fff0d7;color:#80520c}.file{border-top:1px solid #e3eaeb;padding:10px 0}.path{font-weight:600;overflow-wrap:anywhere}.minor{color:#607076;font-size:13px;overflow-wrap:anywhere}.issue{border-bottom:1px solid #e3eaeb;padding:10px 0}.pager{display:flex;align-items:center;gap:10px;margin:12px 0}.muted{color:#627378}.empty{padding:15px;color:#627378}@media(max-width:650px){main{padding:0 12px}h1{font-size:25px}}
+    template = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' file: data:; connect-src 'self'"><title>影片资料库 · 媒体整理助手</title><style>
+    *{box-sizing:border-box}body{margin:0;background:#f3f6f8;color:#1d2939;font:15px/1.65 -apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif}main{max-width:1180px;margin:32px auto;padding:0 24px}header{background:#14352f;color:white;padding:28px;border-radius:18px}h1{font-size:31px;margin:4px 0}header p{margin:4px 0;color:#d5e9e2}a{color:#126653}header a{color:#b9f0d8}.stats{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0}.stat{background:white;border:1px solid #dce5e5;border-radius:12px;padding:13px 20px;min-width:170px}.stat strong{display:block;font-size:25px}.controls{display:flex;gap:10px;flex-wrap:wrap;margin:20px 0}input,select,button{font:inherit;border:1px solid #a8babc;border-radius:8px;padding:9px;background:white}input{flex:1;min-width:220px}section{background:white;border:1px solid #dce5e5;border-radius:12px;padding:18px;margin:12px 0}.wall{display:grid;grid-template-columns:repeat(auto-fill,minmax(205px,1fr));gap:16px;align-items:start}.card{background:#fff;border:1px solid #dce5e5;border-radius:12px;overflow:hidden;overflow-wrap:anywhere;box-shadow:0 3px 12px #1d29390d}.poster{display:block;width:100%;aspect-ratio:2/3;object-fit:cover;background:#e4eae8}.poster-placeholder{display:grid;place-items:center;background:linear-gradient(145deg,#194438,#537d69);color:#f2fff8;padding:18px;text-align:center;font-size:27px;font-weight:700}.card-body{padding:14px}.card h3{margin:0 0 4px;font-size:18px;line-height:1.4}.card details{border-top:1px solid #e3eaeb;margin-top:10px;padding-top:8px}.card summary{cursor:pointer;color:#126653}.meta{color:#627378;font-size:13px}.badge{display:inline-block;background:#e5f3ec;color:#205640;border-radius:999px;padding:2px 9px;margin:5px 6px 5px 0;font-size:12px}.alert{background:#fff0d7;color:#80520c}.file{border-top:1px solid #e3eaeb;padding:10px 0}.path{font-weight:600;overflow-wrap:anywhere}.minor{color:#607076;font-size:13px;overflow-wrap:anywhere}.issue{border-bottom:1px solid #e3eaeb;padding:10px 0}.pager{display:flex;align-items:center;gap:10px;margin:12px 0}.muted{color:#627378}.empty{padding:15px;color:#627378}.tag-editor{background:#f3f8f5;border:1px solid #c9ded3;border-radius:8px;padding:9px;margin:8px 0}.tag-editor input{display:block;width:100%;min-width:0;margin-bottom:8px}.tag-editor button{padding:5px 8px;margin-right:5px;font-size:12px}.tag-editor .minor{margin-top:5px}@media(max-width:650px){main{padding:0 12px}h1{font-size:25px}.wall{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.card-body{padding:10px}}
     </style></head><body><main><header><a href="report.html">← 返回扫描总报告</a><h1>影片资料库</h1><p>本次扫描快照 · @@CREATED@@</p><p>只读浏览和问题核对；重新扫描会生成新快照，不修改原片。</p></header>
-    <div class="stats"><div class="stat">影片分组<strong id="group-total">0</strong></div><div class="stat">视频文件<strong>@@VIDEO_FILES@@</strong></div><div class="stat">精确重复涉及视频<strong>@@DUPLICATE_FILES@@</strong></div><div class="stat">待核对项目<strong>@@ISSUE_TOTAL@@</strong></div></div>
-    <section><h2>浏览影片</h2><p class="muted">同编号跨目录归组；没有编号时，仅将同一原目录内的同名变体归组。分组只靠文件名，不表示内容相同。每页 50 组。</p><div class="controls"><input id="search" type="search" aria-label="搜索影片、路径和附属文件" placeholder="搜索编号、影片名、路径、字幕…"><select id="filter" aria-label="筛选影片"><option value="all">全部影片</option><option value="review">有视频问题或精确重复</option><option value="duplicates">精确重复涉及视频</option><option value="sidecars">有附属文件</option></select></div><div id="groups"></div><div class="pager"><button id="previous" type="button">上一页</button><span id="page-label"></span><button id="next" type="button">下一页</button></div></section>
+    <div class="stats"><div class="stat">影片分组<strong id="group-total">0</strong></div><div class="stat">可用封面<strong>@@POSTER_TOTAL@@</strong></div><div class="stat">视频文件<strong>@@VIDEO_FILES@@</strong></div><div class="stat">精确重复涉及视频<strong>@@DUPLICATE_FILES@@</strong></div><div class="stat">待核对项目<strong>@@ISSUE_TOTAL@@</strong></div></div>
+    <section><h2>影片海报墙</h2><p class="muted">同编号跨目录归组；没有编号时，仅将同一原目录内的同名变体归组。封面优先使用同目录的同名或编号图片，其次尝试从视频截帧；无法生成时显示占位图。分组只靠文件名，不表示内容相同。每页 50 组。</p><p class="muted" id="tag-help">标签可筛选；通过“媒体整理助手.app”或“打开资料库.command”打开本地服务后可以编辑并跨扫描保留。</p><div class="controls"><input id="search" type="search" aria-label="搜索影片、路径、标签和附属文件" placeholder="搜索编号、影片名、路径、标签、字幕…"><select id="filter" aria-label="筛选影片"><option value="all">全部影片</option><option value="review">有视频问题或精确重复</option><option value="duplicates">精确重复涉及视频</option><option value="sidecars">有附属文件</option><option value="posters">有封面</option><option value="missing-posters">缺少封面</option></select><select id="tag-filter" aria-label="按标签筛选"><option value="">全部标签</option></select></div><div id="groups" class="wall"></div><div class="pager"><button id="previous" type="button">上一页</button><span id="page-label"></span><button id="next" type="button">下一页</button></div></section>
     <section><h2>待核对清单</h2><p class="muted">包含本次扫描发现的视频读取或文件头问题、精确重复、未唯一关联的字幕/NFO，以及同名文件夹候选。未启用文件头检查时，不会据此判断视频能否播放。下方显示与搜索词匹配的前 200 条；完整数据见 <a href="library_issues.csv">问题 CSV</a>。</p><div id="issues"></div></section>
     <p class="muted">本页面仅使用本次扫描结果。其他跳过项与照片问题请查看<a href="report.html#issues">总报告</a>；完整原始数据见 <a href="report.json">JSON</a>。</p></main>
     <script id="library-data" type="application/json">@@DATA@@</script><script>
     const library = JSON.parse(document.getElementById('library-data').textContent);
     const search = document.getElementById('search');
     const filter = document.getElementById('filter');
+    const tagFilter = document.getElementById('tag-filter');
     const groups = document.getElementById('groups');
     const issues = document.getElementById('issues');
+    const tagApi = location.protocol === 'http:' && location.hostname === '127.0.0.1' && /^\/[^/]+\/library\.html$/.test(location.pathname)
+      ? location.pathname.replace(/library\.html$/, 'api/tags') : '';
     let page = 0;
     const make = (tag, className, value) => { const node = document.createElement(tag); if (className) node.className = className; if (value !== undefined) node.textContent = value; return node; };
+    function updateTagChoices() {
+      const selected = tagFilter.value;
+      const names = [...new Set(library.groups.flatMap(group => group.tags || []))].sort((a, b) => a.localeCompare(b));
+      const all = make('option', '', '全部标签'); all.value = ''; tagFilter.replaceChildren(all);
+      for (const name of names) { const option = make('option', '', name); option.value = name; tagFilter.append(option); }
+      tagFilter.value = names.includes(selected) ? selected : '';
+    }
+    function editTags(group, edit) {
+      edit.disabled = true;
+      const panel = make('div', 'tag-editor');
+      const input = make('input'); input.type = 'text'; input.value = (group.tags || []).join(', ');
+      input.placeholder = '多个标签用逗号分隔'; input.setAttribute('aria-label', `${group.title} 的标签`);
+      const save = make('button', '', '保存'); save.type = 'button';
+      const cancel = make('button', '', '取消'); cancel.type = 'button';
+      const message = make('div', 'minor', '清空后保存可删除全部标签。');
+      cancel.addEventListener('click', () => { panel.remove(); edit.disabled = false; });
+      async function submit() {
+        const tags = input.value.split(/[,，]/).map(tag => tag.trim()).filter(Boolean);
+        save.disabled = true; message.textContent = '正在保存…';
+        try {
+          const response = await fetch(tagApi, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({key: group.tag_key, tags})});
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || '标签保存失败');
+          group.tags = result.tags; updateTagChoices(); render();
+        } catch (error) { message.textContent = `标签未保存：${error.message}`; save.disabled = false; }
+      }
+      save.addEventListener('click', submit);
+      input.addEventListener('keydown', event => { if (event.key === 'Enter') submit(); });
+      panel.append(input, save, cancel, message); edit.after(panel); input.focus();
+    }
     function render() {
       const query = search.value.trim().toLocaleLowerCase();
       const visible = library.groups.filter(group => {
         if (filter.value === 'review' && !group.needs_review) return false;
         if (filter.value === 'duplicates' && !group.files.some(file => file.duplicate_group)) return false;
         if (filter.value === 'sidecars' && !group.has_sidecars) return false;
-        return !query || [group.title, ...group.files.flatMap(file => [file.path, file.suggested_path, ...file.sidecars])].some(value => value.toLocaleLowerCase().includes(query));
+        if (filter.value === 'posters' && !group.poster) return false;
+        if (filter.value === 'missing-posters' && group.poster) return false;
+        if (tagFilter.value && !(group.tags || []).includes(tagFilter.value)) return false;
+        return !query || [group.title, ...(group.tags || []), ...group.files.flatMap(file => [file.path, file.suggested_path, ...file.sidecars])].some(value => value.toLocaleLowerCase().includes(query));
       });
       const pages = Math.max(1, Math.ceil(visible.length / 50)); page = Math.min(page, pages - 1);
       groups.replaceChildren();
       for (const group of visible.slice(page * 50, page * 50 + 50)) {
         const card = make('article', 'card');
-        card.append(make('h3', '', group.title), make('div', 'meta', `${group.type} · ${group.files.length} 个视频`));
-        if (group.needs_review) card.append(make('span', 'badge alert', '待核对'));
-        if (group.has_sidecars) card.append(make('span', 'badge', '有附属文件'));
+        if (group.poster) {
+          const picture = make('img', 'poster'); picture.src = group.poster; picture.alt = `${group.title} 的封面`; picture.loading = 'lazy'; card.append(picture);
+        } else card.append(make('div', 'poster poster-placeholder', group.title.slice(0, 12)));
+        const body = make('div', 'card-body');
+        body.append(make('h3', '', group.title), make('div', 'meta', `${group.type} · ${group.files.length} 个视频`));
+        for (const tag of group.tags || []) body.append(make('span', 'badge', tag));
+        if (tagApi) { const edit = make('button', '', '编辑标签'); edit.type = 'button'; edit.addEventListener('click', () => editTags(group, edit)); body.append(edit); }
+        if (group.needs_review) body.append(make('span', 'badge alert', '待核对'));
+        if (group.has_sidecars) body.append(make('span', 'badge', '有附属文件'));
+        if (group.poster_source) body.append(make('div', 'minor', `封面：${group.poster_source.startsWith('视频截帧：') ? '视频截帧' : '本地图片'}`));
+        const details = make('details'); details.append(make('summary', '', `查看 ${group.files.length} 个文件`));
         for (const file of group.files) {
           const row = make('div', 'file');
           row.append(make('div', 'path', file.path), make('div', 'minor', `${file.extension.toUpperCase()} · ${(file.bytes / 1048576).toFixed(1)} MB · 修改于 ${file.modified_at} · ${file.hash_status}`));
@@ -957,8 +1149,9 @@ def render_video_library(data):
           if (file.sidecars.length) row.append(make('div', 'minor', `附属文件：${file.sidecars.join('；')}`));
           for (const reason of file.issues) row.append(make('div', 'badge alert', reason));
           row.append(make('div', 'minor', `分类建议：${file.suggested_path}`));
-          card.append(row);
+          details.append(row);
         }
+        body.append(details); card.append(body);
         groups.append(card);
       }
       if (!visible.length) groups.append(make('p', 'empty', '没有符合条件的影片。'));
@@ -977,14 +1170,20 @@ def render_video_library(data):
     }
     search.addEventListener('input', () => { page = 0; render(); });
     filter.addEventListener('change', () => { page = 0; render(); });
+    tagFilter.addEventListener('change', () => { page = 0; render(); });
     document.getElementById('previous').addEventListener('click', () => { page--; render(); });
     document.getElementById('next').addEventListener('click', () => { page++; render(); });
     document.getElementById('group-total').textContent = library.groups.length;
+    updateTagChoices();
     render();
+    if (tagApi) fetch(tagApi).then(response => { if (!response.ok) throw new Error('读取标签失败'); return response.json(); })
+      .then(result => { for (const group of library.groups) group.tags = result.groups[group.tag_key] || []; updateTagChoices(); render();
+        document.getElementById('tag-help').textContent = '编辑标签会立即保存到本机 reports/library-tags.json；重新扫描后仍可按标签查找。'; })
+      .catch(() => { document.getElementById('tag-help').textContent = '标签服务暂不可用；当前仅显示扫描时保存的标签。'; });
     </script></body></html>'''
-    replacements = {"CREATED": html.escape(data["created_at"], quote=True), "VIDEO_FILES": str(library["video_files"]),
+    replacements = {"CREATED": html.escape(data["created_at"], quote=True), "POSTER_TOTAL": str(library.get("poster_count", 0)), "VIDEO_FILES": str(library["video_files"]),
                     "DUPLICATE_FILES": str(library["duplicate_files"]), "ISSUE_TOTAL": str(len(library["issues"])), "DATA": payload}
-    return re.sub(r"@@(CREATED|VIDEO_FILES|DUPLICATE_FILES|ISSUE_TOTAL|DATA)@@", lambda match: replacements[match.group(1)], template)
+    return re.sub(r"@@(CREATED|POSTER_TOTAL|VIDEO_FILES|DUPLICATE_FILES|ISSUE_TOTAL|DATA)@@", lambda match: replacements[match.group(1)], template)
 
 
 def write_reports(directory, data):
@@ -1047,20 +1246,32 @@ def main(argv=None):
     parser.add_argument("--distance", type=int, choices=range(0, 17), default=6, metavar="0-16", help="图片 dHash 距离阈值，默认 6")
     parser.add_argument("--max-similar", type=int, default=5000, help="相似候选上限，默认 5000")
     parser.add_argument("--no-similar", action="store_true", help="关闭相似图片比较")
-    parser.add_argument("--no-image-metadata", action="store_true", help="跳过照片解析，加快扫描；仍有精确文件查重")
+    parser.add_argument("--no-image-metadata", action="store_true", help="跳过照片解析和封面生成，加快扫描；仍有精确文件查重")
     parser.add_argument("--check-video-headers", action="store_true", help="可选：读取少量视频文件头并提示常见容器是否可识别；不验证能否播放")
+    parser.add_argument("--no-video-covers", action="store_true", help="不从视频截帧生成封面；仍使用本地图片封面")
+    parser.add_argument("--max-video-covers", type=int, default=500, help="视频截帧封面数量上限，默认 500")
     parser.add_argument("--include-hidden", action="store_true", help="包含隐藏文件和目录（仍跳过资料库和系统目录）")
     parser.add_argument("--open", action="store_true", help="扫描完成后打开 HTML 报告")
+    parser.add_argument("--edit-tags", action="store_true", help="扫描后打开本机资料库，可编辑标签；关闭终端停止服务")
+    parser.add_argument("--serve-library", action="store_true", help="打开最近一次资料库并编辑标签，不重新扫描")
     args = parser.parse_args(argv)
     if args.max_similar < 1:
         parser.error("--max-similar 必须大于 0")
+    if args.max_video_covers < 0:
+        parser.error("--max-video-covers 不能小于 0")
     previous_umask = os.umask(0o077)
     try:
+        output = args.output.expanduser().resolve()
+        if args.serve_library:
+            reports = sorted((path for path in output.glob("scan-*") if path.is_dir() and (path / "library.html").is_file()), reverse=True)
+            if not reports:
+                raise ValueError("没有找到可打开的影片资料库，请先运行一次扫描")
+            serve_library(reports[0], output)
+            return 0
         folders = args.folders or choose_folders()
         if not folders:
             print("已取消，没有扫描文件。")
             return 0
-        output = args.output.expanduser().resolve()
         roots = normalize_roots(folders, output)
         issues = []
         print("只读扫描开始。可按 Ctrl+C 取消；原文件不会修改。", flush=True)
@@ -1075,16 +1286,34 @@ def main(argv=None):
         similarity = similar_images(records, args.distance, args.max_similar, not args.no_similar and not args.no_image_metadata and image_inspection["available"])
         video_groups = related_videos(records)
         folder_groups = related_folders(folders_seen, records, sidecars)
-        video_library = build_video_library(records, sidecars, duplicates, issues, folder_groups)
+        tag_path = output / "library-tags.json"
+        try:
+            saved_tags = load_tags(tag_path)
+        except (OSError, ValueError) as error:
+            issue(issues, tag_path, f"标签文件未读取：{error}")
+            saved_tags = {}
+        video_library = build_video_library(records, sidecars, duplicates, issues, folder_groups, saved_tags)
         directory = output / dt.datetime.now().strftime("scan-%Y%m%d-%H%M%S-%f")
         directory.mkdir(parents=True, exist_ok=False, mode=0o700)
         previews = export_previews(directory, records, similarity, BASE / "native" / "image_probe", issues)
+        cover_issue_start = len(issues)
+        video_library["poster_count"] = export_local_covers(directory, video_library["groups"], records,
+                                                             BASE / "native" / "image_probe", issues,
+                                                             enabled=not args.no_image_metadata)
+        video_library["frame_count"] = export_video_frame_covers(directory, video_library["groups"], records,
+                                                                  BASE / "native" / "video_cover", issues,
+                                                                  limit=args.max_video_covers,
+                                                                  enabled=not args.no_image_metadata and not args.no_video_covers)
+        video_library["poster_count"] += video_library["frame_count"]
+        video_library["issues"].extend({"path": item["path"], "reason": item["reason"], "type": "封面"}
+                                       for item in issues[cover_issue_start:])
         clean_records = [{k: v for k, v in r.items() if not k.startswith("_")} for r in records]
-        data = {"version": 8, "created_at": dt.datetime.now().astimezone().isoformat(), "roots": [str(r) for r in roots],
+        data = {"version": 9, "created_at": dt.datetime.now().astimezone().isoformat(), "roots": [str(r) for r in roots],
                 "summary": {"files": len(records), "duplicate_groups": len(duplicates), "hardlinks": sum(bool(r["hardlink_to"]) for r in records),
                             "redundant_logical_bytes": sum(g["redundant_logical_bytes"] for g in duplicates)},
                 "options": {"distance": args.distance, "video_rule": args.video_rule, "include_hidden": args.include_hidden,
-                            "check_video_headers": args.check_video_headers},
+                            "check_video_headers": args.check_video_headers, "max_video_covers": args.max_video_covers,
+                            "video_covers_enabled": not args.no_video_covers and not args.no_image_metadata},
                 "image_inspection": image_inspection, "video_inspection": video_inspection,
                 "files": clean_records, "duplicates": duplicates,
                 "similar": similarity, "previews": previews, "video_groups": video_groups, "sidecars": sidecars,
@@ -1092,7 +1321,9 @@ def main(argv=None):
         write_reports(directory, data)
         print(f"\n完成：{len(records)} 个媒体文件，{len(duplicates)} 组精确重复，{len(similarity['pairs'])} 对图片相似候选，{len(video_groups)} 组相关视频候选，{len(sidecars)} 个附属文件，{len(folder_groups)} 组文件夹名称候选。")
         print(f"读取问题 {len(issues)} 条。报告：{directory / 'report.html'}")
-        if args.open:
+        if args.edit_tags:
+            serve_library(directory, output)
+        elif args.open:
             webbrowser.open((directory / "report.html").as_uri())
         return 0
     except KeyboardInterrupt:
