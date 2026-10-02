@@ -69,6 +69,7 @@ class MediaTests(unittest.TestCase):
                 folder = first / name
                 folder.mkdir()
                 (folder / filename).write_bytes(filename.encode())
+            (first / "Trip:2024" / "clip-a.srt").write_bytes(b"sample subtitle")
             (second / "clip-c.mp4").write_bytes(b"third video")
             originals = {p: (p.read_bytes(), p.stat().st_mtime_ns) for root in (first, second) for p in root.rglob("*.mp4")}
             with contextlib.redirect_stdout(io.StringIO()):
@@ -83,6 +84,9 @@ class MediaTests(unittest.TestCase):
             self.assertNotEqual(targets["clip-a.mp4"][3], targets["clip-b.mp4"][3])
             self.assertIn("文件夹名称冲突", next(r["reason"] for r in data["files"] if r["name"] == "clip-a.mp4"))
             self.assertEqual(len((report.parent / "folder_names.csv").read_text().splitlines()), 5)
+            collision = next(g for g in data["folder_groups"] if g["type"] == "整理后名称冲突")
+            self.assertEqual(next(f for f in collision["folders"] if f["path"].endswith("Trip:2024"))["sidecar_files"], 1)
+            self.assertIn("包含附属文件项", (report.parent / "folder_names.csv").read_text().splitlines()[0])
             self.assertEqual(originals, {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in originals})
 
     def test_same_folder_media_content_requires_complete_hashes(self):
@@ -106,7 +110,7 @@ class MediaTests(unittest.TestCase):
             self.assertEqual(code, 0)
             report_dir = next((base / "reports").glob("scan-*"))
             data = json.loads((report_dir / "report.json").read_text())
-            self.assertEqual(data["version"], 6)
+            self.assertEqual(data["version"], 7)
 
             group = next(group for group in data["folder_groups"] if group["name"] == "Album")
             folders = {folder["path"]: folder for folder in group["folders"]}
@@ -129,11 +133,16 @@ class MediaTests(unittest.TestCase):
             sample_png(source / "IMG_1.png", "A")
             (source / "IMG_1.jpg").write_bytes(b"sample photo")
             (source / "Film.mp4").write_bytes(b"sample video")
+            (source / "Film.mkv").write_bytes(b"alternate video")
+            (source / "Film.en.mp4").write_bytes(b"language title")
             (source / "Film-C.mp4").write_bytes(b"subtitle variant")
             (source / "IMG_1.xmp").write_bytes(b"<xmp>sample</xmp>")
             (source / "IMG_1.png.aae").write_bytes(b"sample edit")
             (source / "Film.zh-CN.srt").write_bytes(b"sample subtitle")
             (source / "Film.mp4.nfo").write_bytes(b"sample info")
+            (source / "Film.mp4.zh-CN.srt").write_bytes(b"sample subtitle 2")
+            (source / "Film.mp4.ja.forced.srt").write_bytes(b"sample subtitle 3")
+            (source / "Film.en.srt").write_bytes(b"sample subtitle 4")
             (source / "Orphan.srt").write_bytes(b"orphan")
             (source / "linked.srt").symlink_to(source / "Orphan.srt")
             originals = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in source.iterdir() if p.is_file() and not p.is_symlink()}
@@ -142,15 +151,19 @@ class MediaTests(unittest.TestCase):
             report_dir = next(output.glob("scan-*"))
             data = json.loads((report_dir / "report.json").read_text())
             sidecars = {Path(item["path"]).name: item for item in data["sidecars"]}
-            self.assertEqual(set(sidecars), {"IMG_1.xmp", "IMG_1.png.aae", "Film.zh-CN.srt", "Film.mp4.nfo", "Orphan.srt"})
+            self.assertEqual(set(sidecars), {"IMG_1.xmp", "IMG_1.png.aae", "Film.zh-CN.srt", "Film.mp4.nfo",
+                                             "Film.mp4.zh-CN.srt", "Film.mp4.ja.forced.srt", "Film.en.srt", "Orphan.srt"})
             self.assertEqual(sidecars["IMG_1.xmp"]["status"], "多项候选：需人工确认")
             self.assertEqual(sidecars["IMG_1.xmp"]["media_suggested_path"], "")
             self.assertEqual(Path(sidecars["IMG_1.png.aae"]["media_paths"][0]).name, "IMG_1.png")
-            self.assertEqual(Path(sidecars["Film.zh-CN.srt"]["media_paths"][0]).name, "Film.mp4")
+            self.assertEqual(sidecars["Film.zh-CN.srt"]["status"], "多项候选：需人工确认")
+            self.assertEqual(Path(sidecars["Film.mp4.zh-CN.srt"]["media_paths"][0]).name, "Film.mp4")
+            self.assertEqual(Path(sidecars["Film.mp4.ja.forced.srt"]["media_paths"][0]).name, "Film.mp4")
+            self.assertEqual(Path(sidecars["Film.en.srt"]["media_paths"][0]).name, "Film.en.mp4")
             self.assertEqual(sidecars["Orphan.srt"]["status"], "未关联")
-            self.assertEqual(data["summary"]["files"], 4)
+            self.assertEqual(data["summary"]["files"], 6)
             self.assertIn("附属文件关联", (report_dir / "report.html").read_text())
-            self.assertEqual(len((report_dir / "sidecars.csv").read_text().splitlines()), 6)
+            self.assertEqual(len((report_dir / "sidecars.csv").read_text().splitlines()), 9)
             self.assertEqual(originals, {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in originals})
 
     def test_video_filename_variants_are_only_labels(self):

@@ -409,9 +409,9 @@ def safe_segment(text):
     return (text[:100].rstrip(" .") or "待整理")
 
 
-def related_folders(folders, records):
+def related_folders(folders, records, sidecars=()):
     """Compare scanned media in repeated-name folders using existing full hashes."""
-    counts = {path: {"path": path, "media_files": 0, "logical_bytes": 0} for path in folders}
+    counts = {path: {"path": path, "media_files": 0, "sidecar_files": 0, "logical_bytes": 0} for path in folders}
     folder_media = collections.defaultdict(list)
     for record in records:
         root = Path(record["root"])
@@ -424,6 +424,14 @@ def related_folders(folders, records):
                 folder_media[str(parent)].append(record)
             if parent == root:
                 break
+            parent = parent.parent
+    for sidecar in sidecars:
+        parent = Path(sidecar["path"]).parent
+        while True:
+            details = counts.get(str(parent))
+            if details is None:
+                break
+            details["sidecar_files"] += 1
             parent = parent.parent
     groups = collections.defaultdict(list)
     for path, details in counts.items():
@@ -539,25 +547,26 @@ def associate_sidecars(sidecars, records):
     for sidecar in sidecars:
         path = Path(sidecar["path"])
         kind = "照片" if sidecar["extension"] in PHOTO_SIDECAR_EXT else "视频"
-        stem = path.stem
-        stems = [stem]
-        embedded_extension = Path(stem).suffix.lower().lstrip(".")
         expected = IMAGE_EXT if kind == "照片" else VIDEO_EXT
-        if embedded_extension in expected:
-            stems = [Path(stem).stem]
+        stems = [path.stem]
         if kind == "视频":
-            language = re.sub(r"(?i)[._-](?:zh(?:[-_]?(?:cn|tw|hans|hant))?|chs|cht|en|eng)$", "", stem)
-            if language != stem:
-                stems.append(language)
+            # Try the literal stem before removing language/accessibility suffixes.
+            suffix = r"(?i)[._-](?:zh(?:[-_]?(?:cn|tw|hk|hans|hant))?|chs|cht|en|eng|ja|jpn|ko|kor|forced|sdh|cc)$"
+            for _ in range(2):
+                reduced = re.sub(suffix, "", stems[-1])
+                if reduced == stems[-1]:
+                    break
+                stems.append(reduced)
         matches = []
         for candidate in stems:
-            found = index.get((str(path.parent), normalized(candidate), kind), [])
+            embedded_extension = Path(candidate).suffix.lower().lstrip(".")
+            media_stem = Path(candidate).stem if embedded_extension in expected else candidate
+            found = index.get((str(path.parent), normalized(media_stem), kind), [])
+            if embedded_extension in expected:
+                found = [item for item in found if item["extension"] == embedded_extension]
             if found:
-                if embedded_extension in expected:
-                    found = [item for item in found if item["extension"] == embedded_extension]
                 matches = found
-                if matches:
-                    break
+                break
         matches = sorted(matches, key=lambda item: item["path"])
         status = "已关联" if len(matches) == 1 else "多项候选：需人工确认" if matches else "未关联"
         result.append({**sidecar, "status": status, "media_paths": [item["path"] for item in matches],
@@ -790,7 +799,7 @@ def render_report(data):
     video_inspection = data.get("video_inspection", {"enabled": False, "checked": 0, "recognized": 0, "unrecognized": 0})
     video_check_note = (f"本次轻量检查 {video_inspection['checked']} 个视频文件头，识别 {video_inspection['recognized']} 个，待核对 {video_inspection['unrecognized']} 个。" if video_inspection["enabled"] else "本次未启用可选的视频文件头检查。")
     folder_groups = data.get("folder_groups", [])
-    folder_sections = "".join(f"<details><summary>{e(g['type'])}：{e(g['name'])} · {len(g['folders'])} 个文件夹</summary><ul>" + "".join(f"<li>{e(f['path'])} <small>（包含 {f['media_files']} 项媒体，{size_text(f['logical_bytes'])}；{e(f['content_check'])}" + (f"；匹配示例：{e(f['content_match_example'])}" if f["content_match_example"] else "") + "）</small></li>" for f in g["folders"]) + "</ul></details>" for g in folder_groups[:300]) or "<p class='empty'>没有发现同名或整理后名称冲突的文件夹。</p>"
+    folder_sections = "".join(f"<details><summary>{e(g['type'])}：{e(g['name'])} · {len(g['folders'])} 个文件夹</summary><ul>" + "".join(f"<li>{e(f['path'])} <small>（包含 {f['media_files']} 项媒体、{f['sidecar_files']} 项附属文件，媒体大小 {size_text(f['logical_bytes'])}；{e(f['content_check'])}" + (f"；匹配示例：{e(f['content_match_example'])}" if f["content_match_example"] else "") + "）</small></li>" for f in g["folders"]) + "</ul></details>" for g in folder_groups[:300]) or "<p class='empty'>没有发现同名或整理后名称冲突的文件夹。</p>"
     plan = "<div class='scroll'><table><thead><tr><th>类型</th><th>原文件</th><th>建议路径（仅预览）</th><th>判断依据</th></tr></thead><tbody id='plan-rows'></tbody></table></div>"
     browse_data = json.dumps([{"kind": r["kind"], "path": r["path"], "suggested_path": r["suggested_path"], "reason": r["reason"]} for r in data["files"]], ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     script = """
@@ -840,7 +849,7 @@ def render_report(data):
     <section id="similar"><h2>图片相似候选</h2><p>64 位 dHash 距离阈值：{data['options']['distance']}，同时限制宽高比差异。视觉相似只供对照，不能作为删除依据；裁剪、旋转、连拍和纯色图片可能漏检或误报。</p><p class="muted">{e(data['image_inspection']['note'])} 可比较图片 {data['similar']['eligible']} 张；硬链接 {s['hardlinks']} 项未重复计算。</p>{'<p class="notice">候选达到数量上限，结果可能不完整。可以缩小扫描目录或提高 --max-similar。</p>' if data['similar']['truncated'] else ''}{similarity}<p><a href="similar.csv">全部已生成候选 CSV</a> · 页面最多展示 300 对</p></section>
     <section id="video-groups"><h2>相关视频候选</h2><p>根据同一编号或清理分段、画质标记后的标题归组，方便检查同一作品的分段和不同版本。这些分组不表示内容重复；视频是否完全相同只看上方的 SHA-256 结果。可用 --check-video-headers 轻量识别部分容器文件头，但无法证明视频可播放。{e(video_check_note)}页面最多展示 300 组，全部见 <a href="video_groups.csv">视频关联 CSV</a>。</p>{video_groups}</section>
     <section id="sidecars"><h2>附属文件关联</h2><p>同目录文件名关联 XMP、AAE 与字幕、NFO；仅记录名称和大小，不读取附属文件内容。多项候选及未关联项需要人工核对；不会移动或修改附属文件。页面最多展示 300 项，全部见 <a href="sidecars.csv">附属文件 CSV</a>。</p>{sidecars}</section>
-    <section id="folder-groups"><h2>文件夹名称候选</h2><p>列出同名（大小写视为相同）或整理后名称可能冲突的文件夹，并统计其下媒体项。仅在两处已扫描媒体均有完整 SHA-256、字节内容集合一致且文件夹互不包含时标记匹配；不比较文件名、非媒体文件或跳过项，也不代表整个文件夹完全相同。页面最多展示 300 组，全部见 <a href="folder_names.csv">文件夹名称 CSV</a>。</p>{folder_sections}</section>
+    <section id="folder-groups"><h2>文件夹名称候选</h2><p>列出同名（大小写视为相同）或整理后名称可能冲突的文件夹，并统计其下媒体和附属文件项。仅在两处已扫描媒体均有完整 SHA-256、字节内容集合一致且文件夹互不包含时标记匹配；附属文件只计数，不比较内容。文件名、其他非媒体文件和跳过项也未比较，因此不代表整个文件夹完全相同。页面最多展示 300 组，全部见 <a href="folder_names.csv">文件夹名称 CSV</a>。</p>{folder_sections}</section>
     <section id="plan"><h2>分类建议 · 仅预览</h2><p>照片优先使用 EXIF 拍摄日期，其次文件名日期，最后修改时间。视频按编号、名称或原目录归组。目标重名会加路径标识。实况照片配对仅按同目录同名推测。</p><div class="controls"><input id="search" type="search" aria-label="筛选全部分类建议" placeholder="搜索全部文件名、目录或建议"><select id="kind-filter" aria-label="按媒体类型筛选"><option value="">全部类型</option><option value="照片">照片</option><option value="视频">视频</option></select></div>{plan}<div class="pager"><button id="previous" type="button">上一页</button><span id="plan-count"></span><button id="next" type="button">下一页</button></div><p class="muted">可筛选全部 {s['files']} 条建议，每页显示 100 条。完整建议见 classification.csv；本工具没有执行移动或删除的功能。</p></section>
     <section id="issues"><h2>跳过与错误</h2><p>读取问题 {len(data['issues'])} 条（页面最多展示 500 条，完整列表见 <a href="issues.csv">问题 CSV</a>）。目录不可读或文件变化会使结果不完整。</p><p class="muted">按规则跳过：{skipped}。隐藏项、符号链接、照片资料库包和可识别的云端占位项默认不读取。</p>{problems}</section><footer class="muted">离线生成 · 不上传媒体 · 不访问远程元数据 · 完整记录见同目录 CSV / JSON</footer></main><script id="classification-data" type="application/json">{browse_data}</script><script>{script}</script></body></html>'''
 
@@ -865,7 +874,8 @@ def write_reports(directory, data):
                                             ("media_suggested_path", "媒体建议路径")],
               ({**item, "media_paths": " | ".join(item["media_paths"])} for item in data["sidecars"]))
     write_csv(directory / "folder_names.csv", [("type", "分组依据"), ("name", "文件夹名称"), ("path", "来源文件夹"),
-                                                  ("media_files", "包含媒体项"), ("logical_bytes", "媒体逻辑字节数"),
+                                                  ("media_files", "包含媒体项"), ("sidecar_files", "包含附属文件项"),
+                                                  ("logical_bytes", "媒体逻辑字节数"),
                                                   ("content_check", "媒体内容校验"), ("content_match_example", "匹配文件夹示例")],
               ({"type": group["type"], "name": group["name"], **folder}
                for group in data["folder_groups"] for folder in group["folders"]))
@@ -928,12 +938,12 @@ def main(argv=None):
         sidecars = associate_sidecars(found_sidecars, records)
         similarity = similar_images(records, args.distance, args.max_similar, not args.no_similar and not args.no_image_metadata and image_inspection["available"])
         video_groups = related_videos(records)
-        folder_groups = related_folders(folders_seen, records)
+        folder_groups = related_folders(folders_seen, records, sidecars)
         directory = output / dt.datetime.now().strftime("scan-%Y%m%d-%H%M%S-%f")
         directory.mkdir(parents=True, exist_ok=False, mode=0o700)
         previews = export_previews(directory, records, similarity, BASE / "native" / "image_probe", issues)
         clean_records = [{k: v for k, v in r.items() if not k.startswith("_")} for r in records]
-        data = {"version": 6, "created_at": dt.datetime.now().astimezone().isoformat(), "roots": [str(r) for r in roots],
+        data = {"version": 7, "created_at": dt.datetime.now().astimezone().isoformat(), "roots": [str(r) for r in roots],
                 "summary": {"files": len(records), "duplicate_groups": len(duplicates), "hardlinks": sum(bool(r["hardlink_to"]) for r in records),
                             "redundant_logical_bytes": sum(g["redundant_logical_bytes"] for g in duplicates)},
                 "options": {"distance": args.distance, "video_rule": args.video_rule, "include_hidden": args.include_hidden,
