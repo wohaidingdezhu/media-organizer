@@ -1136,7 +1136,7 @@ def render_video_library(data):
         const body = make('div', 'card-body');
         body.append(make('h3', '', group.title), make('div', 'meta', `${group.type} · ${group.files.length} 个视频`));
         for (const tag of group.tags || []) body.append(make('span', 'badge', tag));
-        if (tagApi) { const edit = make('button', '', '编辑标签'); edit.type = 'button'; edit.addEventListener('click', () => editTags(group, edit)); body.append(edit); }
+        if (tagApi && /^[0-9a-f]{64}$/.test(group.tag_key || '')) { const edit = make('button', '', '编辑标签'); edit.type = 'button'; edit.addEventListener('click', () => editTags(group, edit)); body.append(edit); }
         if (group.needs_review) body.append(make('span', 'badge alert', '待核对'));
         if (group.has_sidecars) body.append(make('span', 'badge', '有附属文件'));
         if (group.poster_source) body.append(make('div', 'minor', `封面：${group.poster_source.startsWith('视频截帧：') ? '视频截帧' : '本地图片'}`));
