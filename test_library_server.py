@@ -206,6 +206,29 @@ class ReportServerTests(unittest.TestCase):
         self.assertEqual(state.read_bytes(), b"{broken")
         self.assertIn("200 OK", request(server, self.prefix + "report.html")[0])
 
+    def test_organization_target_edit_api_validates_persists_and_restores(self):
+        server = self.server()
+        item = json.loads(request(server, self.prefix + "api/organization")[1])["items"][0]
+        before = (self.report / "report.json").read_bytes()
+        headers, body = request(server, self.prefix + "api/organization", "POST",
+                                {"action": "target", "id": item["id"], "target": "照片/自定义/photo.jpg"})
+        self.assertIn("200 OK", headers)
+        self.assertTrue(json.loads(body)["items"][0]["target_edited"])
+        saved = (self.report / "organization-plan.json").read_bytes()
+        for payload in ({"action": "target", "id": item["id"], "target": "../escape.jpg"},
+                        {"action": "target", "id": item["id"]}, {"action": "move"}):
+            headers, _ = request(server, self.prefix + "api/organization", "POST", payload)
+            self.assertIn("400 Bad Request", headers)
+            self.assertEqual((self.report / "organization-plan.json").read_bytes(), saved)
+        reopened = self.server()
+        self.assertEqual(json.loads(request(reopened, self.prefix + "api/organization")[1])["items"][0]["suggested_path"],
+                         "照片/自定义/photo.jpg")
+        headers, body = request(reopened, self.prefix + "api/organization", "POST",
+                                {"action": "target", "id": item["id"], "target": None})
+        self.assertIn("200 OK", headers)
+        self.assertFalse(json.loads(body)["items"][0]["target_edited"])
+        self.assertEqual((self.report / "report.json").read_bytes(), before)
+
 
 if __name__ == "__main__":
     unittest.main()

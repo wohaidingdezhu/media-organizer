@@ -166,6 +166,102 @@ class OrganizationPlanTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(plans[0].snapshot()["counts"]["include"], 3)
 
+    def test_target_adjustment_persists_exports_and_requires_review_again(self):
+        original = self.directory / "original.jpg"
+        original.write_bytes(b"generated media")
+        before = original.stat().st_mtime_ns
+        document = json.loads(json.dumps(self.document))
+        document["files"][0]["path"] = str(original)
+        plan = self.plan(document)
+        identifier = plan.snapshot()["items"][0]["id"]
+        plan.set_states([identifier], "include")
+        result = plan.set_target(identifier, "照片/家庭/新名称.jpg")
+        self.assertEqual(result["counts"]["include"], 0)
+        self.assertEqual(result["review"]["edited"], 1)
+        item = self.plan(document).snapshot()["items"][0]
+        self.assertEqual(item["suggested_path"], "照片/家庭/新名称.jpg")
+        self.assertEqual(item["original_suggested_path"], "照片/2024/02/photo.jpg")
+        plan.set_states([identifier], "include")
+        rows = list(csv.reader(io.StringIO(plan.export_csv().decode("utf-8-sig"))))
+        self.assertEqual(rows[1][1], "照片/家庭/新名称.jpg")
+        self.assertEqual(rows[1][-2:], ["照片/2024/02/photo.jpg", "True"])
+        self.assertEqual(plan.export_document()["items"][0]["target_edited"], True)
+        # Re-saving an unchanged target should preserve the review decision.
+        self.assertEqual(plan.set_target(identifier, "照片/家庭/新名称.jpg")["counts"]["include"], 1)
+        result = plan.set_target(identifier, None)
+        self.assertEqual(result["items"][0]["suggested_path"], "照片/2024/02/photo.jpg")
+        self.assertEqual(result["items"][0]["state"], "pending")
+        self.assertFalse(result["items"][0]["target_edited"])
+        self.assertEqual(original.read_bytes(), b"generated media")
+        self.assertEqual(original.stat().st_mtime_ns, before)
+
+    def test_invalid_target_edits_are_atomic_and_cannot_conflict_with_included_items(self):
+        plan = self.plan()
+        ids = [item["id"] for item in plan.snapshot()["items"]]
+        plan.set_states([ids[1]], "include")
+        before = (self.directory / STATE_FILE).read_bytes()
+        for target in ("../outside.jpg", "/outside.jpg", "C:/file.jpg", "a\\b.jpg", "",
+                       "a" * 4097, "视频/旅行/MOVIE.mov", "视频/旅行/movie.mov/child.jpg",
+                       "视频/旅行", "a\nfile.jpg", [], {}):
+            with self.subTest(target=type(target)), self.assertRaises(ValueError):
+                plan.set_target(ids[0], target)
+            self.assertEqual((self.directory / STATE_FILE).read_bytes(), before)
+        with self.assertRaises(ValueError):
+            plan.set_target("foreign", "照片/a.jpg")
+        self.assertEqual(plan.snapshot()["items"][1]["state"], "include")
+
+    def test_conflicts_can_be_repaired_and_restoring_cannot_break_included_plan(self):
+        document = {"files": [
+            {"path": "/sample/one.jpg", "suggested_path": "照片/same.jpg"},
+            {"path": "/sample/two.jpg", "suggested_path": "照片/SAME.jpg"}]}
+        plan = self.plan(document)
+        items = plan.snapshot()["items"]
+        self.assertEqual(plan.snapshot()["review"]["blocked"], 2)
+        result = plan.set_target(items[1]["id"], "照片/two.jpg")
+        self.assertEqual(result["review"]["blocked"], 0)
+        plan.set_states([item["id"] for item in items], "include")
+        before = (self.directory / STATE_FILE).read_bytes()
+        with self.assertRaisesRegex(ValueError, "恢复待核对"):
+            plan.set_target(items[1]["id"], None)
+        self.assertEqual((self.directory / STATE_FILE).read_bytes(), before)
+        plan.set_states([items[0]["id"]], "pending")
+        result = plan.set_target(items[1]["id"], None)
+        self.assertEqual(result["review"]["blocked"], 2)
+        self.assertEqual(result["counts"]["include"], 0)
+
+    def test_version_one_progress_upgrades_without_losing_decisions(self):
+        plan = self.plan()
+        ids = [item["id"] for item in plan.snapshot()["items"]]
+        state_path = self.directory / STATE_FILE
+        state_path.write_text(json.dumps({"version": 1, "report_id": plan._report_id,
+                                          "states": {ids[0]: "include", ids[1]: "hold"}}))
+        result = plan.set_target(ids[2], "照片/backup.jpg")
+        self.assertEqual(result["counts"]["include"], 1)
+        self.assertEqual(result["counts"]["hold"], 1)
+        saved = json.loads(state_path.read_bytes())
+        self.assertEqual(saved["version"], 2)
+        self.assertEqual(saved["targets"], {ids[2]: "照片/backup.jpg"})
+        # State changes from a separate viewer must keep current target edits.
+        self.plan().set_states([ids[0]], "hold")
+        self.assertEqual(plan.snapshot()["items"][2]["suggested_path"], "照片/backup.jpg")
+        plan.set_target(ids[1], "视频/自定义/movie.mov")
+        self.assertEqual(plan.snapshot()["items"][2]["suggested_path"], "照片/backup.jpg")
+
+    def test_tampered_saved_targets_are_rejected_without_overwrite(self):
+        plan = self.plan()
+        identifier = plan.snapshot()["items"][0]["id"]
+        plan.set_target(identifier, "照片/new.jpg")
+        saved = json.loads((self.directory / STATE_FILE).read_bytes())
+        for targets in (["wrong"], {identifier: "../escape.jpg"}, {"foreign": "new.jpg"}):
+            saved["targets"] = targets
+            raw = json.dumps(saved).encode()
+            (self.directory / STATE_FILE).write_bytes(raw)
+            for action in (plan.snapshot, lambda: plan.set_target(identifier, None),
+                           lambda: plan.set_states([identifier], "include")):
+                with self.assertRaises(ValueError):
+                    action()
+            self.assertEqual((self.directory / STATE_FILE).read_bytes(), raw)
+
 
 if __name__ == "__main__":
     unittest.main()

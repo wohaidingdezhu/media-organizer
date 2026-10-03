@@ -27,6 +27,8 @@ _LOCKS_GUARD = threading.Lock()
 def _target_error(value):
     if not isinstance(value, str) or not value:
         return "缺少建议路径"
+    if len(value) > 4096:
+        return "建议路径过长"
     if "\x00" in value or any(ord(char) < 32 or ord(char) == 127 for char in value):
         return "建议路径含控制字符"
     if (PurePosixPath(value).is_absolute() or PureWindowsPath(value).drive
@@ -62,9 +64,11 @@ class OrganizationPlan:
             raise ValueError("扫描报告缺少文件清单")
         self._items = []
         self._by_id = {}
-        targets = {}
         duplicate_groups = {}
-        for number, group in enumerate(document.get("duplicates", []), 1):
+        duplicates = document.get("duplicates", [])
+        if not isinstance(duplicates, list):
+            raise ValueError("扫描报告含无效重复分组")
+        for number, group in enumerate(duplicates, 1):
             if isinstance(group, dict) and isinstance(group.get("paths"), list):
                 for path in group["paths"]:
                     if isinstance(path, str):
@@ -94,24 +98,37 @@ class OrganizationPlan:
                 raise ValueError("扫描报告含无效文件大小")
             self._items.append(item)
             self._by_id[identifier] = item
+        identity = sorted((item["id"], item["suggested_path"]) for item in self._items)
+        self._report_id = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode("utf-8")).hexdigest()
+        with _LOCKS_GUARD:
+            self._lock = _LOCKS.setdefault(str(self.report_dir.resolve()), threading.RLock())
+
+    def _effective_items(self, overrides):
+        items = []
+        targets = {}
+        for record in self._items:
+            target = overrides.get(record["id"], record["suggested_path"])
+            error = _target_error(target)
+            item = {**record, "suggested_path": target,
+                    "original_suggested_path": record["suggested_path"],
+                    "target_edited": target != record["suggested_path"],
+                    "selectable": not error, "blocked_reason": error}
+            items.append(item)
             if not error:
                 targets.setdefault(_canonical_target(target), []).append(item)
         # Case/Unicode-equivalent names can collide on the user's Mac. A file
         # proposed as another file's parent directory is also a conflict.
-        for target, items in targets.items():
-            if len(items) > 1:
-                for item in items:
+        for target, group in targets.items():
+            if len(group) > 1:
+                for item in group:
                     item.update(selectable=False, blocked_reason="建议目标路径重名")
             parts = target.split("/")
             for depth in range(1, len(parts)):
                 parents = targets.get("/".join(parts[:depth]), [])
                 if parents:
-                    for item in items + parents:
+                    for item in group + parents:
                         item.update(selectable=False, blocked_reason="建议文件与目录路径冲突")
-        identity = sorted((item["id"], item["suggested_path"]) for item in self._items)
-        self._report_id = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode("utf-8")).hexdigest()
-        with _LOCKS_GUARD:
-            self._lock = _LOCKS.setdefault(str(self.report_dir.resolve()), threading.RLock())
+        return items
 
     def _open_directory(self):
         return os.open(self.report_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
@@ -122,7 +139,7 @@ class OrganizationPlan:
             descriptor = os.open(STATE_FILE, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
                                  | getattr(os, "O_NONBLOCK", 0), dir_fd=directory)
         except FileNotFoundError:
-            return {}
+            return {}, {}
         with os.fdopen(descriptor, "rb") as stream:
             info = os.fstat(stream.fileno())
             if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_STATE_BYTES:
@@ -135,19 +152,31 @@ class OrganizationPlan:
         except (UnicodeError, json.JSONDecodeError) as error:
             raise ValueError("整理计划文件损坏，请保留该文件后检查") from error
         if (not isinstance(saved, dict) or type(saved.get("version")) is not int
-                or saved["version"] != 1 or saved.get("report_id") != self._report_id
+                or saved["version"] not in {1, 2} or saved.get("report_id") != self._report_id
                 or not isinstance(saved.get("states"), dict)):
             raise ValueError("整理计划文件格式无效或与当前报告不匹配")
         states = saved["states"]
+        overrides = saved.get("targets", {}) if saved["version"] == 2 else {}
+        if not isinstance(overrides, dict):
+            raise ValueError("整理计划含无效分类位置")
+        for identifier, target in overrides.items():
+            if identifier not in self._by_id or _target_error(target):
+                raise ValueError("整理计划含无效文件标识或分类位置")
         for identifier, state in states.items():
             if identifier not in self._by_id or not isinstance(state, str) or state not in STATES:
                 raise ValueError("整理计划含无效文件标识或状态")
-            if state == "include" and not self._by_id[identifier]["selectable"]:
-                raise ValueError("整理计划包含不安全或冲突的目标路径")
-        return states
+        self._validate_included(states, self._effective_items(overrides))
+        return states, overrides
 
-    def _save(self, directory, states):
-        body = json.dumps({"version": 1, "report_id": self._report_id, "states": states},
+    @staticmethod
+    def _validate_included(states, items):
+        for item in items:
+            if states.get(item["id"]) == "include" and not item["selectable"]:
+                raise ValueError("整理计划包含不安全或冲突的目标路径")
+
+    def _save(self, directory, states, overrides):
+        body = json.dumps({"version": 2, "report_id": self._report_id,
+                           "states": states, "targets": overrides},
                           ensure_ascii=False, indent=2).encode("utf-8")
         if len(body) > MAX_STATE_BYTES:
             raise ValueError("整理计划文件过大")
@@ -167,10 +196,10 @@ class OrganizationPlan:
             except FileNotFoundError:
                 pass
 
-    def _snapshot(self, states):
+    def _snapshot(self, states, overrides):
         counts = {"total": len(self._items), "pending": 0, "include": 0, "hold": 0}
         items, folders = [], {}
-        for record in self._items:
+        for record in self._effective_items(overrides):
             item = {**record, "state": states.get(record["id"], "pending")}
             items.append(item)
             counts[item["state"]] += 1
@@ -183,13 +212,16 @@ class OrganizationPlan:
             group["bytes"] += item["bytes"]
             group[item["state"]] += 1
         return {"items": items, "counts": counts, "folder_count": len(folders),
+                "review": {"blocked": sum(not item["selectable"] for item in items),
+                           "duplicates": sum(bool(item["duplicate_group"]) for item in items),
+                           "edited": sum(item["target_edited"] for item in items)},
                 "folders": sorted(folders.values(), key=lambda group: group["path"].casefold())}
 
     def snapshot(self):
         with self._lock:
             directory = self._open_directory()
             try:
-                return self._snapshot(self._load(directory))
+                return self._snapshot(*self._load(directory))
             finally:
                 os.close(directory)
 
@@ -200,19 +232,49 @@ class OrganizationPlan:
             raise ValueError(f"每次请选择 1–{MAX_UPDATE_IDS} 个文件")
         if any(not isinstance(identifier, str) or identifier not in self._by_id for identifier in ids):
             raise ValueError("文件标识不属于当前扫描报告")
-        if state == "include" and any(not self._by_id[identifier]["selectable"] for identifier in ids):
-            raise ValueError("不能加入计划：建议目标路径无效或重名")
         with self._lock:
             directory = self._open_directory()
             try:
-                states = self._load(directory)
+                states, overrides = self._load(directory)
                 for identifier in ids:
                     if state == "pending":
                         states.pop(identifier, None)
                     else:
                         states[identifier] = state
-                self._save(directory, states)
-                return self._snapshot(states)
+                self._validate_included(states, self._effective_items(overrides))
+                self._save(directory, states, overrides)
+                return self._snapshot(states, overrides)
+            finally:
+                os.close(directory)
+
+    def set_target(self, identifier, target):
+        """Change a proposal only; None restores the scan's original proposal."""
+        if not isinstance(identifier, str) or identifier not in self._by_id:
+            raise ValueError("文件标识不属于当前扫描报告")
+        if target is not None:
+            error = _target_error(target)
+            if error:
+                raise ValueError(error)
+        with self._lock:
+            directory = self._open_directory()
+            try:
+                states, overrides = self._load(directory)
+                previous = overrides.get(identifier, self._by_id[identifier]["suggested_path"])
+                if target is None or target == self._by_id[identifier]["suggested_path"]:
+                    overrides.pop(identifier, None)
+                else:
+                    overrides[identifier] = target
+                items = self._effective_items(overrides)
+                changed = next(item for item in items if item["id"] == identifier)
+                if target is not None and not changed["selectable"]:
+                    raise ValueError(changed["blocked_reason"])
+                if changed["suggested_path"] != previous:
+                    states.pop(identifier, None)
+                for item in items:
+                    if states.get(item["id"]) == "include" and not item["selectable"]:
+                        raise ValueError(f"会与已纳入文件“{item['name']}”冲突；请先将该项恢复待核对")
+                self._save(directory, states, overrides)
+                return self._snapshot(states, overrides)
             finally:
                 os.close(directory)
 
@@ -228,7 +290,8 @@ class OrganizationPlan:
         writer = csv.writer(stream)
         fields = [("path", "原路径"), ("suggested_path", "建议相对路径"), ("kind", "类型"),
                   ("bytes", "字节数"), ("reason", "建议依据"), ("date_source", "日期来源"),
-                  ("hash_status", "校验状态"), ("hardlink_to", "硬链接指向")]
+                  ("hash_status", "校验状态"), ("hardlink_to", "硬链接指向"),
+                  ("original_suggested_path", "扫描原建议路径"), ("target_edited", "手动调整")]
         writer.writerow([label for _, label in fields])
         for item in self.export_document()["items"]:
             writer.writerow([_csv_cell(item[key]) for key, _ in fields])

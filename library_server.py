@@ -274,7 +274,13 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 if not isinstance(payload, dict):
                     raise ValueError("请求内容必须是 JSON 对象")
                 if route == "api/organization":
-                    result = get_organization().set_states(payload["ids"], payload["state"])
+                    action = payload.get("action", "state")
+                    if action == "target":
+                        result = get_organization().set_target(payload["id"], payload["target"])
+                    elif action == "state":
+                        result = get_organization().set_states(payload["ids"], payload["state"])
+                    else:
+                        raise ValueError("整理操作无效")
                     self.send_json(200, result)
                     return
                 key = payload["key"]
