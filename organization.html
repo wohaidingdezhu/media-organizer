@@ -10,7 +10,7 @@
 </style>
 </head>
 <body><main>
-<header><h1>整理计划</h1><p>核对每个文件的建议分类位置，再选择纳入计划或暂缓。选择会保留，下次可以接着整理。</p><div class="steps">1. 核对原位置与分类依据　→　2. 选择纳入或暂缓　→　3. 导出已选计划</div></header>
+<header><h1>文件管理与整理</h1><p>打开照片或影片查看，在 Finder 定位原文件，再核对分类位置、选择纳入计划或暂缓。</p><div class="steps">1. 核对原位置与分类依据　→　2. 选择纳入或暂缓　→　3. 导出已选计划</div></header>
 <div id="error" class="error" role="alert" hidden></div>
 <button id="retry" class="retry" hidden>重新读取计划</button>
 <div id="loading" class="empty">正在读取整理计划…</div>
@@ -36,13 +36,14 @@
 <script>
 const $=id=>document.getElementById(id), names={pending:'待核对',include:'已纳入',hold:'暂缓'};
 const filters=['search','kind','state','risk','folder'];
-let data=null,page=0,visible=[],pageItems=[],selected=new Set(),saving=false,editingId=null;
+let data=null,page=0,visible=[],pageItems=[],selected=new Set(),saving=false,editingId=null,mediaIds={},mediaAvailable=false;
 const make=(tag,cls,text)=>{const el=document.createElement(tag);if(cls)el.className=cls;if(text!==undefined)el.textContent=text;return el;};
 const folderOf=item=>{if(!item.selectable)return '需核对的分类位置';const pos=item.suggested_path.lastIndexOf('/');return pos>=0?item.suggested_path.slice(0,pos):'根目录';};
 function error(message){$('error').textContent=message||'';$('error').hidden=!message;}
 function editorError(message){$('editor-error').textContent=message||'';$('editor-error').hidden=!message;}
 function fileSize(value){if(value<1024)return value+' B';if(value>=1073741824)return(value/1073741824).toFixed(2)+' GB';if(value>=1048576)return(value/1048576).toFixed(1)+' MB';return(value/1024).toFixed(1)+' KB';}
 async function request(body){const response=await fetch('api/organization',body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});const result=await response.json();if(!response.ok)throw new Error(result.error||'整理计划未保存');return result;}
+async function openMedia(item,action,button){button.disabled=true;error();$('notice').textContent='正在请求系统打开功能…';try{const response=await fetch('api/media/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:item.id,action})});const result=await response.json();if(!response.ok)throw new Error(result.error||'无法打开原文件');$('notice').textContent=result.message;}catch(err){$('notice').textContent='';error(err.message);}finally{button.disabled=false;}}
 function updateSelection(){const count=selected.size;$('selection').textContent=`已勾选 ${count} 项`;
   for(const id of ['include','hold','pending-action','clear'])$(id).disabled=saving||!count;
   $('include').disabled=saving||!count||data.items.some(item=>selected.has(item.id)&&!item.selectable);
@@ -60,6 +61,7 @@ function render(){for(const id of [...filters,'refresh','retry','editor-target',
   const pages=Math.max(1,Math.ceil(visible.length/50));page=Math.min(page,pages-1);pageItems=visible.slice(page*50,page*50+50);$('rows').replaceChildren();
   for(const item of pageItems){const row=make('tr'),checkCell=make('td'),check=make('input');check.type='checkbox';check.checked=selected.has(item.id);check.disabled=saving;check.setAttribute('aria-label',`选择 ${item.name}`);check.onchange=()=>{if(check.checked)selected.add(item.id);else selected.delete(item.id);updateSelection();};checkCell.append(check);
     const source=make('td','source');source.append(make('div','name',item.name),make('div','muted',`${item.kind} · ${fileSize(item.bytes)}`),make('div','path',item.path));
+    if(mediaAvailable&&mediaIds[item.path]===item.id){const actions=make('div','target-actions');for(const [action,label] of [['open',item.kind==='视频'?'播放影片':'打开照片'],['reveal','在 Finder 定位']]){const button=make('button','',label);button.disabled=saving;button.setAttribute('aria-label',label+' '+item.name);button.onclick=()=>openMedia(item,action,button);actions.append(button);}source.append(actions);}
     if(item.duplicate_group)source.append(make('span','badge warning',`精确重复第 ${item.duplicate_group} 组`));if(item.hardlink_to)source.append(make('span','badge warning','硬链接'));
     const target=make('td','target');target.append(make('div','target-path',item.suggested_path||'暂无分类建议'),make('div','reason',item.reason||''));
     if(!item.selectable)target.append(make('div','warning reason',item.blocked_reason||'分类位置无效，暂不能纳入计划'));
@@ -82,5 +84,6 @@ $('include').onclick=()=>save('include');$('hold').onclick=()=>save('hold');$('p
 $('previous').onclick=()=>{page--;selected.clear();render();};$('next').onclick=()=>{page++;selected.clear();render();};
 $('target-form').onsubmit=event=>{event.preventDefault();changeTarget(editingId,$('editor-target').value);};$('editor-cancel').onclick=()=>{$('target-editor').close();editingId=null;};$('target-editor').addEventListener('cancel',event=>{if(saving)event.preventDefault();});
 $('refresh').onclick=async()=>{await load();if(!$('error').hidden)return;$('notice').textContent='已读取最新核对进度，勾选项已清空。';};$('retry').onclick=load;
+fetch('api/media').then(response=>{if(!response.ok)throw new Error();return response.json();}).then(result=>{mediaIds=result.ids_by_path;mediaAvailable=result.available;render();}).catch(()=>{});
 load();
 </script></body></html>

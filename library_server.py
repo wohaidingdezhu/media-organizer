@@ -17,6 +17,7 @@ from urllib.parse import quote, unquote, urlsplit
 import webbrowser
 
 from organization_plan import OrganizationPlan
+from media_actions import MediaActions
 
 
 MAX_TAG_FILE = 1024 * 1024
@@ -138,6 +139,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
     if not isinstance(document, dict):
         raise ValueError("报告内容无效")
     organization = None
+    media = MediaActions(document)
     organization_lock = threading.Lock()
 
     def get_organization():
@@ -147,6 +149,18 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 organization = OrganizationPlan(report_dir, document)
             return organization
     library = document.get("video_library")
+    library_page = None
+
+    def current_library_page():
+        nonlocal library_page
+        if library_page is None and isinstance(library, dict):
+            try:
+                from media_scan import render_video_library
+                library_page = render_video_library(document).encode("utf-8")
+            except (KeyError, TypeError, ValueError):
+                return None
+        return library_page
+
     groups = library.get("groups", []) if isinstance(library, dict) else []
     allowed_keys = {group["tag_key"] for group in groups if isinstance(group, dict)
                     and isinstance(group.get("tag_key"), str)
@@ -193,6 +207,9 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
             if route is None:
                 self.send_error(404)
                 return
+            if route == "api/media":
+                self.send_json(200, media.snapshot())
+                return
             if route in {"api/organization", "organization.csv", "organization.json"}:
                 try:
                     organization = get_organization()
@@ -234,9 +251,10 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 self.send_error(404)
                 return
             with stream:
-                body = None
+                body = current_library_page() if route == "library.html" else None
                 if dashboard_link and route in {"report.html", "library.html", "organize.html"}:
-                    body = stream.read()
+                    if body is None:
+                        body = stream.read()
                     opening = re.search(br"<body(?:\s[^>]*)?>", body, re.IGNORECASE)
                     point = opening.end() if opening else 0
                     body = body[:point] + dashboard_link + body[point:]
@@ -256,11 +274,12 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
 
         def do_POST(self):
             route = self.route()
-            if route not in {"api/tags", "api/organization"}:
+            if route not in {"api/tags", "api/tags/toggle", "api/organization", "api/media/action"}:
                 self.send_error(404)
                 return
             origin = self.headers.get("Origin")
-            if origin and origin != f"http://127.0.0.1:{self.server.server_port}":
+            if ((origin and origin != f"http://127.0.0.1:{self.server.server_port}")
+                    or route == "api/media/action" and origin != f"http://127.0.0.1:{self.server.server_port}"):
                 self.send_json(403, {"error": "页面来源不匹配"})
                 return
             if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
@@ -273,6 +292,9 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 payload = json.loads(self.rfile.read(length))
                 if not isinstance(payload, dict):
                     raise ValueError("请求内容必须是 JSON 对象")
+                if route == "api/media/action":
+                    self.send_json(200, media.perform(payload["id"], payload["action"]))
+                    return
                 if route == "api/organization":
                     action = payload.get("action", "state")
                     if action == "target":
@@ -286,9 +308,18 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 key = payload["key"]
                 if key not in allowed_keys:
                     raise ValueError("影片标识无效")
-                values = clean_tags(payload["tags"])
                 with self.server.tag_lock:
                     groups = load_tags(tag_path)
+                    if route == "api/tags/toggle":
+                        tag, enabled = payload["tag"], payload["enabled"]
+                        if tag not in {"已观看", "收藏"} or type(enabled) is not bool:
+                            raise ValueError("观看标记或收藏状态无效")
+                        values = [value for value in groups.get(key, []) if value != tag]
+                        if enabled:
+                            values.append(tag)
+                        values = clean_tags(values)
+                    else:
+                        values = clean_tags(payload["tags"])
                     if values:
                         groups[key] = values
                     else:

@@ -132,7 +132,7 @@ class MediaTests(unittest.TestCase):
             self.assertEqual(code, 0)
             report_dir = next((base / "reports").glob("scan-*"))
             data = json.loads((report_dir / "report.json").read_text())
-            self.assertEqual(data["version"], 9)
+            self.assertEqual(data["version"], 10)
             group = next(group for group in data["folder_groups"] if group["name"] == "Album")
             folders = {folder["path"]: folder for folder in group["folders"]}
             self.assertEqual(folders[str(roots[0])]["content_match_example"], str(roots[1]))
@@ -327,6 +327,27 @@ class MediaTests(unittest.TestCase):
                     worker.request(str(broken))
                 self.assertIsNotNone(worker.request(str(second))["dhash"])
                 self.assertEqual(worker.process.pid, process_id)
+            finally:
+                worker.close()
+
+    def test_image_worker_repeated_descriptor_reads_keep_all_previews(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            worker = scan.ImageProbeWorker(scan.BASE / "native" / "image_probe")
+            try:
+                process_id = None
+                for index in range(60):
+                    source = base / f"generated-{index}.png"
+                    destination = base / f"preview-{index}.png"
+                    sample_png(source, str(index))
+                    before = source.read_bytes(), source.stat().st_mtime_ns
+                    self.assertIsNotNone(worker.request(str(source))["dhash"])
+                    worker.request(str(source), thumbnail=str(destination))
+                    self.assertTrue(destination.is_file())
+                    self.assertEqual((source.read_bytes(), source.stat().st_mtime_ns), before)
+                    if process_id is None:
+                        process_id = worker.process.pid
+                    self.assertEqual(worker.process.pid, process_id)
             finally:
                 worker.close()
 

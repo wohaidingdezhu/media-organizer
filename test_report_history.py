@@ -227,7 +227,7 @@ class ReportHistoryTests(unittest.TestCase):
             self.assertIn("3 个媒体文件", state.status)
             self.assertIn("2 项分类建议", state.status)
             self.assertIn("1 组精确重复", state.status)
-            self.assertIn("整理计划", state.status)
+            self.assertIn("文件管理与整理", state.status)
             self.assertFalse(state.running)
             self.assertIsNone(state.process)
 

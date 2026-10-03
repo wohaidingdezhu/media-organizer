@@ -18,6 +18,39 @@ func emptyResult(_ path: String) -> [String: Any] {
             "dhash": NSNull(), "low_detail": true]
 }
 
+// Give ImageIO a provider for the already checked descriptor. Reopening a
+// reused /dev/fd URL intermittently fails in persistent worker processes.
+func imageSource(_ descriptor: Int32, _ size: off_t,
+                 _ options: [CFString: Any]) -> CGImageSource? {
+    guard size > 0 else { return nil }
+    let owned = fcntl(descriptor, F_DUPFD_CLOEXEC, 0)
+    guard owned >= 0 else { return nil }
+    var callbacks = CGDataProviderDirectCallbacks(
+        version: 0, getBytePointer: nil, releaseBytePointer: nil,
+        getBytesAtPosition: { info, buffer, position, count in
+            guard let info = info, position >= 0 else { return 0 }
+            let fd = Int32(Int(bitPattern: info) - 1)
+            var amount = 0
+            while amount < count {
+                let read = pread(fd, buffer.advanced(by: amount), count - amount,
+                                 position + off_t(amount))
+                if read < 0 && errno == EINTR { continue }
+                if read <= 0 { break }
+                amount += read
+            }
+            return amount
+        },
+        releaseInfo: { info in
+            if let info = info { Darwin.close(Int32(Int(bitPattern: info) - 1)) }
+        })
+    guard let provider = CGDataProvider(directInfo: UnsafeMutableRawPointer(bitPattern: Int(owned) + 1),
+                                        size: size, callbacks: &callbacks) else {
+        Darwin.close(owned)
+        return nil
+    }
+    return CGImageSourceCreateWithDataProvider(provider, options as CFDictionary)
+}
+
 func inspectImage(_ path: String) -> [String: Any] {
     var result = emptyResult(path)
     func fail(_ message: String) -> [String: Any] {
@@ -33,9 +66,8 @@ func inspectImage(_ path: String) -> [String: Any] {
           (fileInfo.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else {
         return fail("Image source is not a regular file")
     }
-    let url = URL(fileURLWithPath: "/dev/fd/\(descriptor)")
     let sourceOptions: [CFString: Any] = [kCGImageSourceShouldCache: false]
-    guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions as CFDictionary) else {
+    guard let source = imageSource(descriptor, fileInfo.st_size, sourceOptions) else {
         return fail("Cannot open image or unsupported image format")
     }
     guard CGImageSourceGetCount(source) > 0 else {
@@ -129,8 +161,7 @@ func exportThumbnail(_ path: String, _ output: String) -> [String: Any] {
         return fail("Image source is not a regular file")
     }
     let options: [CFString: Any] = [kCGImageSourceShouldCache: false]
-    let fdURL = URL(fileURLWithPath: "/dev/fd/\(descriptor)")
-    guard let image = CGImageSourceCreateWithURL(fdURL as CFURL, options as CFDictionary),
+    guard let image = imageSource(descriptor, fileInfo.st_size, options),
           CGImageSourceGetCount(image) > 0 else { return fail("Cannot open image") }
     let previewOptions: [CFString: Any] = [
         kCGImageSourceCreateThumbnailFromImageAlways: true,

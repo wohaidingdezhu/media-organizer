@@ -1071,9 +1071,9 @@ def render_video_library(data):
     *{box-sizing:border-box}body{margin:0;background:#f3f6f8;color:#1d2939;font:15px/1.65 -apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif}main{max-width:1180px;margin:32px auto;padding:0 24px}header{background:#14352f;color:white;padding:28px;border-radius:18px}h1{font-size:31px;margin:4px 0}header p{margin:4px 0;color:#d5e9e2}a{color:#126653}header a{color:#b9f0d8}.stats{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0}.stat{background:white;border:1px solid #dce5e5;border-radius:12px;padding:13px 20px;min-width:170px}.stat strong{display:block;font-size:25px}.controls{display:flex;gap:10px;flex-wrap:wrap;margin:20px 0}input,select,button{font:inherit;border:1px solid #a8babc;border-radius:8px;padding:9px;background:white}input{flex:1;min-width:220px}section{background:white;border:1px solid #dce5e5;border-radius:12px;padding:18px;margin:12px 0}.wall{display:grid;grid-template-columns:repeat(auto-fill,minmax(205px,1fr));gap:16px;align-items:start}.card{background:#fff;border:1px solid #dce5e5;border-radius:12px;overflow:hidden;overflow-wrap:anywhere;box-shadow:0 3px 12px #1d29390d}.poster{display:block;width:100%;aspect-ratio:2/3;object-fit:cover;background:#e4eae8}.poster-placeholder{display:grid;place-items:center;background:linear-gradient(145deg,#194438,#537d69);color:#f2fff8;padding:18px;text-align:center;font-size:27px;font-weight:700}.card-body{padding:14px}.card h3{margin:0 0 4px;font-size:18px;line-height:1.4}.card details{border-top:1px solid #e3eaeb;margin-top:10px;padding-top:8px}.card summary{cursor:pointer;color:#126653}.meta{color:#627378;font-size:13px}.badge{display:inline-block;background:#e5f3ec;color:#205640;border-radius:999px;padding:2px 9px;margin:5px 6px 5px 0;font-size:12px}.alert{background:#fff0d7;color:#80520c}.file{border-top:1px solid #e3eaeb;padding:10px 0}.path{font-weight:600;overflow-wrap:anywhere}.minor{color:#607076;font-size:13px;overflow-wrap:anywhere}.issue{border-bottom:1px solid #e3eaeb;padding:10px 0}.pager{display:flex;align-items:center;gap:10px;margin:12px 0}.muted{color:#627378}.empty{padding:15px;color:#627378}.tag-editor{background:#f3f8f5;border:1px solid #c9ded3;border-radius:8px;padding:9px;margin:8px 0}.tag-editor input{display:block;width:100%;min-width:0;margin-bottom:8px}.tag-editor button{padding:5px 8px;margin-right:5px;font-size:12px}.tag-editor .minor{margin-top:5px}@media(max-width:650px){main{padding:0 12px}h1{font-size:25px}.wall{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.card-body{padding:10px}}
     </style></head><body><main><header><a href="report.html">← 返回扫描总报告</a><h1>影片资料库</h1><p>本次扫描快照 · @@CREATED@@</p><p>只读浏览和问题核对；重新扫描会生成新快照，不修改原片。</p></header>
     <div class="stats"><div class="stat">影片分组<strong id="group-total">0</strong></div><div class="stat">可用封面<strong>@@POSTER_TOTAL@@</strong></div><div class="stat">视频文件<strong>@@VIDEO_FILES@@</strong></div><div class="stat">精确重复涉及视频<strong>@@DUPLICATE_FILES@@</strong></div><div class="stat">待核对项目<strong>@@ISSUE_TOTAL@@</strong></div></div>
-    <section><h2>影片海报墙</h2><p class="muted">同编号跨目录归组；没有编号时，仅将同一原目录内的同名变体归组。封面优先使用同目录的同名或编号图片，其次尝试从视频截帧；无法生成时显示占位图。分组只靠文件名，不表示内容相同。每页 50 组。</p><p class="muted" id="tag-help">标签可筛选；通过“媒体整理助手.app”或“打开资料库.command”打开本地服务后可以编辑并跨扫描保留。</p><div class="controls"><input id="search" type="search" aria-label="搜索影片、路径、标签和附属文件" placeholder="搜索编号、影片名、路径、标签、字幕…"><select id="filter" aria-label="筛选影片"><option value="all">全部影片</option><option value="review">有视频问题或精确重复</option><option value="duplicates">精确重复涉及视频</option><option value="sidecars">有附属文件</option><option value="posters">有封面</option><option value="missing-posters">缺少封面</option></select><select id="tag-filter" aria-label="按标签筛选"><option value="">全部标签</option></select></div><div id="groups" class="wall"></div><div class="pager"><button id="previous" type="button">上一页</button><span id="page-label"></span><button id="next" type="button">下一页</button></div></section>
+    <section><h2>影片海报墙</h2><p class="muted">同编号跨目录归组；没有编号时，仅将同一原目录内的同名变体归组。封面优先使用同目录的同名或编号图片，其次尝试从视频截帧；无法生成时显示占位图。分组只靠文件名，不表示内容相同。每页 50 组。</p><p class="muted" id="tag-help">标签可筛选；通过“媒体整理助手.app”或“打开资料库.command”打开本地服务后可以编辑并跨扫描保留。</p><div class="controls"><input id="search" type="search" aria-label="搜索影片、路径、标签和附属文件" placeholder="搜索编号、影片名、路径、标签、字幕…"><select id="filter" aria-label="筛选影片"><option value="all">全部影片</option><option value="unwatched">未标记已观看</option><option value="watched">已观看</option><option value="favorite">收藏</option><option value="review">有视频问题或精确重复</option><option value="duplicates">精确重复涉及视频</option><option value="sidecars">有附属文件</option><option value="posters">有封面</option><option value="missing-posters">缺少封面</option></select><select id="tag-filter" aria-label="按标签筛选"><option value="">全部标签</option></select></div><div id="groups" class="wall"></div><div class="pager"><button id="previous" type="button">上一页</button><span id="page-label"></span><button id="next" type="button">下一页</button></div></section>
     <section><h2>待核对清单</h2><p class="muted">包含本次扫描发现的视频读取或文件头问题、精确重复、未唯一关联的字幕/NFO，以及同名文件夹候选。未启用文件头检查时，不会据此判断视频能否播放。下方显示与搜索词匹配的前 200 条；完整数据见 <a href="library_issues.csv">问题 CSV</a>。</p><div id="issues"></div></section>
-    <p class="muted">本页面仅使用本次扫描结果。其他跳过项与照片问题请查看<a href="report.html#issues">总报告</a>；完整原始数据见 <a href="report.json">JSON</a>。</p></main>
+    <p class="muted">播放使用系统默认播放器；分段或多个版本请展开文件列表选择。已观看与收藏需手动标记，播放不会自动标为已观看。本页面使用本次扫描结果。其他跳过项与照片问题请查看<a href="report.html#issues">总报告</a>；完整原始数据见 <a href="report.json">JSON</a>。</p></main>
     <script id="library-data" type="application/json">@@DATA@@</script><script>
     const library = JSON.parse(document.getElementById('library-data').textContent);
     const search = document.getElementById('search');
@@ -1083,7 +1083,7 @@ def render_video_library(data):
     const issues = document.getElementById('issues');
     const tagApi = location.protocol === 'http:' && location.hostname === '127.0.0.1' && /^\/[^/]+\/library\.html$/.test(location.pathname)
       ? location.pathname.replace(/library\.html$/, 'api/tags') : '';
-    let page = 0;
+    let page = 0, mediaIds = {}, mediaAvailable = false;
     const make = (tag, className, value) => { const node = document.createElement(tag); if (className) node.className = className; if (value !== undefined) node.textContent = value; return node; };
     function updateTagChoices() {
       const selected = tagFilter.value;
@@ -1115,9 +1115,33 @@ def render_video_library(data):
       input.addEventListener('keydown', event => { if (event.key === 'Enter') submit(); });
       panel.append(input, save, cancel, message); edit.after(panel); input.focus();
     }
+    async function toggleMark(group, tag, button, message) {
+      if(group.markSaving)return;group.markSaving=true;
+      const controls=[...button.parentElement.querySelectorAll('button')];controls.forEach(control=>control.disabled=true);
+      try {
+        const response = await fetch(tagApi.replace(/tags$/, 'tags/toggle'), {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:group.tag_key,tag,enabled:!(group.tags || []).includes(tag)})});
+        const result = await response.json(); if (!response.ok) throw new Error(result.error || '保存失败');
+        group.tags = result.tags; group.markSaving=false; updateTagChoices(); render();
+      } catch (error) {message.textContent=error.message;}finally{group.markSaving=false;controls.forEach(control=>control.disabled=false);}
+    }
+    async function openMedia(file, action, button, message) {
+      button.disabled = true; message.textContent='正在打开…';
+      try {
+        const response=await fetch('api/media/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:mediaIds[file.path],action})});
+        const result=await response.json();if(!response.ok)throw new Error(result.error || '无法打开原文件');message.textContent=result.message;
+      } catch(error){message.textContent=error.message;}finally{button.disabled=false;}
+    }
+    function mediaButtons(file, parent) {
+      if (!mediaAvailable || !mediaIds[file.path]) return;
+      const message=make('div','minor');message.setAttribute('role','status');
+      for (const [action,label] of [['open','播放'],['reveal','在 Finder 定位']]) {const button=make('button','',label);button.type='button';button.setAttribute('aria-label',label+' '+file.path.split('/').pop());button.addEventListener('click',()=>openMedia(file,action,button,message));parent.append(button);}parent.append(message);
+    }
     function render() {
       const query = search.value.trim().toLocaleLowerCase();
       const visible = library.groups.filter(group => {
+        if (filter.value === 'watched' && !(group.tags || []).includes('已观看')) return false;
+        if (filter.value === 'unwatched' && (group.tags || []).includes('已观看')) return false;
+        if (filter.value === 'favorite' && !(group.tags || []).includes('收藏')) return false;
         if (filter.value === 'review' && !group.needs_review) return false;
         if (filter.value === 'duplicates' && !group.files.some(file => file.duplicate_group)) return false;
         if (filter.value === 'sidecars' && !group.has_sidecars) return false;
@@ -1136,7 +1160,12 @@ def render_video_library(data):
         const body = make('div', 'card-body');
         body.append(make('h3', '', group.title), make('div', 'meta', `${group.type} · ${group.files.length} 个视频`));
         for (const tag of group.tags || []) body.append(make('span', 'badge', tag));
-        if (tagApi && /^[0-9a-f]{64}$/.test(group.tag_key || '')) { const edit = make('button', '', '编辑标签'); edit.type = 'button'; edit.addEventListener('click', () => editTags(group, edit)); body.append(edit); }
+        if (tagApi && /^[0-9a-f]{64}$/.test(group.tag_key || '')) {
+          const message=make('div','minor');message.setAttribute('role','status');
+          for(const tag of ['已观看','收藏']){const marked=(group.tags||[]).includes(tag),button=make('button','',tag==='已观看'?(marked?'取消已观看':'标记已观看'):(marked?'取消收藏':'收藏'));button.type='button';button.setAttribute('aria-label',button.textContent+' '+group.title);button.addEventListener('click',()=>toggleMark(group,tag,button,message));body.append(button);}body.append(message);
+          const edit=make('button','','编辑标签');edit.type='button';edit.addEventListener('click',()=>editTags(group,edit));body.append(edit);
+        }
+        if(group.files.length===1)mediaButtons(group.files[0],body);
         if (group.needs_review) body.append(make('span', 'badge alert', '待核对'));
         if (group.has_sidecars) body.append(make('span', 'badge', '有附属文件'));
         if (group.poster_source) body.append(make('div', 'minor', `封面：${group.poster_source.startsWith('视频截帧：') ? '视频截帧' : '本地图片'}`));
@@ -1149,6 +1178,7 @@ def render_video_library(data):
           if (file.sidecars.length) row.append(make('div', 'minor', `附属文件：${file.sidecars.join('；')}`));
           for (const reason of file.issues) row.append(make('div', 'badge alert', reason));
           row.append(make('div', 'minor', `分类建议：${file.suggested_path}`));
+          if(group.files.length>1)mediaButtons(file,row);
           details.append(row);
         }
         body.append(details); card.append(body);
@@ -1176,6 +1206,7 @@ def render_video_library(data):
     document.getElementById('group-total').textContent = library.groups.length;
     updateTagChoices();
     render();
+    if (tagApi) fetch('api/media').then(response=>{if(!response.ok)throw new Error();return response.json();}).then(result=>{mediaIds=result.ids_by_path;mediaAvailable=result.available;render();}).catch(()=>{});
     if (tagApi) fetch(tagApi).then(response => { if (!response.ok) throw new Error('读取标签失败'); return response.json(); })
       .then(result => { for (const group of library.groups) group.tags = result.groups[group.tag_key] || []; updateTagChoices(); render();
         document.getElementById('tag-help').textContent = '编辑标签会立即保存到本机 reports/library-tags.json；重新扫描后仍可按标签查找。'; })
@@ -1307,8 +1338,9 @@ def main(argv=None):
         video_library["poster_count"] += video_library["frame_count"]
         video_library["issues"].extend({"path": item["path"], "reason": item["reason"], "type": "封面"}
                                        for item in issues[cover_issue_start:])
-        clean_records = [{k: v for k, v in r.items() if not k.startswith("_")} for r in records]
-        data = {"version": 9, "created_at": dt.datetime.now().astimezone().isoformat(), "roots": [str(r) for r in roots],
+        clean_records = [{**{k: v for k, v in r.items() if not k.startswith("_")},
+                          "source_signature": list(r["_signature"])} for r in records]
+        data = {"version": 10, "created_at": dt.datetime.now().astimezone().isoformat(), "roots": [str(r) for r in roots],
                 "summary": {"files": len(records), "duplicate_groups": len(duplicates), "hardlinks": sum(bool(r["hardlink_to"]) for r in records),
                             "redundant_logical_bytes": sum(g["redundant_logical_bytes"] for g in duplicates)},
                 "options": {"distance": args.distance, "video_rule": args.video_rule, "include_hidden": args.include_hidden,

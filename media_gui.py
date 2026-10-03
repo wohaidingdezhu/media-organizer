@@ -286,7 +286,7 @@ class DashboardState:
                         self.status = (f"扫描完成：{summary['files']} 个媒体文件，"
                                        f"{summary['planned_files']} 项分类建议，"
                                        f"{summary['duplicate_groups']} 组精确重复。"
-                                       "打开“整理计划”查看建议目录并核对文件。")
+                                       "打开“文件管理与整理”查看原文件和建议目录。")
                     else:
                         self.status = "扫描已结束，但未找到完整结果；请查看下面的扫描记录。"
                 elif code == 130 or self.cancel_requested.is_set():

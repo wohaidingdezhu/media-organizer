@@ -9,6 +9,7 @@ from unittest import mock
 from urllib.parse import urlsplit
 
 import library_server as viewer
+from media_actions import file_signature, media_id
 
 
 class MemoryServer:
@@ -113,6 +114,18 @@ class ReportServerTests(unittest.TestCase):
             headers, _ = request(server, self.prefix + "api/tags", "POST", {"key": self.key, "tags": ["标签"]})
             self.assertIn("400 Bad Request", headers)
             self.assertFalse((self.output / "library-tags.json").exists())
+
+    def test_existing_library_gets_current_controls_without_overwriting_saved_report(self):
+        document = {"created_at": "2026-10-03", "video_library": {
+            "groups": [], "issues": [], "video_files": 0, "duplicate_files": 0}}
+        (self.report / "report.json").write_text(json.dumps(document))
+        server = self.server()
+        headers, body = request(server, self.prefix + "library.html")
+        self.assertIn("200 OK", headers)
+        self.assertIn('未标记已观看'.encode(), body)
+        self.assertIn(b"api/media/action", body)
+        self.assertIn(b"tags/toggle", body)
+        self.assertEqual((self.report / "library.html").read_bytes(), self.page)
 
     def test_csv_download_uses_safe_attachment_name(self):
         name = '影片"清单.csv'
@@ -228,6 +241,48 @@ class ReportServerTests(unittest.TestCase):
         self.assertIn("200 OK", headers)
         self.assertFalse(json.loads(body)["items"][0]["target_edited"])
         self.assertEqual((self.report / "report.json").read_bytes(), before)
+
+    def test_media_actions_require_same_origin_and_scanned_file_identity(self):
+        source = self.output / "generated.mp4"
+        source.write_bytes(b"synthetic media")
+        info = source.stat()
+        document = {"roots": [str(self.output.resolve())], "files": [{
+            "path": str(source.resolve()), "kind": "视频", "bytes": info.st_size,
+            "mtime": info.st_mtime, "source_signature": file_signature(info)}]}
+        (self.report / "report.json").write_text(json.dumps(document))
+        server = self.server()
+        headers, body = request(server, self.prefix + "api/media")
+        identifier = media_id(str(source.resolve()))
+        self.assertEqual(json.loads(body)["ids_by_path"][str(source.resolve())], identifier)
+        payload = {"id": identifier, "action": "reveal"}
+        with mock.patch.object(viewer.MediaActions, "perform", return_value={"ok": True}) as perform:
+            for origin in (None, "http://evil.example"):
+                headers, _ = request(server, self.prefix + "api/media/action", "POST", payload, origin=origin)
+                self.assertIn("403 Forbidden", headers)
+            perform.assert_not_called()
+            headers, _ = request(server, self.prefix + "api/media/action", "POST", payload,
+                                 origin=f"http://127.0.0.1:{server.server_port}")
+            self.assertIn("200 OK", headers)
+            perform.assert_called_once_with(identifier, "reveal")
+
+    def test_watch_and_favorite_toggles_preserve_current_custom_tags(self):
+        server = self.server()
+        viewer.save_tags(self.output / "library-tags.json", {self.key: ["旅行"]})
+        for tag in ("已观看", "收藏"):
+            headers, _ = request(server, self.prefix + "api/tags/toggle", "POST",
+                                 {"key": self.key, "tag": tag, "enabled": True})
+            self.assertIn("200 OK", headers)
+        groups = json.loads(request(server, self.prefix + "api/tags")[1])["groups"]
+        self.assertEqual(groups[self.key], ["旅行", "已观看", "收藏"])
+        request(server, self.prefix + "api/tags/toggle", "POST",
+                {"key": self.key, "tag": "已观看", "enabled": False})
+        self.assertEqual(viewer.load_tags(self.output / "library-tags.json")[self.key], ["旅行", "收藏"])
+        saved = (self.output / "library-tags.json").read_bytes()
+        for tag, enabled in (("自动删除", True), ("收藏", "true"), ([], True)):
+            headers, _ = request(server, self.prefix + "api/tags/toggle", "POST",
+                                 {"key": self.key, "tag": tag, "enabled": enabled})
+            self.assertIn("400 Bad Request", headers)
+            self.assertEqual((self.output / "library-tags.json").read_bytes(), saved)
 
 
 if __name__ == "__main__":
