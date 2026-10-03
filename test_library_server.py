@@ -10,6 +10,7 @@ from unittest import mock
 from urllib.parse import urlsplit
 
 import library_server as viewer
+import file_operations
 from media_actions import file_signature, media_id
 
 
@@ -175,6 +176,21 @@ class ReportServerTests(unittest.TestCase):
         self.assertEqual(job['status'], 'complete')
         self.assertEqual(Path(job['items'][0]['target']).read_bytes(), before[0])
         self.assertEqual((photo.read_bytes(), photo.stat().st_mtime_ns), before)
+
+    def test_plan_updates_are_blocked_during_file_operations(self):
+        server = self.server()
+        before = json.loads(request(server, self.prefix+'api/organization')[1])
+        identifier = before['items'][0]['id']
+        file_operations._BATCH_LOCK.acquire()
+        try:
+            for payload in ({'ids': [identifier], 'state': 'hold'},
+                            {'action': 'target', 'id': identifier, 'target': 'other/photo.jpg'}):
+                headers, body = request(server, self.prefix+'api/organization', 'POST', payload)
+                self.assertIn('400 Bad Request', headers)
+                self.assertIn('等待完成', json.loads(body)['error'])
+        finally:
+            file_operations._BATCH_LOCK.release()
+        self.assertEqual(json.loads(request(server, self.prefix+'api/organization')[1]), before)
 
     def test_csv_download_uses_safe_attachment_name(self):
         name = '影片"清单.csv'

@@ -4,6 +4,7 @@ Nothing happens at scan time. Each batch has a short-lived server-side preview,
 is revalidated before execution and keeps a private journal. Never overwrites.
 """
 import hashlib
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -21,6 +22,8 @@ from organization_plan import _target_error
 
 _BATCH_LOCK = threading.Lock()
 _COMPILE_LOCK = threading.Lock()
+_STATE_LOCK = threading.RLock()
+_ACTIVE_JOBS = {}
 FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
 
 
@@ -220,8 +223,64 @@ def trash_one(media, identifier, expected):
 class FileOperations:
     def __init__(self, report_dir, media, plan):
         self.report_dir, self.media, self.plan = Path(report_dir), media, plan
-        self.lock = threading.RLock()
+        self.lock = _STATE_LOCK
+        self.report_key = os.path.abspath(self.report_dir)
         self.previews, self.jobs = {}, {}
+
+    def _job_lock(self):
+        directory = self.report_dir / "operations"
+        if directory.is_symlink():
+            raise ValueError("操作记录目录不能是符号链接")
+        directory.mkdir(mode=0o700, exist_ok=True)
+        parent = open_directory(directory)
+        try:
+            fd = os.open(".batch-lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=parent)
+        finally:
+            os.close(parent)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise ValueError("操作锁文件无效")
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise
+
+    def _record_is_active(self, identifier):
+        parent = open_directory(self.report_dir / "operations")
+        try:
+            try:
+                fd = os.open(".batch-lock", FLAGS, dir_fd=parent)
+            except FileNotFoundError:
+                return False  # Legacy journals have no process lock.
+        finally:
+            os.close(parent)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise ValueError("操作锁文件无效")
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return os.pread(fd, 25, 0).decode("ascii", errors="replace") == identifier
+            return False
+        finally:
+            os.close(fd)
+
+    def update_plan(self, callback):
+        """Keep confirmed targets fixed while any batch owns the report lock."""
+        if not _BATCH_LOCK.acquire(blocking=False):
+            raise ValueError("文件操作正在执行，请等待完成后再修改整理计划")
+        descriptor = None
+        try:
+            try:
+                descriptor = self._job_lock()
+            except BlockingIOError as error:
+                raise ValueError("另一服务正在执行文件操作，请等待完成后再修改整理计划") from error
+            return callback()
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            _BATCH_LOCK.release()
 
     def _check_kept_duplicates(self, ids, current):
         selected_paths = {self.media.records[identifier]["path"] for identifier in ids if identifier in self.media.records}
@@ -350,17 +409,37 @@ class FileOperations:
                 raise ValueError("有文件操作正在执行，请等待完成")
             job = {"id": secrets.token_hex(12), "mode": preview["mode"], "status": "running",
                    "created_at": time.strftime("%Y-%m-%d %H:%M:%S"), "items": [], "total": len(preview["items"])}
+            descriptor = None
             try:
+                try:
+                    descriptor = self._job_lock()
+                except BlockingIOError as error:
+                    raise ValueError("另一服务正在执行本次报告的文件操作，请等待完成") from error
+                # A second service could edit the plan before we acquired its lock.
+                if preview["mode"] == "copy":
+                    current = {item["id"]: item for item in self.plan().snapshot()["items"]}
+                    for item in preview["items"]:
+                        now = current[item["id"]]
+                        if now["state"] != "include" or not now["selectable"] or now["suggested_path"] != item["relative"]:
+                            raise ValueError("分类计划已变化，请重新预览")
+                os.ftruncate(descriptor, 0)
+                os.write(descriptor, job["id"].encode("ascii"))
+                os.fsync(descriptor)
                 self._save_job(job)  # Refuse action if a journal cannot be written.
                 self.previews.pop(token)
                 self.jobs[job["id"]] = job
-                threading.Thread(target=self._run, args=(job, preview), daemon=True).start()
+                _ACTIVE_JOBS[(self.report_key, job["id"])] = job
+                threading.Thread(target=self._run, args=(job, preview, descriptor), daemon=True).start()
             except BaseException:
+                _ACTIVE_JOBS.pop((self.report_key, job["id"]), None)
+                self.jobs.pop(job["id"], None)
+                if descriptor is not None:
+                    os.close(descriptor)
                 _BATCH_LOCK.release()
                 raise
             return json.loads(json.dumps(job))
 
-    def _run(self, job, preview):
+    def _run(self, job, preview, batch_descriptor):
         try:
             for item in preview["items"]:
                 result = {"path": item["path"], "target": item["target"], "status": "processing", "bytes": item["bytes"]}
@@ -378,6 +457,7 @@ class FileOperations:
                         def progress(amount, phase):
                             with self.lock:
                                 result.update(processed_bytes=amount, phase=phase)
+                                self._save_job(job)
                         answer = copy_one(self.media, item["id"], preview["destination"], item["relative"], item["signature"], preview["dest_identity"], progress)
                     else:
                         current = {record["id"]: record for record in self.plan().snapshot()["items"]}
@@ -403,7 +483,31 @@ class FileOperations:
             with self.lock:
                 job.update(status="stopped", error="操作记录写入失败，先核对原文件和目标位置：" + str(error))
         finally:
+            with self.lock:
+                _ACTIVE_JOBS.pop((self.report_key, job["id"]), None)
+            os.close(batch_descriptor)
             _BATCH_LOCK.release()
+
+    def _read_job(self, identifier):
+        descriptor = open_directory(self.report_dir / "operations")
+        try:
+            fd = os.open(identifier + ".json", FLAGS, dir_fd=descriptor)
+            with os.fdopen(fd, "rb") as stream:
+                if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode) or os.fstat(stream.fileno()).st_size > 4 * 1024 * 1024:
+                    raise ValueError("操作记录无效")
+                job = json.load(stream)
+        finally:
+            os.close(descriptor)
+        if (not isinstance(job, dict) or job.get("id") != identifier
+                or job.get("mode") not in {"copy", "trash"}
+                or job.get("status") not in {"running", "complete", "stopped"}
+                or type(job.get("total")) is not int or not 1 <= job["total"] <= 200
+                or not isinstance(job.get("items"), list) or len(job["items"]) > job["total"]
+                or any(not isinstance(item, dict) or item.get("status") not in {"processing", "success", "failed", "unknown"}
+                       or not isinstance(item.get("path"), str) or not isinstance(item.get("target"), str)
+                       for item in job["items"])):
+            raise ValueError("操作记录无效")
+        return job
 
     def snapshot(self, identifier):
         with self.lock:
@@ -411,20 +515,21 @@ class FileOperations:
                 raise ValueError("操作记录不存在")
             if identifier in self.jobs:
                 return json.loads(json.dumps(self.jobs[identifier]))
-            descriptor = open_directory(self.report_dir / "operations")
-            try:
-                fd = os.open(identifier + ".json", FLAGS, dir_fd=descriptor)
-                with os.fdopen(fd, "rb") as stream:
-                    if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode) or os.fstat(stream.fileno()).st_size > 4 * 1024 * 1024:
-                        raise ValueError("操作记录无效")
-                    job = json.load(stream)
-            finally:
-                os.close(descriptor)
-            if not isinstance(job, dict) or job.get("id") != identifier:
-                raise ValueError("操作记录无效")
+            active = _ACTIVE_JOBS.get((self.report_key, identifier))
+            if active is not None:
+                return json.loads(json.dumps(active))
+            job = self._read_job(identifier)
             if job.get("status") == "running":
-                job["status"] = "interrupted"
-                job["error"] = "上次服务中断，部分结果可能未确认。请核对原文件、目标位置或废纸篓后再处理。"
+                if self._record_is_active(identifier):
+                    job["status"] = "external_running"
+                    job["error"] = "另一服务正在执行此操作，进度会自动更新。请保持执行服务运行。"
+                else:
+                    # The owning process may have finished just before the lock probe.
+                    job = self._read_job(identifier)
+                    if job["status"] != "running":
+                        return job
+                    job["status"] = "interrupted"
+                    job["error"] = "服务已停止，部分结果可能未确认。请核对原文件、目标位置或废纸篓后再处理。"
             return job
 
     def history(self):
@@ -437,5 +542,11 @@ class FileOperations:
             names = sorted((name[:-5] for name in os.listdir(descriptor) if name.endswith('.json')))
         finally:
             os.close(descriptor)
-        jobs = [self.snapshot(identifier) for identifier in names]
-        return {"jobs": sorted(jobs, key=lambda job: job.get("created_at", ""), reverse=True)[:20]}
+        jobs, warnings = [], []
+        for identifier in names:
+            try:
+                jobs.append(self.snapshot(identifier))
+            except (OSError, ValueError, TypeError) as error:
+                warnings.append("记录 " + identifier + " 读取失败：" + str(error))
+        jobs.sort(key=lambda job: (job["status"] in {"running", "external_running"}, str(job.get("created_at", ""))), reverse=True)
+        return {"jobs": jobs[:20], "warnings": warnings}

@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import subprocess
 import tempfile
+import threading
+import sys
 import time
 import unittest
 from unittest import mock
@@ -224,3 +226,104 @@ class OperationTests(unittest.TestCase):
             callback.assert_not_called()
         finally:
             operations._BATCH_LOCK.release()
+
+    def test_live_batch_progress_is_shared_with_another_viewer(self):
+        entered, release = threading.Event(), threading.Event()
+        original = operations.copy_one
+        def paused_copy(*args):
+            args[-1](23, 'copying')
+            entered.set()
+            if not release.wait(5):
+                raise ValueError('generated test timed out')
+            return original(*args)
+        preview = self.ops.preview('copy', self.ids[:1], str(self.destination))
+        reopened = operations.FileOperations(self.report, self.media, lambda: self.plan)
+        with mock.patch.object(operations, 'copy_one', side_effect=paused_copy):
+            job = self.ops.start(preview['token'])
+            try:
+                self.assertTrue(entered.wait(2))
+                snapshot = reopened.snapshot(job['id'])
+                self.assertEqual(snapshot['status'], 'running')
+                self.assertEqual(snapshot['items'][0]['processed_bytes'], 23)
+                self.assertEqual(reopened.history()['jobs'][0], snapshot)
+                callback = mock.Mock()
+                with self.assertRaisesRegex(ValueError, '等待完成'):
+                    reopened.update_plan(callback)
+                callback.assert_not_called()
+            finally:
+                release.set()
+                result = self.finished(job['id'])
+        self.assertEqual(result['status'], 'complete')
+        self.assertEqual(reopened.snapshot(job['id'])['status'], 'complete')
+
+    def test_another_process_lock_reports_live_status_and_prevents_execution(self):
+        identifier = 'f' * 24
+        job = {'id': identifier, 'mode': 'copy', 'status': 'running',
+               'created_at': '2026-10-04 12:00:00', 'total': 1, 'items': []}
+        self.ops._save_job(job)
+        lock = self.report/'operations'/'.batch-lock'
+        lock.write_text(identifier)
+        script = ('import fcntl,os,sys; fd=os.open(sys.argv[1],os.O_RDWR); '
+                  'fcntl.flock(fd,fcntl.LOCK_EX); print("locked",flush=True); sys.stdin.read(1)')
+        child = subprocess.Popen([sys.executable, '-c', script, str(lock)],
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(child.stdout.readline().strip(), 'locked')
+            self.assertEqual(self.ops.snapshot(identifier)['status'], 'external_running')
+            preview = self.ops.preview('copy', self.ids[:1], str(self.destination))
+            with self.assertRaisesRegex(ValueError, '另一服务'):
+                self.ops.start(preview['token'])
+            with self.assertRaisesRegex(ValueError, '另一服务'):
+                self.ops.update_plan(lambda: self.plan.set_states(self.ids, 'hold'))
+            self.assertEqual(list(self.destination.iterdir()), [])
+        finally:
+            child.communicate('x', timeout=5)
+        self.assertEqual(self.ops.snapshot(identifier)['status'], 'interrupted')
+        self.assertEqual(self.ops.update_plan(lambda: self.plan.set_states(self.ids, 'hold'))['counts']['hold'], 2)
+
+    def test_corrupt_history_is_visible_without_hiding_valid_records(self):
+        preview = self.ops.preview('copy', self.ids[:1], str(self.destination))
+        job = self.finished(self.ops.start(preview['token'])['id'])
+        directory = self.report/'operations'
+        (directory/('a'*24+'.json')).write_text('{broken generated json')
+        (directory/('b'*24+'.json')).write_text(json.dumps({
+            'id': 'b'*24, 'mode': 'copy', 'status': 'running', 'total': 1, 'items': [None]}))
+        reopened = operations.FileOperations(self.report, self.media, lambda: self.plan)
+        history = reopened.history()
+        self.assertEqual(history['jobs'], [job])
+        self.assertEqual(len(history['warnings']), 2)
+        self.assertTrue((directory/('a'*24+'.json')).exists())
+
+    def test_plan_is_revalidated_after_acquiring_process_lock(self):
+        preview = self.ops.preview('copy', self.ids[:1], str(self.destination))
+        original = self.ops._job_lock
+        def concurrent_edit():
+            self.plan.set_states(self.ids[:1], 'hold')
+            return original()
+        with mock.patch.object(self.ops, '_job_lock', side_effect=concurrent_edit):
+            with self.assertRaisesRegex(ValueError, '分类计划已变化'):
+                self.ops.start(preview['token'])
+        self.assertEqual(list(self.destination.iterdir()), [])
+        self.assertFalse(operations._BATCH_LOCK.locked())
+
+    def test_thread_start_failure_releases_locks_and_does_not_show_live_job(self):
+        preview = self.ops.preview('copy', self.ids[:1], str(self.destination))
+        with mock.patch.object(operations.threading.Thread, 'start', side_effect=RuntimeError('generated failure')):
+            with self.assertRaises(RuntimeError):
+                self.ops.start(preview['token'])
+        self.assertEqual(self.ops.history()['jobs'][0]['status'], 'interrupted')
+        self.assertEqual(list(self.destination.iterdir()), [])
+        self.assertFalse(operations._BATCH_LOCK.locked())
+        self.ops.update_plan(lambda: self.plan.set_states(self.ids, 'hold'))
+
+    def test_completion_during_lock_probe_is_not_reported_as_interrupted(self):
+        identifier = 'e'*24
+        job = {'id': identifier, 'mode': 'copy', 'status': 'running', 'total': 1, 'items': []}
+        self.ops._save_job(job)
+        def finished_before_probe(_):
+            job.update(status='complete', items=[{'path': self.records[0]['path'],
+                'target': str(self.destination/'sample.png'), 'status': 'success'}])
+            self.ops._save_job(job)
+            return False
+        with mock.patch.object(self.ops, '_record_is_active', side_effect=finished_before_probe):
+            self.assertEqual(self.ops.snapshot(identifier)['status'], 'complete')

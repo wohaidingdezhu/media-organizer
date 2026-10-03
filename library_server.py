@@ -368,9 +368,9 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 if route == "api/organization":
                     action = payload.get("action", "state")
                     if action == "target":
-                        result = get_organization().set_target(payload["id"], payload["target"])
+                        result = operations.update_plan(lambda: get_organization().set_target(payload["id"], payload["target"]))
                     elif action == "state":
-                        result = get_organization().set_states(payload["ids"], payload["state"])
+                        result = operations.update_plan(lambda: get_organization().set_states(payload["ids"], payload["state"]))
                     else:
                         raise ValueError("整理操作无效")
                     self.send_json(200, result)

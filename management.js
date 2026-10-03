@@ -10,14 +10,70 @@ async function checkDisks(){try{const result=await api('api/roots');$('disk-stat
 $('check-disks').onclick=checkDisks;
 async function loadExtras(){const results=await Promise.allSettled([api('api/photos'),api('api/changes')]);if(results[0].status==='fulfilled'){const items=results[0].value.items;photos=new Map(items.map(item=>[item.id,item]));optionsFor('photo-month',items.map(item=>item.month),'全部照片年月');render();}else error('照片清单读取失败：'+results[0].reason.message);if(results[1].status==='fulfilled'){const result=results[1].value;const labels={added:'新增',changed:'发生变化',absent:'本次未扫描到'};$('changes-list').replaceChildren();$('changes-list').append(make('p','',result.message||`对比 ${result.previous_created_at}：新增 ${result.counts.added} · 变化 ${result.counts.changed} · 本次未扫描到 ${result.counts.absent}`));for(const item of result.items.slice(0,200))$('changes-list').append(make('p','path',labels[item.state]+'：'+item.path));if(result.items.length>200)$('changes-list').append(make('p','','仅展示前 200 项。'));}else $('changes-list').textContent='比较失败：'+results[1].reason.message;checkDisks();refreshOperations();}
 const oldBuildFolders=buildFolders;buildFolders=function(){oldBuildFolders();optionsFor('source-folder',data.items.map(item=>item.path.slice(0,item.path.lastIndexOf('/'))),'全部原文件夹');};
-$('choose-destination').onclick=async()=>{const button=$('choose-destination');button.disabled=true;try{const result=await api('api/operations/destination',{});if(result.destination)$('destination').value=result.destination;}catch(err){error(err.message);}finally{button.disabled=false;}};
+$('choose-destination').onclick=async()=>{if(operating||saving)return;const button=$('choose-destination');button.disabled=true;try{const result=await api('api/operations/destination',{});if(result.destination)$('destination').value=result.destination;}catch(err){error(err.message);}finally{render();}};
 async function previewOperation(mode){if(operating||saving||!selected.size)return;saving=true;error();$('notice').textContent='正在检查文件和目标位置…';render();try{executionPreview=await api('api/operations/preview',{mode,ids:[...selected],destination:$('destination').value.trim()});$('execution-title').textContent=mode==='copy'?'确认复制到分类目录':'确认移到废纸篓';$('execution-summary').textContent=`${executionPreview.items.length} 个文件 · ${fileSize(executionPreview.bytes)} · ${mode==='copy'?'复制后保留原件，目标副本使用 SHA-256 校验':'从原位置移到 macOS 废纸篓，可在 Finder 恢复；占用空间不一定立即释放'}`;$('execution-items').replaceChildren();for(const item of executionPreview.items){const row=make('li');row.append(make('div','path',item.path),make('div','path','→ '+item.target));$('execution-items').append(row);}$('execution-confirm').checked=false;$('execution-start').disabled=true;$('execution-error').hidden=true;$('execution').showModal();$('notice').textContent='检查完成，请在弹窗中核对。';}catch(err){error(err.message);$('notice').textContent='';}finally{saving=false;render();}}
 $('copy-files').onclick=()=>previewOperation('copy');$('trash-files').onclick=()=>previewOperation('trash');
 $('execution-confirm').onchange=()=>$('execution-start').disabled=!$('execution-confirm').checked||operating;
 $('execution-cancel').onclick=()=>{executionPreview=null;$('execution').close();};
 $('execution').addEventListener('cancel',event=>{if(operating)event.preventDefault();else executionPreview=null;});
-$('execution-start').onclick=async()=>{if(!executionPreview||!$('execution-confirm').checked||operating)return;operating=true;$('execution-start').disabled=true;$('execution-cancel').disabled=true;try{const job=await api('api/operations/start',{token:executionPreview.token});executionPreview=null;$('execution').close();selected.clear();$('notice').textContent='操作已开始，请保持本机服务运行，完成后重新扫描。';pollOperation(job.id);}catch(err){$('execution-error').hidden=false;$('execution-error').textContent=err.message;operating=false;$('execution-start').disabled=false;}finally{$('execution-cancel').disabled=false;render();}};
-function operationCard(job){const box=make('div','operation'),state={running:'执行中',complete:'已完成',stopped:'已停止',interrupted:'服务曾中断'};box.append(make('strong','',`${job.mode==='copy'?'复制分类':'废纸篓清理'} · ${state[job.status]||job.status} · ${job.items.filter(item=>item.status==='success').length}/${job.total}`),make('p','muted',job.created_at||''));if(job.error)box.append(make('p','warning',job.error));for(const item of job.items){const text=make('pre','',`${item.status==='success'?'成功':item.status==='processing'?(job.status==='running'?`正在${({copying:'复制',verifying:'校验副本',verified:'完成校验'})[item.phase]||'处理'}${job.mode==='copy'?'（'+fileSize(item.processed_bytes||0)+' / '+fileSize(item.bytes||0)+'）':''}`:'处理结果待确认'):item.status==='unknown'?'结果未确认':'失败'}：${item.path}\n→ ${item.trashed_path||item.target}${item.error?'\n'+item.error:''}`);box.append(text);}box.append(make('p','muted','记录保存在本次报告的 operations 文件夹。已成功项不会自动撤销；结果未确认时先在 Finder 核对。'));return box;}
-async function refreshOperations(){try{const result=await api('api/operations');$('operations').replaceChildren();for(const job of result.jobs){if(job.mode==='trash')for(const item of job.items)if(item.status==='success')handledTrash.add(item.path);$('operations').append(operationCard(job));}render();if(!result.jobs.length)$('operations').append(make('p','','本次扫描还没有文件操作记录。'));}catch(err){$('operations').textContent='记录读取失败：'+err.message;}}
+$('execution-start').onclick=async()=>{
+  if(!executionPreview||!$('execution-confirm').checked||operating)return;
+  operating=true;monitorRevision++;clearTimeout(operationTimer);render();
+  $('execution-start').disabled=true;$('execution-cancel').disabled=true;
+  try{
+    await api('api/operations/start',{token:executionPreview.token});
+    selected.clear();$('notice').textContent='操作已开始，请保持本机服务运行，完成后重新扫描。';
+  }catch(err){
+    error('启动请求未确认：'+err.message+'。正在读取操作记录，请勿重复执行。');
+  }finally{
+    executionPreview=null;$('execution').close();$('execution-cancel').disabled=false;
+    refreshOperations();
+  }
+};
+function activeOperation(job){return ['running','external_running'].includes(job.status);}
+function operationCard(job){
+  const box=make('div','operation'),state={running:'执行中',external_running:'另一服务执行中',complete:'已完成',stopped:'已停止',interrupted:'服务曾中断'};
+  box.append(make('strong','',`${job.mode==='copy'?'复制分类':'废纸篓清理'} · ${state[job.status]||job.status} · ${job.items.filter(item=>item.status==='success').length}/${job.total}`),make('p','muted',job.created_at||''));
+  if(job.error)box.append(make('p','warning',job.error));
+  for(const item of job.items){
+    const text=make('pre','',`${item.status==='success'?'成功':item.status==='processing'?(activeOperation(job)?`正在${({copying:'复制',verifying:'校验副本',verified:'完成校验'})[item.phase]||'处理'}${job.mode==='copy'?'（'+fileSize(item.processed_bytes||0)+' / '+fileSize(item.bytes||0)+'）':''}`:'处理结果待确认'):item.status==='unknown'?'结果未确认':'失败'}：${item.path}\n→ ${item.trashed_path||item.target}${item.error?'\n'+item.error:''}`);
+    box.append(text);
+  }
+  box.append(make('p','muted','记录保存在本次报告的 operations 文件夹。已成功项不会自动撤销；结果未确认时先在 Finder 核对。'));return box;
+}
+async function refreshOperations(){
+  clearTimeout(operationTimer);
+  const revision=++monitorRevision;
+  try{
+    const result=await api('api/operations');if(revision!==monitorRevision)return;
+    const wasBusy=operating,wasRetrying=monitorFailures>0;monitorFailures=0;
+    operating=result.jobs.some(activeOperation)||(result.warnings||[]).length>0;
+    $('operations').replaceChildren();
+    for(const warning of result.warnings||[])$('operations').append(make('p','warning',warning));
+    for(const job of result.jobs){
+      if(job.mode==='trash')for(const item of job.items)if(item.status==='success')handledTrash.add(item.path);
+      $('operations').append(operationCard(job));
+    }
+    if(wasRetrying)error();
+    if(result.jobs.some(activeOperation)){
+      $('notice').textContent='文件操作执行中，进度会自动更新。请保持本机服务运行；完成前暂停修改计划。';
+      operationTimer=setTimeout(refreshOperations,1000);
+    }else if((result.warnings||[]).length){
+      $('notice').textContent='部分操作记录无法读取，暂时锁定文件操作。请先核对记录与 Finder，再点击“读取操作记录”。';
+    }else if(wasBusy&&result.jobs.length){
+      $('notice').textContent=result.jobs[0].status==='complete'?'操作完成，请重新扫描更新文件清单。':'操作已停止，请查看逐项结果；成功项保留，未确认项先在 Finder 核对。';
+    }else if(wasRetrying){$('notice').textContent='已恢复连接，没有正在执行的文件操作。';}
+    if(!result.jobs.length&&!(result.warnings||[]).length)$('operations').append(make('p','','本次扫描还没有文件操作记录。'));
+    render();
+  }catch(err){
+    if(revision!==monitorRevision)return;
+    operating=true;monitorFailures++;
+    error('进度连接失败，操作状态暂未确认。已锁定执行和计划修改，将自动重连：'+err.message);
+    $('notice').textContent='请保持服务运行；也可点击“读取操作记录”重试。';render();
+    operationTimer=setTimeout(refreshOperations,Math.min(10000,1000*2**Math.min(monitorFailures,4)));
+  }
+}
 $('refresh-operations').onclick=refreshOperations;
-async function pollOperation(id){clearTimeout(operationTimer);try{const job=await api('api/operations/'+id);$('operations').replaceChildren(operationCard(job));if(job.status==='running'){operationTimer=setTimeout(()=>pollOperation(id),1000);return;}operating=false;if(job.mode==='trash')for(const item of job.items)if(item.status==='success')handledTrash.add(item.path);$('notice').textContent=job.status==='complete'?'操作完成，请重新扫描更新文件清单。':'操作已停止，请查看逐项结果；成功项保留。';render();}catch(err){operating=false;error('无法读取操作结果，请先核对记录和 Finder：'+err.message);render();}}
+// Keep idle windows in sync with batches started elsewhere.
+window.addEventListener('focus',()=>{if(!executionPreview&&!saving)refreshOperations();});
+window.addEventListener('pagehide',()=>{monitorRevision++;clearTimeout(operationTimer);});
