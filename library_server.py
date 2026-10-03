@@ -1,4 +1,4 @@
-"""Loopback-only reports, organizing plans and film tags. No media writes."""
+"""Loopback reports and library data, with explicitly confirmed file operations."""
 import html
 import json
 import mimetypes
@@ -18,6 +18,8 @@ import webbrowser
 
 from organization_plan import OrganizationPlan
 from media_actions import MediaActions
+from file_operations import FileOperations
+from media_catalog import photo_catalog, root_status, previous_scan, load_notes, save_notes, clean_note
 
 
 MAX_TAG_FILE = 1024 * 1024
@@ -166,6 +168,15 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     and isinstance(group.get("tag_key"), str)
                     and re.fullmatch(r"[0-9a-f]{64}", group["tag_key"])} if isinstance(groups, list) else set()
     tag_path = output_dir / "library-tags.json"
+    note_path = output_dir / "library-notes.json"
+    operations = FileOperations(report_dir, media, get_organization)
+    changes = None
+
+    def read_document(path):
+        with _open_report_file(path, ("report.json",)) as stream:
+            if os.fstat(stream.fileno()).st_size > 128 * 1024 * 1024:
+                raise ValueError("报告过大")
+            return json.load(stream)
     token = secrets.token_urlsafe(24)
 
     class Handler(BaseHTTPRequestHandler):
@@ -203,12 +214,35 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
             self.wfile.write(body)
 
         def do_GET(self):
+            nonlocal changes
             route = self.route()
             if route is None:
                 self.send_error(404)
                 return
             if route == "api/media":
                 self.send_json(200, media.snapshot())
+                return
+            if route in {"api/photos", "api/roots", "api/changes", "api/notes", "api/operations"} or route.startswith("api/operations/"):
+                try:
+                    if route == "api/photos":
+                        result = photo_catalog(document)
+                    elif route == "api/roots":
+                        result = root_status(media.roots)
+                    elif route == "api/changes":
+                        if changes is None:
+                            changes = previous_scan(report_dir, document, read_document)
+                        result = changes
+                    elif route == "api/notes":
+                        with self.server.tag_lock:
+                            notes = load_notes(note_path)
+                        result = {"groups": {key: notes.get(key, {"rating": 0, "note": ""}) for key in allowed_keys}}
+                    elif route == "api/operations":
+                        result = operations.history()
+                    else:
+                        result = operations.snapshot(route.removeprefix("api/operations/"))
+                    self.send_json(200, result)
+                except (OSError, ValueError, KeyError, TypeError) as error:
+                    self.send_json(400, {"error": str(error)})
                 return
             if route in {"api/organization", "organization.csv", "organization.json"}:
                 try:
@@ -245,14 +279,20 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 self.send_error(404)
                 return
             try:
-                page_dir = Path(__file__).resolve().parent if route == "organize.html" else report_dir
-                stream = _open_report_file(page_dir, ("organization.html",) if route == "organize.html" else parts)
+                assets = {"organize.html": "organization.html", "photos.html": "organization.html"}
+                page_dir = Path(__file__).resolve().parent if route in assets else report_dir
+                stream = _open_report_file(page_dir, (assets[route],) if route in assets else parts)
             except OSError:
                 self.send_error(404)
                 return
             with stream:
                 body = current_library_page() if route == "library.html" else None
-                if dashboard_link and route in {"report.html", "library.html", "organize.html"}:
+                if route in {"organize.html", "photos.html"}:
+                    body = stream.read()
+                    if b"@@MANAGEMENT@@" in body:
+                        with _open_report_file(Path(__file__).resolve().parent, ("management.js",)) as script:
+                            body = body.replace(b"@@MANAGEMENT@@", script.read())
+                if dashboard_link and route in {"report.html", "library.html", "organize.html", "photos.html"}:
                     if body is None:
                         body = stream.read()
                     opening = re.search(br"<body(?:\s[^>]*)?>", body, re.IGNORECASE)
@@ -274,12 +314,13 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
 
         def do_POST(self):
             route = self.route()
-            if route not in {"api/tags", "api/tags/toggle", "api/organization", "api/media/action"}:
+            if route not in {"api/tags", "api/tags/toggle", "api/organization", "api/media/action", "api/notes",
+                             "api/operations/preview", "api/operations/start", "api/operations/destination"}:
                 self.send_error(404)
                 return
             origin = self.headers.get("Origin")
             if ((origin and origin != f"http://127.0.0.1:{self.server.server_port}")
-                    or route == "api/media/action" and origin != f"http://127.0.0.1:{self.server.server_port}"):
+                    or (route == "api/media/action" or route.startswith("api/operations/")) and origin != f"http://127.0.0.1:{self.server.server_port}"):
                 self.send_json(403, {"error": "页面来源不匹配"})
                 return
             if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
@@ -294,6 +335,35 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     raise ValueError("请求内容必须是 JSON 对象")
                 if route == "api/media/action":
                     self.send_json(200, media.perform(payload["id"], payload["action"]))
+                    return
+                if route == "api/operations/preview":
+                    self.send_json(200, operations.preview(payload["mode"], payload["ids"], payload.get("destination")))
+                    return
+                if route == "api/operations/start":
+                    self.send_json(200, operations.start(payload["token"]))
+                    return
+                if route == "api/operations/destination":
+                    if sys.platform != "darwin":
+                        raise ValueError("请选择目标文件夹的绝对路径")
+                    script = 'POSIX path of (choose folder with prompt "选择独立分类目标目录。复制会保留原媒体，不会覆盖已有文件。")'
+                    result = subprocess.run(["/usr/bin/osascript", "-e", script], capture_output=True, text=True, timeout=180)
+                    if result.returncode:
+                        if "-128" in result.stderr:
+                            self.send_json(200, {"destination": None})
+                            return
+                        raise ValueError("无法选择分类目标文件夹")
+                    self.send_json(200, {"destination": str(Path(result.stdout.strip()).resolve(strict=True))})
+                    return
+                if route == "api/notes":
+                    key = payload["key"]
+                    if key not in allowed_keys:
+                        raise ValueError("影片标识无效")
+                    value = clean_note(payload)
+                    with self.server.tag_lock:
+                        notes = load_notes(note_path)
+                        notes[key] = value
+                        save_notes(note_path, notes)
+                    self.send_json(200, value)
                     return
                 if route == "api/organization":
                     action = payload.get("action", "state")
@@ -325,7 +395,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     else:
                         groups.pop(key, None)
                     save_tags(tag_path, groups)
-            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError, subprocess.TimeoutExpired) as error:
                 self.send_json(400, {"error": str(error)})
                 return
             self.send_json(200, {"tags": values})

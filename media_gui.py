@@ -28,7 +28,7 @@ REPORT_VIEWS = {
     "overview": "report.html", "duplicates": "report.html#duplicates",
     "similar": "report.html#similar", "library": "library.html",
     "issues": "report.html#issues", "folders": "report.html#folder-groups",
-    "organize": "organize.html",
+    "organize": "organize.html", "photos": "photos.html",
 }
 
 
@@ -427,8 +427,12 @@ def create_dashboard_server(output=REPORTS):
                     subprocess.Popen(["/usr/bin/open", str(state.output)])
                     result = {"ok": True}
                 else:
+                    from file_operations import shutdown_when_idle
+                    def stop():
+                        self.server.shutdown()
+                        state.close()
+                    shutdown_when_idle(stop)
                     result = {"ok": True}
-                    threading.Thread(target=self.server.shutdown, daemon=True).start()
                 self.respond(200, result)
             except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
                 self.respond(400, {"error": str(error)})

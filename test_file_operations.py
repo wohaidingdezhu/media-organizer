@@ -1,0 +1,226 @@
+"""All sources and destinations here are freshly generated temporary data."""
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import tempfile
+import time
+import unittest
+from unittest import mock
+
+import file_operations as operations
+from media_actions import MediaActions, file_signature, media_id
+from organization_plan import OrganizationPlan
+
+
+class OperationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.source, self.report, self.destination = [self.root / name for name in ('source', 'report', 'destination')]
+        for path in (self.source, self.report, self.destination):
+            path.mkdir()
+        self.records = []
+        for index in range(2):
+            path = self.source / f'generated-{index}.png'
+            path.write_bytes(b'generated photo ' + bytes([index]) * 64)
+            info = path.stat()
+            self.records.append({'path': str(path), 'kind': '照片', 'bytes': info.st_size,
+                'mtime': info.st_mtime, 'source_signature': file_signature(info),
+                'sha256': hashlib.sha256(path.read_bytes()).hexdigest(), 'suggested_path': f'照片/旅行/{path.name}'})
+        self.document = {'roots': [str(self.source)], 'files': self.records, 'duplicates': []}
+        self.media = MediaActions(self.document)
+        self.plan = OrganizationPlan(self.report, self.document)
+        self.ids = [media_id(item['path']) for item in self.records]
+        self.plan.set_states(self.ids, 'include')
+        self.ops = operations.FileOperations(self.report, self.media, lambda: self.plan)
+        self.before = {item['path']: (Path(item['path']).read_bytes(), Path(item['path']).stat().st_mtime_ns) for item in self.records}
+
+    def finished(self, identifier):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            job = self.ops.snapshot(identifier)
+            if job['status'] != 'running':
+                return job
+            time.sleep(.01)
+        self.fail('generated batch did not finish')
+
+    def test_copy_is_confirmed_verified_keeps_originals_and_records_survive_restart(self):
+        preview = self.ops.preview('copy', self.ids, str(self.destination))
+        self.assertFalse(any(self.destination.iterdir()))
+        job = self.finished(self.ops.start(preview['token'])['id'])
+        self.assertEqual(job['status'], 'complete')
+        for source, result in zip(self.records, job['items']):
+            self.assertEqual(Path(result['target']).read_bytes(), Path(source['path']).read_bytes())
+            self.assertEqual(result['sha256'], source['sha256'])
+            self.assertEqual(Path(result['target']).stat().st_mtime_ns, Path(source['path']).stat().st_mtime_ns)
+        self.assertEqual(self.before, {path: (Path(path).read_bytes(), Path(path).stat().st_mtime_ns) for path in self.before})
+        reopened = operations.FileOperations(self.report, self.media, lambda: self.plan)
+        self.assertEqual(reopened.snapshot(job['id']), job)
+        self.assertEqual(reopened.history()['jobs'][0], job)
+        self.assertEqual((self.report/'operations'/f"{job['id']}.json").stat().st_mode & 0o777, 0o600)
+        with self.assertRaises(ValueError):
+            self.ops.start(preview['token'])
+
+    def test_existing_case_equivalent_and_symlink_targets_never_overwrite(self):
+        folder = self.destination/'照片'/'旅行'
+        folder.mkdir(parents=True)
+        existing = folder/'GENERATED-0.PNG'
+        existing.write_bytes(b'keep this target')
+        with self.assertRaises(ValueError):
+            self.ops.preview('copy', self.ids[:1], str(self.destination))
+        self.assertEqual(existing.read_bytes(), b'keep this target')
+        other = self.root/'other'
+        other.mkdir()
+        (self.destination/'link').symlink_to(other, target_is_directory=True)
+        self.plan.set_target(self.ids[0], 'link/photo.png')
+        self.plan.set_states(self.ids[:1], 'include')
+        with self.assertRaises(OSError):
+            self.ops.preview('copy', self.ids[:1], str(self.destination))
+        self.assertEqual(list(other.iterdir()), [])
+
+    def test_unsafe_destination_pending_items_and_insufficient_space_are_rejected(self):
+        for destination in (str(self.source), str(self.root), 'relative', str(self.source/'new')):
+            with self.subTest(destination=destination), self.assertRaises((OSError, ValueError)):
+                self.ops.preview('copy', self.ids, destination)
+        self.plan.set_states(self.ids[:1], 'pending')
+        with self.assertRaises(ValueError):
+            self.ops.preview('copy', self.ids, str(self.destination))
+        self.plan.set_states(self.ids, 'include')
+        with mock.patch.object(operations.os, 'fstatvfs', return_value=type('Space', (), {'f_bavail': 0, 'f_frsize': 4096})()), self.assertRaises(ValueError):
+            self.ops.preview('copy', self.ids, str(self.destination))
+
+    def test_changed_source_plan_or_destination_after_preview_cannot_execute(self):
+        preview = self.ops.preview('copy', self.ids, str(self.destination))
+        self.plan.set_target(self.ids[0], '照片/other.png')
+        with self.assertRaises(ValueError):
+            self.ops.start(preview['token'])
+        self.plan.set_states(self.ids, 'include')
+        preview = self.ops.preview('copy', self.ids, str(self.destination))
+        self.destination.rename(self.root/'original-destination')
+        self.destination.mkdir()
+        with self.assertRaises(ValueError):
+            self.ops.start(preview['token'])
+        preview = self.ops.preview('copy', self.ids, str(self.destination))
+        Path(self.records[0]['path']).write_bytes(b'changed generated source')
+        with self.assertRaises(ValueError):
+            self.ops.start(preview['token'])
+        self.assertFalse((self.report/'operations').exists())
+
+    def test_copy_detects_changes_during_read_and_leaves_no_partial_file(self):
+        source = Path(self.records[0]['path'])
+        original = operations.os.read
+        mutated = False
+        def change_after_read(fd, count):
+            nonlocal mutated
+            data = original(fd, count)
+            if not mutated:
+                mutated = True
+                source.write_bytes(b'temporary mutation during copy')
+            return data
+        with mock.patch.object(operations.os, 'read', side_effect=change_after_read), self.assertRaises(ValueError):
+            operations.copy_one(self.media, self.ids[0], str(self.destination), self.records[0]['suggested_path'], self.records[0]['source_signature'])
+        self.assertEqual(list(self.destination.rglob('*.png')), [])
+        self.assertFalse(any(path.name.startswith('.media-copy') for path in self.destination.rglob('*')))
+
+    def test_copy_reports_transfer_and_verification_progress(self):
+        progress = []
+        record = self.records[0]
+        operations.copy_one(self.media, self.ids[0], str(self.destination), record['suggested_path'],
+                            record['source_signature'], progress=lambda amount, phase: progress.append((amount, phase)))
+        phases = {phase for amount, phase in progress}
+        self.assertIn('copying', phases)
+        self.assertIn('verifying', phases)
+        self.assertEqual(progress[-1], (record['bytes'], 'verified'))
+        self.assertEqual(Path(record['path']).read_bytes(), self.before[record['path']][0])
+
+    def test_batch_failure_keeps_successful_copy_and_stops(self):
+        preview = self.ops.preview('copy', self.ids, str(self.destination))
+        original = operations.copy_one
+        count = 0
+        def fail_second(*args):
+            nonlocal count
+            count += 1
+            if count == 2:
+                raise OSError('generated destination failure')
+            return original(*args)
+        with mock.patch.object(operations, 'copy_one', side_effect=fail_second):
+            job = self.finished(self.ops.start(preview['token'])['id'])
+        self.assertEqual(job['status'], 'stopped')
+        self.assertEqual([item['status'] for item in job['items']], ['success', 'failed'])
+        self.assertTrue(Path(job['items'][0]['target']).is_file())
+        self.assertEqual(self.before, {path: (Path(path).read_bytes(), Path(path).stat().st_mtime_ns) for path in self.before})
+
+    def test_trash_requires_preview_keeps_duplicate_and_never_uses_permanent_delete(self):
+        self.document['duplicates'] = [{'paths': [item['path'] for item in self.records]}]
+        plan = OrganizationPlan(self.report, self.document)
+        self.ops.plan = lambda: plan
+        with mock.patch.object(operations, 'trash_helper', return_value=Path('/synthetic/trash-component')):
+            with self.assertRaises(ValueError):
+                self.ops.preview('trash', self.ids)
+            preview = self.ops.preview('trash', self.ids[:1])
+            with mock.patch.object(operations.subprocess, 'run', return_value=type('Answer', (), {'returncode': 0, 'stdout': '{"ok": true, "trashed_path": "/synthetic/Trash/sample.png"}'})()) as run:
+                job = self.finished(self.ops.start(preview['token'])['id'])
+            self.assertEqual(job['status'], 'complete')
+            command = run.call_args.args[0]
+            self.assertEqual(command, ['/synthetic/trash-component'])
+            payload = json.loads(run.call_args.kwargs['input'])
+            self.assertEqual(payload['path'], self.records[0]['path'])
+            self.assertEqual(payload['signature'], self.records[0]['source_signature'])
+            self.assertNotIn('shell', run.call_args.kwargs)
+        # Native Trash is mocked; no personal files or real Trash were touched.
+        self.assertEqual(self.before, {path: (Path(path).read_bytes(), Path(path).stat().st_mtime_ns) for path in self.before})
+
+    def test_expiration_unknown_outcome_and_interrupted_journal_are_visible(self):
+        preview = self.ops.preview('copy', self.ids, str(self.destination))
+        self.ops.previews[preview['token']]['expires'] = 0
+        with self.assertRaises(ValueError):
+            self.ops.start(preview['token'])
+        with mock.patch.object(operations, 'trash_helper', return_value=Path('/synthetic/trash')):
+            preview = self.ops.preview('trash', self.ids[:1])
+            with mock.patch.object(operations.subprocess, 'run', side_effect=subprocess.TimeoutExpired('trash', 60)):
+                job = self.finished(self.ops.start(preview['token'])['id'])
+            self.assertEqual(job['items'][0]['status'], 'unknown')
+        job['status'] = 'running'
+        self.ops._save_job(job)
+        reopened = operations.FileOperations(self.report, self.media, lambda: self.plan)
+        self.assertEqual(reopened.snapshot(job['id'])['status'], 'interrupted')
+        with self.assertRaises(ValueError):
+            reopened.snapshot('../escape')
+
+    def test_unwritable_or_symlink_journal_prevents_any_action(self):
+        (self.report/'operations').symlink_to(self.destination, target_is_directory=True)
+        preview = self.ops.preview('copy', self.ids, str(self.destination))
+        with self.assertRaises(ValueError):
+            self.ops.start(preview['token'])
+        self.assertEqual(list(self.destination.iterdir()), [])
+
+    def test_cleanup_requires_fresh_report_and_accessible_retained_duplicate(self):
+        with mock.patch.object(operations, 'trash_helper', return_value=Path('/synthetic/trash')):
+            self.records[0].pop('source_signature')
+            with self.assertRaisesRegex(ValueError, '旧报告'):
+                self.ops.preview('trash', self.ids[:1])
+            self.records[0]['source_signature'] = file_signature(Path(self.records[0]['path']).stat())
+            document = {**self.document, 'duplicates': [{'paths': [record['path'] for record in self.records]}]}
+            plan = OrganizationPlan(self.report, document)
+            self.ops.plan = lambda: plan
+            preview = self.ops.preview('trash', self.ids[:1])
+            Path(self.records[1]['path']).unlink()  # Generated sample only.
+            with self.assertRaisesRegex(ValueError, '保留'):
+                self.ops.preview('trash', self.ids[:1])
+            with mock.patch.object(operations, 'trash_one') as trash:
+                job = self.finished(self.ops.start(preview['token'])['id'])
+                trash.assert_not_called()
+            self.assertEqual(job['status'], 'stopped')
+            self.assertTrue(Path(self.records[0]['path']).is_file())
+
+    def test_controller_cannot_quit_during_file_operations(self):
+        operations._BATCH_LOCK.acquire()
+        try:
+            callback = mock.Mock()
+            with self.assertRaisesRegex(ValueError, '等待完成'):
+                operations.shutdown_when_idle(callback)
+            callback.assert_not_called()
+        finally:
+            operations._BATCH_LOCK.release()

@@ -800,10 +800,12 @@ def write_csv(path, fields, rows):
             writer.writerow([csv_cell(row.get(key, "")) for key, _ in fields])
 
 
-def export_previews(directory, records, similarity, helper, issues, displayed_pairs=300):
+def export_previews(directory, records, similarity, helper, issues, displayed_pairs=300, photo_limit=500):
     """Create report-local previews only for images shown in the HTML report."""
     paths = dict.fromkeys(path for pair in similarity["pairs"][:displayed_pairs]
                           for path in (pair["left"], pair["right"]))
+    paths.update(dict.fromkeys(record["path"] for record in records if record.get("kind") == "照片") if photo_limit is None else
+                 dict.fromkeys([record["path"] for record in records if record.get("kind") == "照片"][:photo_limit]))
     if not paths:
         return {}
     by_path = {record["path"]: record for record in records}
@@ -836,7 +838,7 @@ def export_previews(directory, records, similarity, helper, issues, displayed_pa
             for start in range(0, len(items), 4):
                 for path, relative, error in pool.map(export_one, items[start:start + 4]):
                     if error:
-                        issue(issues, path, f"相似图片预览未生成：{error}")
+                        issue(issues, path, f"图片浏览预览未生成：{error}")
                     else:
                         previews[path] = relative
     finally:
@@ -1148,7 +1150,7 @@ def render_video_library(data):
         if (filter.value === 'posters' && !group.poster) return false;
         if (filter.value === 'missing-posters' && group.poster) return false;
         if (tagFilter.value && !(group.tags || []).includes(tagFilter.value)) return false;
-        return !query || [group.title, ...(group.tags || []), ...group.files.flatMap(file => [file.path, file.suggested_path, ...file.sidecars])].some(value => value.toLocaleLowerCase().includes(query));
+        return !query || [group.title, (group.personal||{}).note||'', ...(group.tags || []), ...group.files.flatMap(file => [file.path, file.suggested_path, ...file.sidecars])].some(value => value.toLocaleLowerCase().includes(query));
       });
       const pages = Math.max(1, Math.ceil(visible.length / 50)); page = Math.min(page, pages - 1);
       groups.replaceChildren();
@@ -1159,6 +1161,8 @@ def render_video_library(data):
         } else card.append(make('div', 'poster poster-placeholder', group.title.slice(0, 12)));
         const body = make('div', 'card-body');
         body.append(make('h3', '', group.title), make('div', 'meta', `${group.type} · ${group.files.length} 个视频`));
+        if(group.personal&&group.personal.rating)body.append(make('div','meta',`个人评分：${group.personal.rating} 星`));
+        const detail=make('button','','影片详情');detail.setAttribute('aria-label','影片详情 '+group.title);detail.onclick=()=>movieDetails(group);body.append(detail);
         for (const tag of group.tags || []) body.append(make('span', 'badge', tag));
         if (tagApi && /^[0-9a-f]{64}$/.test(group.tag_key || '')) {
           const message=make('div','minor');message.setAttribute('role','status');
@@ -1204,8 +1208,10 @@ def render_video_library(data):
     document.getElementById('previous').addEventListener('click', () => { page--; render(); });
     document.getElementById('next').addEventListener('click', () => { page++; render(); });
     document.getElementById('group-total').textContent = library.groups.length;
+    @@DETAILS@@
     updateTagChoices();
     render();
+    loadMovieNotes();
     if (tagApi) fetch('api/media').then(response=>{if(!response.ok)throw new Error();return response.json();}).then(result=>{mediaIds=result.ids_by_path;mediaAvailable=result.available;render();}).catch(()=>{});
     if (tagApi) fetch(tagApi).then(response => { if (!response.ok) throw new Error('读取标签失败'); return response.json(); })
       .then(result => { for (const group of library.groups) group.tags = result.groups[group.tag_key] || []; updateTagChoices(); render();
@@ -1213,8 +1219,9 @@ def render_video_library(data):
       .catch(() => { document.getElementById('tag-help').textContent = '标签服务暂不可用；当前仅显示扫描时保存的标签。'; });
     </script></body></html>'''
     replacements = {"CREATED": html.escape(data["created_at"], quote=True), "POSTER_TOTAL": str(library.get("poster_count", 0)), "VIDEO_FILES": str(library["video_files"]),
-                    "DUPLICATE_FILES": str(library["duplicate_files"]), "ISSUE_TOTAL": str(len(library["issues"])), "DATA": payload}
-    return re.sub(r"@@(CREATED|POSTER_TOTAL|VIDEO_FILES|DUPLICATE_FILES|ISSUE_TOTAL|DATA)@@", lambda match: replacements[match.group(1)], template)
+                    "DUPLICATE_FILES": str(library["duplicate_files"]), "ISSUE_TOTAL": str(len(library["issues"])), "DATA": payload,
+                    "DETAILS": (BASE / "library_details.js").read_text(encoding="utf-8")}
+    return re.sub(r"@@(CREATED|POSTER_TOTAL|VIDEO_FILES|DUPLICATE_FILES|ISSUE_TOTAL|DATA|DETAILS)@@", lambda match: replacements[match.group(1)], template)
 
 
 def write_reports(directory, data):
@@ -1326,7 +1333,8 @@ def main(argv=None):
         video_library = build_video_library(records, sidecars, duplicates, issues, folder_groups, saved_tags)
         directory = output / dt.datetime.now().strftime("scan-%Y%m%d-%H%M%S-%f")
         directory.mkdir(parents=True, exist_ok=False, mode=0o700)
-        previews = export_previews(directory, records, similarity, BASE / "native" / "image_probe", issues)
+        previews = export_previews(directory, records, similarity, BASE / "native" / "image_probe", issues,
+                                   photo_limit=500 if not args.no_image_metadata and image_inspection["available"] else 0)
         cover_issue_start = len(issues)
         video_library["poster_count"] = export_local_covers(directory, video_library["groups"], records,
                                                              BASE / "native" / "image_probe", issues,

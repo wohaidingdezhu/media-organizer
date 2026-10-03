@@ -4,6 +4,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest import mock
 from urllib.parse import urlsplit
@@ -126,6 +127,54 @@ class ReportServerTests(unittest.TestCase):
         self.assertIn(b"api/media/action", body)
         self.assertIn(b"tags/toggle", body)
         self.assertEqual((self.report / "library.html").read_bytes(), self.page)
+
+    def test_photo_wall_notes_and_operation_confirmation_api_use_generated_files(self):
+        source = self.output/'generated-source';source.mkdir()
+        photo = source/'generated.png';photo.write_bytes(b'generated photo sample')
+        destination = self.output/'generated-destination';destination.mkdir()
+        info = photo.stat()
+        document = {'roots': [str(source.resolve())], 'files': [{
+            'path': str(photo.resolve()), 'kind': '照片', 'bytes': info.st_size, 'mtime': info.st_mtime,
+            'source_signature': file_signature(info), 'suggested_path': '照片/2026/10/generated.png'}],
+            'duplicates': [], 'video_library': {'groups': [{'tag_key': self.key}]}}
+        (self.report/'report.json').write_text(json.dumps(document))
+        before = photo.read_bytes(), photo.stat().st_mtime_ns
+        server = self.server()
+        headers, body = request(server, self.prefix+'photos.html')
+        self.assertIn('200 OK', headers)
+        self.assertIn('确认移到废纸篓'.encode(), body)
+        self.assertNotIn(b'@@MANAGEMENT@@', body)
+        headers, body = request(server, self.prefix+'api/photos')
+        item = json.loads(body)['items'][0]
+        self.assertEqual(item['name'], photo.name)
+        headers, body = request(server, self.prefix+'api/notes', 'POST', {'key': self.key, 'rating': 4, 'note': '生成样例备注'})
+        self.assertIn('200 OK', headers)
+        self.assertEqual(json.loads(request(server, self.prefix+'api/notes')[1])['groups'][self.key]['rating'], 4)
+        saved = (self.output/'library-notes.json').read_bytes()
+        headers, _ = request(server, self.prefix+'api/notes', 'POST', {'key': self.key, 'rating': 6})
+        self.assertIn('400 Bad Request', headers)
+        self.assertEqual((self.output/'library-notes.json').read_bytes(), saved)
+        request(server, self.prefix+'api/organization', 'POST', {'ids': [item['id']], 'state': 'include'})
+        payload = {'mode': 'copy', 'ids': [item['id']], 'destination': str(destination.resolve())}
+        for origin in (None, 'http://evil.example'):
+            headers, _ = request(server, self.prefix+'api/operations/preview', 'POST', payload, origin=origin)
+            self.assertIn('403 Forbidden', headers)
+        origin = f'http://127.0.0.1:{server.server_port}'
+        headers, body = request(server, self.prefix+'api/operations/preview', 'POST', payload, origin=origin)
+        preview = json.loads(body)
+        self.assertFalse(list(destination.iterdir()))
+        headers, body = request(server, self.prefix+'api/operations/start', 'POST', {'token': preview['token']}, origin=origin)
+        self.assertIn('200 OK', headers)
+        identifier = json.loads(body)['id']
+        deadline = time.monotonic()+5
+        while time.monotonic()<deadline:
+            job = json.loads(request(server, self.prefix+'api/operations/'+identifier)[1])
+            if job['status'] != 'running':
+                break
+            time.sleep(.01)
+        self.assertEqual(job['status'], 'complete')
+        self.assertEqual(Path(job['items'][0]['target']).read_bytes(), before[0])
+        self.assertEqual((photo.read_bytes(), photo.stat().st_mtime_ns), before)
 
     def test_csv_download_uses_safe_attachment_name(self):
         name = '影片"清单.csv'

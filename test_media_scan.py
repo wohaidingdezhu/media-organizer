@@ -405,6 +405,26 @@ class MediaTests(unittest.TestCase):
             self.assertEqual(len(issues), 1)
             self.assertTrue(source.is_file())
 
+    def test_photo_wall_previews_work_without_similar_candidates_and_respect_limit(self):
+        helper = scan.BASE/'native'/'image_probe'
+        if not scan.helper_available(helper):
+            self.skipTest('native ImageIO component unavailable')
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            report = root/'report';report.mkdir()
+            records, before = [], {}
+            for index in range(2):
+                source = root/f'photo-{index}.png'
+                sample_png(source, str(index))
+                before[str(source)] = (source.read_bytes(), source.stat().st_mtime_ns)
+                records.append({'path': str(source), 'kind': '照片', '_signature': scan.signature(source.stat())})
+            issues = []
+            previews = scan.export_previews(report, records, {'pairs': []}, helper, issues, photo_limit=1)
+            self.assertEqual(len(previews), 1)
+            self.assertTrue((report/next(iter(previews.values()))).is_file())
+            self.assertEqual(issues, [])
+            self.assertEqual(before, {path: (Path(path).read_bytes(), Path(path).stat().st_mtime_ns) for path in before})
+
     def test_native_image_helper_rejects_symlink_source_and_output(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)

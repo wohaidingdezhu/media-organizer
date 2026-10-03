@@ -47,6 +47,7 @@ class MediaActions:
         if not isinstance(roots, list):
             roots = []
         roots = [Path(root) for root in roots if isinstance(root, str) and Path(root).is_absolute()]
+        self.roots = roots
         files = document.get("files", [])
         if not isinstance(files, list):
             files = []
