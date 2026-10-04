@@ -91,7 +91,15 @@ def check_target(destination, relative):
         os.close(descriptor)
 
 
-def copy_one(media, identifier, destination, relative, expected, dest_identity=None, progress=None):
+class OperationCancelled(ValueError):
+    """A cooperative stop before publishing the current copy."""
+
+
+def copy_one(media, identifier, destination, relative, expected, dest_identity=None, progress=None, cancelled=None):
+    def check_cancelled():
+        if cancelled and cancelled():
+            raise OperationCancelled("已安全停止当前复制，未完成的临时副本已清理；原件保留")
+    check_cancelled()
     record, info = media.validate(identifier)
     if file_signature(info) != expected:
         raise ValueError("文件自预览后发生变化")
@@ -120,10 +128,11 @@ def copy_one(media, identifier, destination, relative, expected, dest_identity=N
         temporary_created = True
         digest, amount = hashlib.sha256(), 0
         next_update = 0
-        if progress:
-            progress(0, "copying")
         with os.fdopen(output, "wb") as stream:
+            if progress:
+                progress(0, "copying")
             while True:
+                check_cancelled()
                 chunk = os.read(source, 4 * 1024 * 1024)
                 if not chunk:
                     break
@@ -151,6 +160,7 @@ def copy_one(media, identifier, destination, relative, expected, dest_identity=N
         descriptor = os.open(temporary, FLAGS, dir_fd=parent)
         with os.fdopen(descriptor, "rb") as stream:
             for chunk in iter(lambda: stream.read(4 * 1024 * 1024), b""):
+                check_cancelled()
                 verify.update(chunk)
                 verified += len(chunk)
                 if progress and time.monotonic() >= next_update:
@@ -158,19 +168,22 @@ def copy_one(media, identifier, destination, relative, expected, dest_identity=N
                     next_update = time.monotonic() + 1
         if verify.hexdigest() != expected_hash:
             raise ValueError("目标副本 SHA-256 校验失败")
+        check_cancelled()
         # Exclusive publication: an existing file is never replaced.
         os.link(temporary, parts[-1], src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
         if progress:
             progress(verified, "verified")
         return {"target": str(Path(destination) / relative), "sha256": expected_hash}
     finally:
-        if temporary_created:
-            os.unlink(temporary, dir_fd=parent)
-        if source is not None:
-            os.close(source)
-        if source_parent is not None:
-            os.close(source_parent)
-        os.close(parent)
+        try:
+            if temporary_created:
+                os.unlink(temporary, dir_fd=parent)
+        finally:
+            if source is not None:
+                os.close(source)
+            if source_parent is not None:
+                os.close(source_parent)
+            os.close(parent)
 
 
 def trash_helper():
@@ -226,6 +239,43 @@ class FileOperations:
         self.lock = _STATE_LOCK
         self.report_key = os.path.abspath(self.report_dir)
         self.previews, self.jobs = {}, {}
+
+    def _stop_requested(self, identifier):
+        parent = open_directory(self.report_dir / "operations")
+        try:
+            try:
+                fd = os.open(".stop-" + identifier, FLAGS, dir_fd=parent)
+            except FileNotFoundError:
+                return False
+            try:
+                info = os.fstat(fd)
+                if not stat.S_ISREG(info.st_mode) or info.st_size != 0:
+                    raise ValueError("停止请求记录无效，请先核对操作记录")
+                return True
+            finally:
+                os.close(fd)
+        finally:
+            os.close(parent)
+
+    def request_stop(self, identifier):
+        with self.lock:
+            job = self.snapshot(identifier)  # Validates the identifier and report scope.
+            if job["status"] not in {"running", "external_running"}:
+                return job  # A late or repeated request never changes finished work.
+            parent = open_directory(self.report_dir / "operations")
+            try:
+                try:
+                    fd = os.open(".stop-" + identifier, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
+                except FileExistsError:
+                    self._stop_requested(identifier)
+                else:
+                    try:
+                        os.fsync(fd)
+                    finally:
+                        os.close(fd)
+            finally:
+                os.close(parent)
+            return self.snapshot(identifier)
 
     def _job_lock(self):
         directory = self.report_dir / "operations"
@@ -408,7 +458,8 @@ class FileOperations:
             if not _BATCH_LOCK.acquire(blocking=False):
                 raise ValueError("有文件操作正在执行，请等待完成")
             job = {"id": secrets.token_hex(12), "mode": preview["mode"], "status": "running",
-                   "created_at": time.strftime("%Y-%m-%d %H:%M:%S"), "items": [], "total": len(preview["items"])}
+                   "created_at": time.strftime("%Y-%m-%d %H:%M:%S"), "items": [], "total": len(preview["items"]),
+                   "planned_items": [{key: item[key] for key in ("path", "target", "bytes")} for item in preview["items"]]}
             descriptor = None
             try:
                 try:
@@ -440,8 +491,16 @@ class FileOperations:
             return json.loads(json.dumps(job))
 
     def _run(self, job, preview, batch_descriptor):
+        def cancelled():
+            requested = self._stop_requested(job["id"])
+            if requested:
+                with self.lock:
+                    job["stop_requested"] = True
+            return requested
         try:
             for item in preview["items"]:
+                if cancelled():
+                    break
                 result = {"path": item["path"], "target": item["target"], "status": "processing", "bytes": item["bytes"]}
                 with self.lock:
                     job["items"].append(result)
@@ -458,13 +517,19 @@ class FileOperations:
                             with self.lock:
                                 result.update(processed_bytes=amount, phase=phase)
                                 self._save_job(job)
-                        answer = copy_one(self.media, item["id"], preview["destination"], item["relative"], item["signature"], preview["dest_identity"], progress)
+                        answer = copy_one(self.media, item["id"], preview["destination"], item["relative"], item["signature"], preview["dest_identity"], progress, cancelled)
                     else:
                         current = {record["id"]: record for record in self.plan().snapshot()["items"]}
                         self._check_kept_duplicates([entry["id"] for entry in preview["items"]], current)
+                        if cancelled():
+                            raise OperationCancelled("已停止，当前文件未移到废纸篓")
                         answer = trash_one(self.media, item["id"], item["signature"])
                     with self.lock:
                         result.update(answer, status="success")
+                except OperationCancelled as error:
+                    with self.lock:
+                        result.update(status="cancelled", error=str(error))
+                    break
                 except OutcomeUnknown as error:
                     with self.lock:
                         result.update(status="unknown", error=str(error))
@@ -477,7 +542,13 @@ class FileOperations:
                     with self.lock:
                         self._save_job(job)
             with self.lock:
-                job["status"] = "complete" if len(job["items"]) == job["total"] and all(item["status"] == "success" for item in job["items"]) else "stopped"
+                success = all(item["status"] == "success" for item in job["items"])
+                if len(job["items"]) == job["total"] and success:
+                    job["status"] = "complete"
+                elif (job.get("stop_requested") or any(item["status"] == "cancelled" for item in job["items"])) and not any(item["status"] in {"failed", "unknown"} for item in job["items"]):
+                    job["status"] = "cancelled"
+                else:
+                    job["status"] = "stopped"
                 self._save_job(job)
         except (OSError, ValueError) as error:
             with self.lock:
@@ -500,13 +571,18 @@ class FileOperations:
             os.close(descriptor)
         if (not isinstance(job, dict) or job.get("id") != identifier
                 or job.get("mode") not in {"copy", "trash"}
-                or job.get("status") not in {"running", "complete", "stopped"}
+                or job.get("status") not in {"running", "complete", "stopped", "cancelled"}
                 or type(job.get("total")) is not int or not 1 <= job["total"] <= 200
                 or not isinstance(job.get("items"), list) or len(job["items"]) > job["total"]
-                or any(not isinstance(item, dict) or item.get("status") not in {"processing", "success", "failed", "unknown"}
+                or any(not isinstance(item, dict) or item.get("status") not in {"processing", "success", "failed", "unknown", "cancelled"}
                        or not isinstance(item.get("path"), str) or not isinstance(item.get("target"), str)
                        for item in job["items"])):
             raise ValueError("操作记录无效")
+        planned = job.get("planned_items")
+        if planned is not None and (not isinstance(planned, list) or len(planned) != job["total"]
+                or any(not isinstance(item, dict) or not isinstance(item.get("path"), str)
+                       or not isinstance(item.get("target"), str) for item in planned)):
+            raise ValueError("批次文件清单无效")
         return job
 
     def snapshot(self, identifier):
@@ -514,14 +590,20 @@ class FileOperations:
             if not isinstance(identifier, str) or len(identifier) != 24 or any(char not in "0123456789abcdef" for char in identifier):
                 raise ValueError("操作记录不存在")
             if identifier in self.jobs:
-                return json.loads(json.dumps(self.jobs[identifier]))
+                job = json.loads(json.dumps(self.jobs[identifier]))
+                if job["status"] == "running":
+                    job["stop_requested"] = self._stop_requested(identifier)
+                return job
             active = _ACTIVE_JOBS.get((self.report_key, identifier))
             if active is not None:
-                return json.loads(json.dumps(active))
+                job = json.loads(json.dumps(active))
+                job["stop_requested"] = self._stop_requested(identifier)
+                return job
             job = self._read_job(identifier)
             if job.get("status") == "running":
                 if self._record_is_active(identifier):
                     job["status"] = "external_running"
+                    job["stop_requested"] = self._stop_requested(identifier)
                     job["error"] = "另一服务正在执行此操作，进度会自动更新。请保持执行服务运行。"
                 else:
                     # The owning process may have finished just before the lock probe.

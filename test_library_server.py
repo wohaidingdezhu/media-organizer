@@ -192,6 +192,18 @@ class ReportServerTests(unittest.TestCase):
             file_operations._BATCH_LOCK.release()
         self.assertEqual(json.loads(request(server, self.prefix+'api/organization')[1]), before)
 
+    def test_stop_requires_same_origin_and_known_report_job(self):
+        server = self.server()
+        for origin in (None, 'http://evil.example'):
+            headers, _ = request(server, self.prefix+'api/operations/stop', 'POST',
+                                 {'id': 'a'*24}, origin=origin)
+            self.assertIn('403 Forbidden', headers)
+        for identifier in ('../escape', 'a'*24):
+            headers, _ = request(server, self.prefix+'api/operations/stop', 'POST',
+                                 {'id': identifier}, origin=f'http://127.0.0.1:{server.server_port}')
+            self.assertIn('400 Bad Request', headers)
+        self.assertFalse((self.report/'operations').exists())
+
     def test_csv_download_uses_safe_attachment_name(self):
         name = '影片"清单.csv'
         content = '影片,数量\n例子,1\n'.encode()

@@ -32,14 +32,32 @@ $('execution-start').onclick=async()=>{
 };
 function activeOperation(job){return ['running','external_running'].includes(job.status);}
 function operationCard(job){
-  const box=make('div','operation'),state={running:'执行中',external_running:'另一服务执行中',complete:'已完成',stopped:'已停止',interrupted:'服务曾中断'};
+  const box=make('div','operation'),state={running:'执行中',external_running:'另一服务执行中',complete:'已完成',stopped:'遇到问题已停止',cancelled:'已安全停止',interrupted:'服务曾中断'};
   box.append(make('strong','',`${job.mode==='copy'?'复制分类':'废纸篓清理'} · ${state[job.status]||job.status} · ${job.items.filter(item=>item.status==='success').length}/${job.total}`),make('p','muted',job.created_at||''));
+  if(activeOperation(job)){
+    const stop=make('button','',job.stop_requested?'正在安全停止…':'安全停止此批次');
+    stop.disabled=!!job.stop_requested;stop.onclick=()=>stopOperation(job.id,stop);box.append(stop);
+    box.append(make('p','muted',job.mode==='copy'?'停止会清理当前未完成临时副本，已完成副本保留；磁盘正在响应时可能需要等待。':'当前文件的系统废纸篓操作会完成，再停止后续项；不会自动恢复已成功项。'));
+  }
   if(job.error)box.append(make('p','warning',job.error));
   for(const item of job.items){
-    const text=make('pre','',`${item.status==='success'?'成功':item.status==='processing'?(activeOperation(job)?`正在${({copying:'复制',verifying:'校验副本',verified:'完成校验'})[item.phase]||'处理'}${job.mode==='copy'?'（'+fileSize(item.processed_bytes||0)+' / '+fileSize(item.bytes||0)+'）':''}`:'处理结果待确认'):item.status==='unknown'?'结果未确认':'失败'}：${item.path}\n→ ${item.trashed_path||item.target}${item.error?'\n'+item.error:''}`);
+    const text=make('pre','',`${item.status==='success'?'成功':item.status==='cancelled'?'已取消，原件保留':item.status==='processing'?(activeOperation(job)?`正在${({copying:'复制',verifying:'校验副本',verified:'完成校验'})[item.phase]||'处理'}${job.mode==='copy'?'（'+fileSize(item.processed_bytes||0)+' / '+fileSize(item.bytes||0)+'）':''}`:'处理结果待确认'):item.status==='unknown'?'结果未确认':'失败'}：${item.path}\n→ ${item.trashed_path||item.target}${item.error?'\n'+item.error:''}`);
     box.append(text);
   }
+  const started=new Set(job.items.map(item=>item.path)),pending=(job.planned_items||[]).filter(item=>!started.has(item.path));
+  if(pending.length){
+    const details=make('details'),summary=make('summary','',`${activeOperation(job)?'尚未开始':'未处理'} ${pending.length} 个文件（原位置保留）`);details.append(summary);
+    for(const item of pending)details.append(make('pre','',item.path+'\n→ '+item.target));box.append(details);
+  }else if(!job.planned_items&&job.total>job.items.length){box.append(make('p','warning',`还有 ${job.total-job.items.length} 项未记录处理结果。旧记录没有完整批次清单，请对照报告核对。`));}
   box.append(make('p','muted','记录保存在本次报告的 operations 文件夹。已成功项不会自动撤销；结果未确认时先在 Finder 核对。'));return box;
+}
+async function stopOperation(id,button){
+  button.disabled=true;
+  try{
+    await api('api/operations/stop',{id});
+    $('notice').textContent='已请求安全停止，请等待逐项结果；已完成项保留。';
+  }catch(err){error('停止请求未确认，请查看进度后重试：'+err.message);}
+  refreshOperations();
 }
 async function refreshOperations(){
   clearTimeout(operationTimer);
@@ -56,12 +74,12 @@ async function refreshOperations(){
     }
     if(wasRetrying)error();
     if(result.jobs.some(activeOperation)){
-      $('notice').textContent='文件操作执行中，进度会自动更新。请保持本机服务运行；完成前暂停修改计划。';
+      $('notice').textContent=result.jobs.some(job=>activeOperation(job)&&job.stop_requested)?'正在安全停止，请保持本机服务运行，等待当前文件结果。':'文件操作执行中，进度会自动更新。请保持本机服务运行；完成前暂停修改计划。';
       operationTimer=setTimeout(refreshOperations,1000);
     }else if((result.warnings||[]).length){
       $('notice').textContent='部分操作记录无法读取，暂时锁定文件操作。请先核对记录与 Finder，再点击“读取操作记录”。';
     }else if(wasBusy&&result.jobs.length){
-      $('notice').textContent=result.jobs[0].status==='complete'?'操作完成，请重新扫描更新文件清单。':'操作已停止，请查看逐项结果；成功项保留，未确认项先在 Finder 核对。';
+      $('notice').textContent=result.jobs[0].status==='complete'?'操作完成，请重新扫描更新文件清单。':result.jobs[0].status==='cancelled'?'已安全停止，已成功项保留。请查看未处理文件清单，重新选择后预览。':'操作已停止，请查看逐项结果；成功项保留，未确认项先在 Finder 核对。';
     }else if(wasRetrying){$('notice').textContent='已恢复连接，没有正在执行的文件操作。';}
     if(!result.jobs.length&&!(result.warnings||[]).length)$('operations').append(make('p','','本次扫描还没有文件操作记录。'));
     render();

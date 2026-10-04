@@ -315,7 +315,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
         def do_POST(self):
             route = self.route()
             if route not in {"api/tags", "api/tags/toggle", "api/organization", "api/media/action", "api/notes",
-                             "api/operations/preview", "api/operations/start", "api/operations/destination"}:
+                             "api/operations/preview", "api/operations/start", "api/operations/stop", "api/operations/destination"}:
                 self.send_error(404)
                 return
             origin = self.headers.get("Origin")
@@ -341,6 +341,9 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     return
                 if route == "api/operations/start":
                     self.send_json(200, operations.start(payload["token"]))
+                    return
+                if route == "api/operations/stop":
+                    self.send_json(200, operations.request_stop(payload["id"]))
                     return
                 if route == "api/operations/destination":
                     if sys.platform != "darwin":

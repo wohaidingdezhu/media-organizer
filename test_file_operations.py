@@ -61,6 +61,7 @@ class OperationTests(unittest.TestCase):
         reopened = operations.FileOperations(self.report, self.media, lambda: self.plan)
         self.assertEqual(reopened.snapshot(job['id']), job)
         self.assertEqual(reopened.history()['jobs'][0], job)
+        self.assertEqual(reopened.request_stop(job['id']), job)
         self.assertEqual((self.report/'operations'/f"{job['id']}.json").stat().st_mode & 0o777, 0o600)
         with self.assertRaises(ValueError):
             self.ops.start(preview['token'])
@@ -231,7 +232,7 @@ class OperationTests(unittest.TestCase):
         entered, release = threading.Event(), threading.Event()
         original = operations.copy_one
         def paused_copy(*args):
-            args[-1](23, 'copying')
+            args[-2](23, 'copying')
             entered.set()
             if not release.wait(5):
                 raise ValueError('generated test timed out')
@@ -264,12 +265,14 @@ class OperationTests(unittest.TestCase):
         lock = self.report/'operations'/'.batch-lock'
         lock.write_text(identifier)
         script = ('import fcntl,os,sys; fd=os.open(sys.argv[1],os.O_RDWR); '
-                  'fcntl.flock(fd,fcntl.LOCK_EX); print("locked",flush=True); sys.stdin.read(1)')
-        child = subprocess.Popen([sys.executable, '-c', script, str(lock)],
+                  'fcntl.flock(fd,fcntl.LOCK_EX); print("locked",flush=True); sys.stdin.read(1); '
+                  'assert os.path.isfile(sys.argv[2]); print("stop received",flush=True)')
+        child = subprocess.Popen([sys.executable, '-c', script, str(lock), str(lock.parent/('.stop-'+identifier))],
                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         try:
             self.assertEqual(child.stdout.readline().strip(), 'locked')
             self.assertEqual(self.ops.snapshot(identifier)['status'], 'external_running')
+            self.assertTrue(self.ops.request_stop(identifier)['stop_requested'])
             preview = self.ops.preview('copy', self.ids[:1], str(self.destination))
             with self.assertRaisesRegex(ValueError, '另一服务'):
                 self.ops.start(preview['token'])
@@ -277,7 +280,8 @@ class OperationTests(unittest.TestCase):
                 self.ops.update_plan(lambda: self.plan.set_states(self.ids, 'hold'))
             self.assertEqual(list(self.destination.iterdir()), [])
         finally:
-            child.communicate('x', timeout=5)
+            output, _ = child.communicate('x', timeout=5)
+            self.assertIn('stop received', output)
         self.assertEqual(self.ops.snapshot(identifier)['status'], 'interrupted')
         self.assertEqual(self.ops.update_plan(lambda: self.plan.set_states(self.ids, 'hold'))['counts']['hold'], 2)
 
@@ -327,3 +331,143 @@ class OperationTests(unittest.TestCase):
             return False
         with mock.patch.object(self.ops, '_record_is_active', side_effect=finished_before_probe):
             self.assertEqual(self.ops.snapshot(identifier)['status'], 'complete')
+
+    def test_cancel_copy_during_transfer_and_verification_cleans_only_temporary(self):
+        record = self.records[0]
+        for phase in ('copying', 'verifying'):
+            stop = threading.Event()
+            def progress(amount, current):
+                if current == phase and amount > 0:
+                    stop.set()
+            with self.subTest(phase=phase), self.assertRaises(operations.OperationCancelled):
+                operations.copy_one(self.media, self.ids[0], str(self.destination), record['suggested_path'],
+                    record['source_signature'], progress=progress, cancelled=stop.is_set)
+            self.assertEqual(list(self.destination.rglob('*.png')), [])
+            self.assertFalse(any(path.name.startswith('.media-copy-') for path in self.destination.rglob('*')))
+            self.assertEqual(Path(record['path']).read_bytes(), self.before[record['path']][0])
+
+    def test_stop_before_first_file_keeps_complete_pending_list(self):
+        preview = self.ops.preview('copy', self.ids, str(self.destination))
+        queued = []
+        with mock.patch.object(operations.threading.Thread, 'start', autospec=True, side_effect=queued.append):
+            job = self.ops.start(preview['token'])
+        try:
+            self.assertTrue(self.ops.request_stop(job['id'])['stop_requested'])
+            self.assertTrue(self.ops.request_stop(job['id'])['stop_requested'])
+        finally:
+            queued[0].run()
+        result = self.ops.snapshot(job['id'])
+        self.assertEqual(result['status'], 'cancelled')
+        self.assertEqual(result['items'], [])
+        self.assertEqual([item['path'] for item in result['planned_items']], [record['path'] for record in self.records])
+        self.assertFalse(any(self.destination.iterdir()))
+        self.assertEqual(self.ops.request_stop(job['id']), result)
+        self.assertEqual(operations.FileOperations(self.report, self.media, lambda: self.plan).snapshot(job['id']), result)
+
+    def test_stop_after_copy_is_published_keeps_verified_copy(self):
+        record = self.records[0]
+        stop = threading.Event()
+        def progress(amount, phase):
+            if phase == 'verified':
+                stop.set()
+        result = operations.copy_one(self.media, self.ids[0], str(self.destination), record['suggested_path'],
+            record['source_signature'], progress=progress, cancelled=stop.is_set)
+        self.assertTrue(stop.is_set())
+        self.assertEqual(Path(result['target']).read_bytes(), self.before[record['path']][0])
+        self.assertEqual(result['sha256'], record['sha256'])
+        self.assertFalse(list(self.destination.rglob('.media-copy-*')))
+
+    def test_stop_from_second_viewer_keeps_completed_copy_and_releases_locks(self):
+        entered, release = threading.Event(), threading.Event()
+        original = operations.copy_one
+        count = 0
+        def pause_second(*args):
+            nonlocal count
+            count += 1
+            if count == 2:
+                entered.set()
+                if not release.wait(5):
+                    raise ValueError('generated test timeout')
+            return original(*args)
+        reopened = operations.FileOperations(self.report, self.media, lambda: self.plan)
+        preview = self.ops.preview('copy', self.ids, str(self.destination))
+        with mock.patch.object(operations, 'copy_one', side_effect=pause_second):
+            job = self.ops.start(preview['token'])
+            try:
+                self.assertTrue(entered.wait(2))
+                self.assertTrue(reopened.request_stop(job['id'])['stop_requested'])
+            finally:
+                release.set()
+                result = self.finished(job['id'])
+        self.assertEqual(result['status'], 'cancelled')
+        self.assertEqual([item['status'] for item in result['items']], ['success', 'cancelled'])
+        self.assertEqual(Path(result['items'][0]['target']).read_bytes(), self.before[result['items'][0]['path']][0])
+        self.assertFalse(Path(result['items'][1]['target']).exists())
+        self.ops.update_plan(lambda: self.plan.set_states(self.ids, 'hold'))
+
+    def test_stop_trash_waits_for_current_system_result_and_preserves_unknown_outcome(self):
+        for unknown in (False, True):
+            entered, release = threading.Event(), threading.Event()
+            def paused_trash(*args):
+                entered.set()
+                if not release.wait(5):
+                    raise ValueError('generated test timeout')
+                if unknown:
+                    raise operations.OutcomeUnknown('generated uncertain system result')
+                return {'trashed_path': '/synthetic/Trash/generated.png'}
+            with self.subTest(unknown=unknown), mock.patch.object(operations, 'trash_helper', return_value=Path('/synthetic/trash')):
+                preview = self.ops.preview('trash', self.ids)
+                with mock.patch.object(operations, 'trash_one', side_effect=paused_trash) as trash:
+                    job = self.ops.start(preview['token'])
+                    try:
+                        self.assertTrue(entered.wait(2))
+                        self.ops.request_stop(job['id'])
+                    finally:
+                        release.set()
+                        result = self.finished(job['id'])
+                    self.assertEqual(trash.call_count, 1)
+            self.assertEqual(result['status'], 'stopped' if unknown else 'cancelled')
+            self.assertEqual(result['items'][0]['status'], 'unknown' if unknown else 'success')
+            self.assertEqual(len(result['planned_items']), 2)
+        self.assertEqual(self.before, {path: (Path(path).read_bytes(), Path(path).stat().st_mtime_ns) for path in self.before})
+
+    def test_stop_marker_symlink_is_rejected_and_does_not_touch_target(self):
+        preview = self.ops.preview('copy', self.ids[:1], str(self.destination))
+        queued = []
+        with mock.patch.object(operations.threading.Thread, 'start', autospec=True, side_effect=queued.append):
+            job = self.ops.start(preview['token'])
+        marker = self.report/'operations'/('.stop-'+job['id'])
+        victim = self.root/'generated-unrelated.txt';victim.write_bytes(b'keep this sample')
+        marker.symlink_to(victim)
+        try:
+            with self.assertRaises(OSError):
+                self.ops.request_stop(job['id'])
+        finally:
+            queued[0].run()
+        self.assertEqual(self.ops.snapshot(job['id'])['status'], 'stopped')
+        self.assertEqual(victim.read_bytes(), b'keep this sample')
+        self.assertEqual(list(self.destination.iterdir()), [])
+
+    def test_cleanup_failure_is_reported_as_problem_instead_of_safe_stop(self):
+        original_copy, original_unlink = operations.copy_one, operations.os.unlink
+        def stop_after_transfer(*args):
+            progress = args[-2]
+            def stop(amount, phase):
+                progress(amount, phase)
+                if phase == 'copying' and amount > 0:
+                    self.ops.request_stop(next(iter(self.ops.jobs)))
+            return original_copy(*args[:-2], stop, args[-1])
+        def fail_only_generated_temporary(path, *args, **kwargs):
+            if str(path).startswith('.media-copy-'):
+                raise OSError('generated temporary cleanup failure')
+            return original_unlink(path, *args, **kwargs)
+        preview = self.ops.preview('copy', self.ids, str(self.destination))
+        with mock.patch.object(operations, 'copy_one', side_effect=stop_after_transfer), \
+             mock.patch.object(operations.os, 'unlink', side_effect=fail_only_generated_temporary):
+            result = self.finished(self.ops.start(preview['token'])['id'])
+        self.assertEqual(result['status'], 'stopped')
+        self.assertEqual(result['items'][0]['status'], 'failed')
+        self.assertIn('cleanup failure', result['items'][0]['error'])
+        self.assertEqual(len(list(self.destination.rglob('.media-copy-*'))), 1)
+        self.assertFalse(Path(result['items'][0]['target']).exists())
+        self.assertEqual(self.before, {path: (Path(path).read_bytes(), Path(path).stat().st_mtime_ns) for path in self.before})
