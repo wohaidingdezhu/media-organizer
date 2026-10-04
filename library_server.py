@@ -19,7 +19,7 @@ import webbrowser
 from organization_plan import OrganizationPlan
 from media_actions import MediaActions
 from file_operations import FileOperations
-from media_catalog import photo_catalog, root_status, previous_scan, load_notes, save_notes, clean_note
+from media_catalog import photo_catalog, root_status, previous_scan, load_notes, save_notes, clean_note, exact_duplicate_catalog
 
 
 MAX_TAG_FILE = 1024 * 1024
@@ -171,6 +171,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
     note_path = output_dir / "library-notes.json"
     operations = FileOperations(report_dir, media, get_organization)
     changes = None
+    duplicate_data = None
 
     def read_document(path):
         with _open_report_file(path, ("report.json",)) as stream:
@@ -214,7 +215,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
             self.wfile.write(body)
 
         def do_GET(self):
-            nonlocal changes
+            nonlocal changes, duplicate_data
             route = self.route()
             if route is None:
                 self.send_error(404)
@@ -222,10 +223,14 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
             if route == "api/media":
                 self.send_json(200, media.snapshot())
                 return
-            if route in {"api/photos", "api/roots", "api/changes", "api/notes", "api/operations"} or route.startswith("api/operations/"):
+            if route in {"api/photos", "api/duplicates", "api/roots", "api/changes", "api/notes", "api/operations"} or route.startswith("api/operations/"):
                 try:
                     if route == "api/photos":
                         result = photo_catalog(document)
+                    elif route == "api/duplicates":
+                        if duplicate_data is None:
+                            duplicate_data = exact_duplicate_catalog(document)
+                        result = duplicate_data
                     elif route == "api/roots":
                         result = root_status(media.roots)
                     elif route == "api/changes":
@@ -292,6 +297,9 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     if b"@@MANAGEMENT@@" in body:
                         with _open_report_file(Path(__file__).resolve().parent, ("management.js",)) as script:
                             body = body.replace(b"@@MANAGEMENT@@", script.read())
+                    if b"@@DUPLICATE_REVIEW@@" in body:
+                        with _open_report_file(Path(__file__).resolve().parent, ("duplicate_review.js",)) as script:
+                            body = body.replace(b"@@DUPLICATE_REVIEW@@", script.read())
                 if dashboard_link and route in {"report.html", "library.html", "organize.html", "photos.html"}:
                     if body is None:
                         body = stream.read()

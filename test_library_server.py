@@ -204,6 +204,26 @@ class ReportServerTests(unittest.TestCase):
             self.assertIn('400 Bad Request', headers)
         self.assertFalse((self.report/'operations').exists())
 
+    def test_duplicate_group_api_is_report_only_and_cached_with_current_ui(self):
+        from test_media_catalog import CatalogTests
+        document = CatalogTests().duplicate_document()
+        (self.report/'report.json').write_text(json.dumps(document))
+        before = (self.report/'report.json').read_bytes()
+        server = self.server()
+        with mock.patch.object(viewer, 'exact_duplicate_catalog', wraps=viewer.exact_duplicate_catalog) as catalog:
+            for _ in range(2):
+                headers, body = request(server, self.prefix+'api/duplicates')
+                self.assertIn('200 OK', headers)
+                self.assertEqual(json.loads(body)['counts']['groups'], 1)
+            self.assertEqual(catalog.call_count, 1)
+        headers, body = request(server, self.prefix+'organize.html')
+        self.assertIn('200 OK', headers)
+        self.assertIn('精确重复分组核对'.encode(), body)
+        self.assertNotIn(b'@@DUPLICATE_REVIEW@@', body)
+        self.assertIn(b'async function previewDuplicateGroup', body)
+        self.assertEqual((self.report/'report.json').read_bytes(), before)
+        self.assertFalse((self.report/'operations').exists())
+
     def test_csv_download_uses_safe_attachment_name(self):
         name = '影片"清单.csv'
         content = '影片,数量\n例子,1\n'.encode()

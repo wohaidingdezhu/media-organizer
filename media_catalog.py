@@ -1,5 +1,6 @@
 """Report-only photo catalog, movie notes and comparable scan changes."""
 import json
+import math
 import os
 from pathlib import Path
 import stat
@@ -7,6 +8,68 @@ import tempfile
 
 from file_operations import open_directory
 from media_actions import media_id
+
+
+def exact_duplicate_catalog(document):
+    """Use saved full hashes only; never open media or promote similar pairs."""
+    records = document.get("files", [])
+    groups = document.get("duplicates", [])
+    if not isinstance(records, list) or not isinstance(groups, list):
+        raise ValueError("扫描报告缺少有效文件清单或精确重复分组")
+    by_path, repeated = {}, set()
+    for record in records:
+        if isinstance(record, dict) and isinstance(record.get("path"), str):
+            path = record["path"]
+            if path in by_path:
+                repeated.add(path)
+            by_path[path] = record
+    memberships = {}
+    for group in groups:
+        if isinstance(group, dict) and isinstance(group.get("paths"), list):
+            for path in set(path for path in group["paths"] if isinstance(path, str)):
+                memberships[path] = memberships.get(path, 0) + 1
+    sidecars = {}
+    for item in document.get("sidecars", []) if isinstance(document.get("sidecars", []), list) else []:
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str) or not isinstance(item.get("media_paths"), list):
+            continue
+        for path in item["media_paths"]:
+            if isinstance(path, str):
+                sidecars.setdefault(path, {})[item["path"]] = {"path": item["path"], "status": str(item.get("status", "需核对"))}
+    result, warnings = [], []
+    for number, group in enumerate(groups, 1):
+        try:
+            if not isinstance(group, dict):
+                raise ValueError("分组格式无效")
+            digest, size, paths = group.get("sha256"), group.get("bytes_each"), group.get("paths")
+            if (not isinstance(digest, str) or len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest)
+                    or type(size) is not int or size <= 0 or not isinstance(paths, list) or len(paths) < 2
+                    or any(not isinstance(path, str) or not path or "\x00" in path for path in paths)
+                    or len(set(paths)) != len(paths)):
+                raise ValueError("缺少完整 SHA-256、大小或有效成员路径")
+            items = []
+            for path in paths:
+                record = by_path.get(path)
+                if (not record or path in repeated or memberships.get(path) != 1 or record.get("hardlink_to")
+                        or record.get("sha256") != digest or type(record.get("bytes")) is not int or record["bytes"] != size
+                        or not isinstance(record.get("kind"), str) or record["kind"] not in {"照片", "视频"}):
+                    raise ValueError("成员校验信息不完整、重叠或与分组不一致")
+                mtime = record.get("mtime")
+                try:
+                    valid_time = type(mtime) in {int, float} and math.isfinite(mtime) and abs(mtime) <= 8640000000000
+                except OverflowError:
+                    valid_time = False
+                items.append({"id": media_id(path), "path": path, "name": Path(path).name,
+                              "folder": str(Path(path).parent), "kind": record["kind"], "bytes": size,
+                              "mtime": mtime if valid_time else None,
+                              "sidecars": list(sidecars.get(path, {}).values())})
+            result.append({"number": number, "sha256": digest, "bytes_each": size,
+                           "redundant_logical_bytes": size * (len(items)-1), "items": items})
+        except ValueError as error:
+            warnings.append(f"精确重复第 {number} 组未展示：{error}；请核对报告或重新扫描。")
+    result.sort(key=lambda group: (-group["redundant_logical_bytes"], group["number"]))
+    return {"groups": result, "warnings": warnings,
+            "counts": {"groups": len(result), "files": sum(len(group["items"]) for group in result),
+                       "redundant_logical_bytes": sum(group["redundant_logical_bytes"] for group in result)}}
 
 
 def photo_catalog(document):
