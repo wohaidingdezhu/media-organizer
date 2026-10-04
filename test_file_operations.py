@@ -48,6 +48,95 @@ class OperationTests(unittest.TestCase):
             time.sleep(.01)
         self.fail('generated batch did not finish')
 
+    def recorded_job(self, number=1, mode='copy', status='cancelled', items=None):
+        job = {'id': f'{number:024x}', 'mode': mode, 'status': status,
+               'created_at': f'2026-10-04 12:00:{number:02d}', 'total': 2, 'items': items or [],
+               'planned_items': [{'path': record['path'], 'target': str(self.destination/record['suggested_path']),
+                                  'bytes': record['bytes']} for record in self.records]}
+        self.ops._save_job(job)
+        return job
+
+    def test_complete_history_keeps_old_handled_paths_beyond_recent_twenty(self):
+        old = self.recorded_job(mode='trash', status='complete')
+        old['items'] = [dict(item, status='success') for item in old['planned_items']]
+        self.ops._save_job(old)
+        for number in range(2, 23):
+            job = self.recorded_job(number, status='complete')
+            job['items'] = [dict(item, status='success') for item in job['planned_items']]
+            self.ops._save_job(job)
+        reopened = operations.FileOperations(self.report, self.media, lambda: self.plan)
+        with mock.patch.object(self.media, 'validate', side_effect=AssertionError('must not read originals')):
+            history = reopened.history()
+        self.assertEqual(history['record_count'], 22)
+        self.assertEqual(len(history['jobs']), 20)
+        self.assertNotIn(old['id'], [job['id'] for job in history['jobs']])
+        for mode in ('copy', 'trash'):
+            self.assertEqual(history['handled'][mode], sorted(self.before))
+
+    def test_remaining_excludes_success_in_other_batches_including_old_history(self):
+        job = self.recorded_job(24)
+        for number in range(1, 23):
+            other = self.recorded_job(number, status='complete')
+            other['planned_items'] = [other['planned_items'][0 if number == 1 else 1]]
+            other['total'] = 1
+            other['items'] = [dict(item, status='success') for item in other['planned_items']]
+            self.ops._save_job(other)
+        self.assertNotIn(f'{1:024x}', [entry['id'] for entry in self.ops.history()['jobs']])
+        with mock.patch.object(self.media, 'validate', side_effect=AssertionError('must not read originals')):
+            result = self.ops.remaining(job['id'])
+        self.assertEqual(result['ids'], [])
+        self.assertEqual(len(result['skipped']), 2)
+        self.assertTrue(all('成功' in item['reason'] for item in result['skipped']))
+
+    def test_remaining_only_selects_known_cancelled_or_unstarted_and_never_executes(self):
+        job = self.recorded_job()
+        job['items'] = [dict(job['planned_items'][0], status='cancelled')]
+        self.ops._save_job(job)
+        self.plan.set_target(self.ids[0], 'review-again/photo.png')
+        with mock.patch.object(self.media, 'validate', side_effect=AssertionError('must not read originals')), \
+             mock.patch.object(operations, 'copy_one') as copy, mock.patch.object(operations, 'trash_one') as trash:
+            result = self.ops.remaining(job['id'])
+            self.assertEqual(result['ids'], self.ids)
+            self.assertEqual(result['skipped'], [])
+            copy.assert_not_called(); trash.assert_not_called()
+        with self.assertRaises(ValueError):
+            self.ops.preview('copy', result['ids'], str(self.destination))
+        self.plan.set_states(self.ids, 'include')
+        preview = self.ops.preview('copy', result['ids'], str(self.destination))
+        self.assertTrue(preview['items'][0]['target'].endswith('/review-again/photo.png'))
+        self.assertFalse(any(self.destination.iterdir()))
+        self.assertEqual(self.before, {path: (Path(path).read_bytes(), Path(path).stat().st_mtime_ns) for path in self.before})
+
+    def test_remaining_skips_failed_unknown_processing_and_interrupted_results(self):
+        for state in ('failed', 'unknown', 'processing'):
+            job = self.recorded_job(status='stopped')
+            job['items'] = [dict(job['planned_items'][0], status=state)]
+            self.ops._save_job(job)
+            with self.subTest(state=state):
+                result = self.ops.remaining(job['id'])
+                self.assertEqual(result['ids'], self.ids[1:])
+                self.assertEqual(result['skipped'][0]['path'], self.records[0]['path'])
+        job = self.recorded_job(status='running')
+        with self.assertRaises(ValueError):
+            self.ops.remaining(job['id'])
+        other = self.recorded_job(2)
+        self.assertEqual(self.ops.remaining(other['id'])['ids'], [])
+
+    def test_remaining_refuses_broken_inventory_or_unreadable_history(self):
+        job = self.recorded_job()
+        broken = self.recorded_job(2, status='stopped')
+        broken['items'] = [dict(broken['planned_items'][0], target='/synthetic/inconsistent', status='cancelled')]
+        self.ops._save_job(broken)
+        with self.assertRaises(ValueError):
+            self.ops.remaining(job['id'])
+        self.assertEqual(len(self.ops.history()['warnings']), 1)
+        broken['items'] = []
+        broken['planned_items'][1] = broken['planned_items'][0]
+        self.ops._save_job(broken)
+        with self.assertRaises(ValueError):
+            self.ops.remaining(broken['id'])
+        self.assertFalse(any(self.destination.iterdir()))
+
     def test_copy_is_confirmed_verified_keeps_originals_and_records_survive_restart(self):
         preview = self.ops.preview('copy', self.ids, str(self.destination))
         self.assertFalse(any(self.destination.iterdir()))
@@ -247,6 +336,8 @@ class OperationTests(unittest.TestCase):
                 self.assertEqual(snapshot['status'], 'running')
                 self.assertEqual(snapshot['items'][0]['processed_bytes'], 23)
                 self.assertEqual(reopened.history()['jobs'][0], snapshot)
+                with self.assertRaises(ValueError):
+                    reopened.remaining(job['id'])
                 callback = mock.Mock()
                 with self.assertRaisesRegex(ValueError, '等待完成'):
                     reopened.update_plan(callback)
@@ -360,6 +451,7 @@ class OperationTests(unittest.TestCase):
         self.assertEqual(result['status'], 'cancelled')
         self.assertEqual(result['items'], [])
         self.assertEqual([item['path'] for item in result['planned_items']], [record['path'] for record in self.records])
+        self.assertEqual(self.ops.remaining(job['id'])['ids'], self.ids)
         self.assertFalse(any(self.destination.iterdir()))
         self.assertEqual(self.ops.request_stop(job['id']), result)
         self.assertEqual(operations.FileOperations(self.report, self.media, lambda: self.plan).snapshot(job['id']), result)
@@ -401,6 +493,7 @@ class OperationTests(unittest.TestCase):
                 result = self.finished(job['id'])
         self.assertEqual(result['status'], 'cancelled')
         self.assertEqual([item['status'] for item in result['items']], ['success', 'cancelled'])
+        self.assertEqual(reopened.remaining(job['id'])['ids'], self.ids[1:])
         self.assertEqual(Path(result['items'][0]['target']).read_bytes(), self.before[result['items'][0]['path']][0])
         self.assertFalse(Path(result['items'][1]['target']).exists())
         self.ops.update_plan(lambda: self.plan.set_states(self.ids, 'hold'))

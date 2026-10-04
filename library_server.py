@@ -243,6 +243,8 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                         result = {"groups": {key: notes.get(key, {"rating": 0, "note": ""}) for key in allowed_keys}}
                     elif route == "api/operations":
                         result = operations.history()
+                    elif route.endswith("/remaining"):
+                        result = operations.remaining(route.removeprefix("api/operations/").removesuffix("/remaining"))
                     else:
                         result = operations.snapshot(route.removeprefix("api/operations/"))
                     self.send_json(200, result)

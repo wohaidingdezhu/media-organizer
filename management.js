@@ -1,5 +1,6 @@
+function appendOperationStatus(item,parent){if(handledTrash.has(item.path))parent.append(make('p','warning','已移到废纸篓，请重新扫描更新清单'));else if(handledCopy.has(item.path))parent.append(make('span','badge status-include','已有复制成功记录 · 原件保留'));}
 function picture(item,parent){const photo=photos.get(item.id);if(photo&&/^previews\/[A-Za-z0-9_-]+\.png$/.test(photo.preview||'')){const img=make('img');img.src=photo.preview;img.alt=item.name;img.loading='lazy';img.onclick=()=>viewPictures([item]);parent.append(img);}else parent.append(make('div','photo-placeholder','预览未生成 · 可打开原图'));}
-function renderPhotos(){if(!data)return;$('photo-wall').replaceChildren();if($('view-mode').value!=='wall')return;for(const item of pageItems){const card=make('article','photo-card');picture(item,card);const label=make('label'),check=make('input');check.type='checkbox';check.checked=selected.has(item.id);check.disabled=saving||operating||handledTrash.has(item.path);check.setAttribute('aria-label','选择照片 '+item.name);check.onchange=()=>{if(check.checked)selected.add(item.id);else selected.delete(item.id);updateSelection();};label.append(check,make('strong','',item.name));card.append(label,make('div','path',item.path),make('div','muted',`${fileSize(item.bytes)} · ${(photos.get(item.id)||{}).month||'日期未提供'} · ${names[item.state]}`),make('div','reason',item.reason));if(handledTrash.has(item.path))card.append(make('p','warning','已移到废纸篓，请重新扫描更新清单'));if(item.duplicate_group)card.append(make('span','badge warning','精确重复第 '+item.duplicate_group+' 组'));if(mediaIds[item.path])for(const[action,text]of[['open','打开原图'],['reveal','在 Finder 定位']]){const button=make('button','',text);button.disabled=saving||operating||handledTrash.has(item.path);button.setAttribute('aria-label',text+' '+item.name);button.onclick=()=>openMedia(item,action,button);card.append(button);}const edit=make('button','','调整分类位置');edit.disabled=saving||operating;edit.onclick=()=>openEditor(item);card.append(edit);$('photo-wall').append(card);}if(!pageItems.length)$('photo-wall').append(make('p','empty','没有符合条件的照片。'));}
+function renderPhotos(){if(!data)return;$('photo-wall').replaceChildren();if($('view-mode').value!=='wall')return;for(const item of pageItems){const card=make('article','photo-card');picture(item,card);const label=make('label'),check=make('input');check.type='checkbox';check.checked=selected.has(item.id);check.disabled=saving||operating||handledTrash.has(item.path);check.setAttribute('aria-label','选择照片 '+item.name);check.onchange=()=>{if(check.checked)selected.add(item.id);else selected.delete(item.id);updateSelection();};label.append(check,make('strong','',item.name));card.append(label,make('div','path',item.path),make('div','muted',`${fileSize(item.bytes)} · ${(photos.get(item.id)||{}).month||'日期未提供'} · ${names[item.state]}`),make('div','reason',item.reason));appendOperationStatus(item,card);if(item.duplicate_group)card.append(make('span','badge warning','精确重复第 '+item.duplicate_group+' 组'));if(mediaIds[item.path])for(const[action,text]of[['open','打开原图'],['reveal','在 Finder 定位']]){const button=make('button','',text);button.disabled=saving||operating||handledTrash.has(item.path);button.setAttribute('aria-label',text+' '+item.name);button.onclick=()=>openMedia(item,action,button);card.append(button);}const edit=make('button','','调整分类位置');edit.disabled=saving||operating;edit.onclick=()=>openEditor(item);card.append(edit);$('photo-wall').append(card);}if(!pageItems.length)$('photo-wall').append(make('p','empty','没有符合条件的照片。'));}
 function viewPictures(items){$('picture-title').textContent=items.length===2?'并排比较照片':'照片预览';$('picture-body').replaceChildren();const grid=make('div',items.length===2?'compare-pictures':'');for(const item of items){const cell=make('div');picture(item,cell);cell.append(make('div','path',item.path));if(mediaIds[item.path]){const button=make('button','','打开原图');button.onclick=()=>openMedia(item,'open',button);cell.append(button);}grid.append(cell);}$('picture-body').append(grid);if(!$('picture-viewer').open)$('picture-viewer').showModal();}
 $('select-all-current').onclick=()=>{const items=pageItems.filter(item=>!handledTrash.has(item.path)),all=items.every(item=>selected.has(item.id));for(const item of items){if(all)selected.delete(item.id);else selected.add(item.id);}render();};
 $('picture-close').onclick=()=>$('picture-viewer').close();$('compare').onclick=()=>viewPictures(data.items.filter(item=>selected.has(item.id)));
@@ -14,8 +15,9 @@ $('choose-destination').onclick=async()=>{if(operating||saving)return;const butt
 async function previewOperation(mode){if(operating||saving||!selected.size)return;saving=true;error();$('notice').textContent='正在检查文件和目标位置…';render();try{executionPreview=await api('api/operations/preview',{mode,ids:[...selected],destination:$('destination').value.trim()});$('execution-title').textContent=mode==='copy'?'确认复制到分类目录':'确认移到废纸篓';$('execution-summary').textContent=`${executionPreview.items.length} 个文件 · ${fileSize(executionPreview.bytes)} · ${mode==='copy'?'复制后保留原件，目标副本使用 SHA-256 校验':'从原位置移到 macOS 废纸篓，可在 Finder 恢复；占用空间不一定立即释放'}`;$('execution-items').replaceChildren();for(const item of executionPreview.items){const row=make('li');row.append(make('div','path',item.path),make('div','path','→ '+item.target));$('execution-items').append(row);}$('execution-confirm').checked=false;$('execution-start').disabled=true;$('execution-error').hidden=true;$('execution').showModal();$('notice').textContent='检查完成，请在弹窗中核对。';}catch(err){error(err.message);$('notice').textContent='';}finally{saving=false;render();}}
 $('copy-files').onclick=()=>previewOperation('copy');$('trash-files').onclick=()=>previewOperation('trash');
 $('execution-confirm').onchange=()=>$('execution-start').disabled=!$('execution-confirm').checked||operating;
-$('execution-cancel').onclick=()=>{executionPreview=null;$('execution').close();};
-$('execution').addEventListener('cancel',event=>{if(operating)event.preventDefault();else executionPreview=null;});
+function cancelPreview(){executionPreview=null;$('notice').textContent='已取消预览，未执行文件操作。';}
+$('execution-cancel').onclick=()=>{cancelPreview();$('execution').close();};
+$('execution').addEventListener('cancel',event=>{if(operating)event.preventDefault();else cancelPreview();});
 $('execution-start').onclick=async()=>{
   if(!executionPreview||!$('execution-confirm').checked||operating)return;
   operating=true;monitorRevision++;clearTimeout(operationTimer);render();
@@ -49,7 +51,28 @@ function operationCard(job){
     const details=make('details'),summary=make('summary','',`${activeOperation(job)?'尚未开始':'未处理'} ${pending.length} 个文件（原位置保留）`);details.append(summary);
     for(const item of pending)details.append(make('pre','',item.path+'\n→ '+item.target));box.append(details);
   }else if(!job.planned_items&&job.total>job.items.length){box.append(make('p','warning',`还有 ${job.total-job.items.length} 项未记录处理结果。旧记录没有完整批次清单，请对照报告核对。`));}
+  if(['cancelled','stopped'].includes(job.status)&&!job.error&&job.planned_items&&(pending.length||job.items.some(item=>item.status==='cancelled'))){
+    const review=make('button','','核对此批次未处理项');review.disabled=operating||saving;
+    const result=make('div');result.setAttribute('role','status');
+    review.onclick=()=>reviewRemaining(job.id,review,result);box.append(review,result);
+  }
   box.append(make('p','muted','记录保存在本次报告的 operations 文件夹。已成功项不会自动撤销；结果未确认时先在 Finder 核对。'));return box;
+}
+async function reviewRemaining(id,button,result){
+  if(operating||saving||!data)return;
+  let showSelection=false;
+  saving=true;button.disabled=true;error();render();
+  try{
+    const advice=await api('api/operations/'+id+'/remaining');
+    selected=new Set(advice.ids);
+    showSelection=advice.ids.length>0;
+    for(const filter of filters)$(filter).value='';
+    $('risk').value='selected';$('view-mode').value='list';page=0;
+    result.replaceChildren(make('p','',`已勾选 ${advice.ids.length} 项，跳过 ${advice.skipped.length} 项。${advice.message}`));
+    if(advice.skipped.length){const details=make('details');details.append(make('summary','','查看跳过原因'));for(const item of advice.skipped)details.append(make('p','path',item.path+'：'+item.reason));result.append(details);}
+    $('notice').textContent=advice.ids.length?`已勾选 ${advice.ids.length} 个未处理文件。请核对分类位置与目标文件夹，再重新预览确认。`:'没有可直接继续核对的文件，请查看此批次的跳过原因。';
+  }catch(err){result.replaceChildren(make('p','warning',err.message));error(err.message);}
+  finally{saving=false;render();button.disabled=operating;if(showSelection)$('selection').scrollIntoView({block:'start'});}
 }
 async function stopOperation(id,button){
   button.disabled=true;
@@ -66,10 +89,11 @@ async function refreshOperations(){
     const result=await api('api/operations');if(revision!==monitorRevision)return;
     const wasBusy=operating,wasRetrying=monitorFailures>0;monitorFailures=0;
     operating=result.jobs.some(activeOperation)||(result.warnings||[]).length>0;
+    handledTrash=new Set(result.handled.trash);handledCopy=new Set(result.handled.copy);
+    $('operations-summary').textContent=`展示最近 ${result.jobs.length}/${result.record_count} 个批次；文件标记核对本报告的全部有效操作记录。成功记录不代表文件现在仍在目标位置，操作后请重新扫描。`;
     $('operations').replaceChildren();
     for(const warning of result.warnings||[])$('operations').append(make('p','warning',warning));
     for(const job of result.jobs){
-      if(job.mode==='trash')for(const item of job.items)if(item.status==='success')handledTrash.add(item.path);
       $('operations').append(operationCard(job));
     }
     if(wasRetrying)error();

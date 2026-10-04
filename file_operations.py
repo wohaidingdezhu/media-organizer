@@ -583,6 +583,13 @@ class FileOperations:
                 or any(not isinstance(item, dict) or not isinstance(item.get("path"), str)
                        or not isinstance(item.get("target"), str) for item in planned)):
             raise ValueError("批次文件清单无效")
+        started = {item["path"]: item["target"] for item in job["items"]}
+        if len(started) != len(job["items"]):
+            raise ValueError("操作记录包含重复文件")
+        if planned is not None:
+            targets = {item["path"]: item["target"] for item in planned}
+            if len(targets) != len(planned) or any(targets.get(path) != target for path, target in started.items()):
+                raise ValueError("批次文件清单与处理结果不一致")
         return job
 
     def snapshot(self, identifier):
@@ -614,12 +621,12 @@ class FileOperations:
                     job["error"] = "服务已停止，部分结果可能未确认。请核对原文件、目标位置或废纸篓后再处理。"
             return job
 
-    def history(self):
+    def _history(self):
         directory = self.report_dir / "operations"
         try:
             descriptor = open_directory(directory)
         except FileNotFoundError:
-            return {"jobs": []}
+            return {"jobs": [], "warnings": []}
         try:
             names = sorted((name[:-5] for name in os.listdir(descriptor) if name.endswith('.json')))
         finally:
@@ -631,4 +638,50 @@ class FileOperations:
             except (OSError, ValueError, TypeError) as error:
                 warnings.append("记录 " + identifier + " 读取失败：" + str(error))
         jobs.sort(key=lambda job: (job["status"] in {"running", "external_running"}, str(job.get("created_at", ""))), reverse=True)
-        return {"jobs": jobs[:20], "warnings": warnings}
+        return {"jobs": jobs, "warnings": warnings}
+
+    def history(self):
+        history = self._history()
+        handled = {"copy": set(), "trash": set()}
+        for job in history["jobs"]:
+            for item in job["items"]:
+                if item["status"] == "success":
+                    handled[job["mode"]].add(item["path"])
+        return {"jobs": history["jobs"][:20], "warnings": history["warnings"],
+                "record_count": len(history["jobs"]),
+                "handled": {mode: sorted(paths) for mode, paths in handled.items()}}
+
+    def remaining(self, identifier):
+        """Report-only selection advice; never retry or read original media here."""
+        job = self.snapshot(identifier)
+        if job["status"] not in {"cancelled", "stopped"} or job.get("error") or not job.get("planned_items"):
+            raise ValueError("此批次不能直接继续核对；请先检查逐项记录、原文件与目标位置")
+        history = self._history()
+        if history["warnings"] or any(entry["status"] in {"running", "external_running"} for entry in history["jobs"]):
+            raise ValueError("请等待正在执行的批次完成，或先核对无法读取的操作记录")
+        completed, uncertain = set(), set()
+        for entry in history["jobs"]:
+            completed.update(item["path"] for item in entry["items"] if item["status"] == "success")
+            uncertain.update(item["path"] for item in entry["items"] if item["status"] in {"processing", "unknown", "failed"})
+            if entry.get("error") or entry["status"] == "interrupted":
+                uncertain.update(item["path"] for item in entry.get("planned_items", []))
+        current = {item["path"]: item for item in self.plan().snapshot()["items"]}
+        results = {item["path"]: item["status"] for item in job["items"]}
+        identifiers, skipped = [], []
+        for item in job["planned_items"]:
+            path, reason = item["path"], None
+            record = current.get(path)
+            if path in uncertain:
+                reason = "曾失败或结果未确认，请先人工核对"
+            elif path in completed:
+                reason = "已有成功处理记录，跳过以避免重复操作"
+            elif results.get(path) not in {None, "cancelled"}:
+                reason = "此项不能作为未处理文件继续核对"
+            elif record is None or record["id"] not in self.media.records:
+                reason = "不在当前可操作媒体清单，请重新扫描"
+            if reason:
+                skipped.append({"path": path, "reason": reason})
+            else:
+                identifiers.append(record["id"])
+        return {"ids": identifiers, "skipped": skipped, "mode": job["mode"],
+                "message": "只勾选未开始或已安全取消的文件；请核对当前分类计划并重新预览，文件状态会在预览时检查。"}

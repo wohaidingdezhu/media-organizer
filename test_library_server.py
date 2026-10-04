@@ -204,6 +204,30 @@ class ReportServerTests(unittest.TestCase):
             self.assertIn('400 Bad Request', headers)
         self.assertFalse((self.report/'operations').exists())
 
+    def test_remaining_api_is_read_only_and_uses_current_report_ids(self):
+        path = self.report/'report.json'
+        document = json.loads(path.read_text())
+        document['roots'] = ['/synthetic']
+        for item in document['files']:
+            item['mtime'] = 0
+        path.write_text(json.dumps(document))
+        directory = self.report/'operations'; directory.mkdir()
+        job = {'id': 'a'*24, 'mode': 'copy', 'status': 'cancelled', 'total': 1, 'items': [],
+               'planned_items': [{'path': '/synthetic/photo.jpg', 'target': '/synthetic-target/photo.jpg', 'bytes': 12}]}
+        journal = directory/(job['id']+'.json'); journal.write_text(json.dumps(job))
+        before = {file: file.read_bytes() for file in (path, journal)}
+        server = self.server()
+        with mock.patch.object(file_operations, 'copy_one') as copy, mock.patch.object(file_operations, 'trash_one') as trash:
+            headers, body = request(server, self.prefix+'api/operations/'+job['id']+'/remaining')
+            self.assertIn('200 OK', headers)
+            self.assertEqual(json.loads(body)['ids'], [media_id('/synthetic/photo.jpg')])
+            copy.assert_not_called(); trash.assert_not_called()
+        self.assertEqual(before, {file: file.read_bytes() for file in before})
+        headers, body = request(server, self.prefix+'api/operations')
+        self.assertIn('200 OK', headers)
+        self.assertEqual(json.loads(body)['record_count'], 1)
+        self.assertEqual(json.loads(body)['handled'], {'copy': [], 'trash': []})
+
     def test_duplicate_group_api_is_report_only_and_cached_with_current_ui(self):
         from test_media_catalog import CatalogTests
         document = CatalogTests().duplicate_document()
