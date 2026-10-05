@@ -3,10 +3,55 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from media_catalog import compare_scans, photo_catalog, root_status, load_notes, save_notes, clean_note, exact_duplicate_catalog
+from media_catalog import compare_scans, photo_catalog, root_status, load_notes, save_notes, clean_note, exact_duplicate_catalog, storage_catalog
 
 
 class CatalogTests(unittest.TestCase):
+    def test_storage_uses_logical_report_sizes_and_keeps_same_named_folders_distinct(self):
+        document = self.duplicate_document()
+        document['roots'] = ['/synthetic', '/synthetic/travel']
+        document['files'][0]['suggested_path'] = '照片/2026/10/a.png'
+        document['files'][1]['suggested_path'] = '照片/日期未知/b.png'
+        document['files'] += [{'path': '/synthetic/other/travel/film.mp4', 'kind': '视频', 'bytes': 100},
+                              {'path': '/synthetic/other/link.png', 'kind': '照片', 'bytes': 5,
+                               'hardlink_to': '/synthetic/travel/a.png', 'suggested_path': '照片/2026/13/link.png'}]
+        result = storage_catalog(document)
+        self.assertEqual(result['logical_bytes'], 121)
+        self.assertEqual(result['duplicate_logical_bytes'], 5)
+        self.assertEqual(result['hardlink_references'], 1)
+        folders = {row['name']: row for row in result['folders']}
+        self.assertEqual(folders['/synthetic/travel']['bytes'], 5)
+        self.assertEqual(folders['/synthetic/other/travel']['bytes'], 100)
+        roots = {row['name']: row['bytes'] for row in result['roots']}
+        self.assertEqual(roots, {'/synthetic': 116, '/synthetic/travel': 5})
+        months = {row['name']: row['count'] for row in result['photo_months']}
+        self.assertEqual(months, {'2026/10': 1, '日期未分类': 3})
+        self.assertEqual(result['largest'][0]['name'], 'film.mp4')
+
+    def test_storage_does_not_promote_similar_or_invalid_duplicate_groups(self):
+        document = self.duplicate_document()
+        document['duplicates'][0]['sha256'] = 'broken'
+        result = storage_catalog(document)
+        self.assertEqual(result['logical_bytes'], 16)
+        self.assertEqual(result['duplicate_logical_bytes'], 0)
+        self.assertEqual(len(result['warnings']), 1)
+        self.assertEqual(storage_catalog({'files': []})['logical_bytes'], 0)
+
+    def test_storage_refuses_ambiguous_sizes_paths_and_limits_large_file_rows(self):
+        for change in ({'bytes': True}, {'bytes': -1}, {'kind': []}, {'path': '/synthetic/../outside/a.png'}):
+            document = self.duplicate_document(); document['files'][0].update(change)
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                storage_catalog(document)
+        document = self.duplicate_document(); document['files'].append(document['files'][0])
+        with self.assertRaises(ValueError):
+            storage_catalog(document)
+        result = storage_catalog({'files': [{'path': f'/synthetic/generated-{number}.mp4', 'kind': '视频', 'bytes': number}
+                                           for number in range(125)]})
+        self.assertEqual(result['count'], 125)
+        self.assertEqual(len(result['largest']), 100)
+        self.assertEqual(result['largest'][0]['bytes'], 124)
+        self.assertEqual(result['largest'][-1]['bytes'], 25)
+
     def duplicate_document(self):
         digest = 'a'*64
         return {'files': [{'path': '/synthetic/travel/a.png', 'kind': '照片', 'bytes': 5,

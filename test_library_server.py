@@ -228,6 +228,48 @@ class ReportServerTests(unittest.TestCase):
         self.assertEqual(json.loads(body)['record_count'], 1)
         self.assertEqual(json.loads(body)['handled'], {'copy': [], 'trash': []})
 
+    def test_storage_api_is_cached_report_only_and_embeds_current_controls(self):
+        before = (self.report/'report.json').read_bytes(); server = self.server()
+        with mock.patch.object(viewer, 'storage_catalog', wraps=viewer.storage_catalog) as catalog:
+            for _ in range(2):
+                headers, body = request(server, self.prefix+'api/storage')
+                self.assertIn('200 OK', headers)
+                self.assertEqual(json.loads(body)['logical_bytes'], 36)
+            self.assertEqual(catalog.call_count, 1)
+        for page in ('photos.html', 'organize.html'):
+            headers, body = request(server, self.prefix+page)
+            self.assertIn('200 OK', headers)
+            self.assertNotIn(b'@@STORAGE_CLEANUP@@', body)
+            self.assertIn('清理候选篮'.encode(), body)
+            self.assertIn(b'async function mutateBasket', body)
+        self.assertEqual((self.report/'report.json').read_bytes(), before)
+        self.assertFalse((self.report/'cleanup-basket.json').exists())
+
+    def test_basket_api_persists_candidates_requires_origin_and_never_starts_operations(self):
+        server = self.server(); identifier = media_id('/synthetic/photo.jpg')
+        payload = {'action': 'add', 'ids': [identifier]}
+        for origin in (None, 'http://evil.example'):
+            headers, _ = request(server, self.prefix+'api/basket', 'POST', payload, origin=origin)
+            self.assertIn('403 Forbidden', headers)
+        self.assertFalse((self.report/'cleanup-basket.json').exists())
+        origin = f'http://127.0.0.1:{server.server_port}'
+        with mock.patch.object(file_operations, 'copy_one') as copy, mock.patch.object(file_operations, 'trash_one') as trash:
+            headers, body = request(server, self.prefix+'api/basket', 'POST', payload, origin=origin)
+            self.assertIn('200 OK', headers)
+            self.assertEqual(json.loads(body)['ids'], [identifier])
+            copy.assert_not_called(); trash.assert_not_called()
+        reopened = self.server()
+        self.assertEqual(json.loads(request(reopened, self.prefix+'api/basket')[1])['ids'], [identifier])
+        self.assertFalse(list((self.report/'operations').glob('*.json')))
+        state = (self.report/'cleanup-basket.json').read_bytes()
+        file_operations._BATCH_LOCK.acquire()
+        try:
+            headers, _ = request(reopened, self.prefix+'api/basket', 'POST', {'action': 'clear', 'ids': []}, origin=origin)
+            self.assertIn('400 Bad Request', headers)
+        finally:
+            file_operations._BATCH_LOCK.release()
+        self.assertEqual((self.report/'cleanup-basket.json').read_bytes(), state)
+
     def test_duplicate_group_api_is_report_only_and_cached_with_current_ui(self):
         from test_media_catalog import CatalogTests
         document = CatalogTests().duplicate_document()

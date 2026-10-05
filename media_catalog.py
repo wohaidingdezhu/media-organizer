@@ -3,11 +3,62 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import stat
 import tempfile
 
 from file_operations import open_directory
 from media_actions import media_id
+
+
+def storage_catalog(document):
+    """Logical sizes from the saved scan, never filesystem allocation or free space."""
+    records = document.get("files")
+    if not isinstance(records, list):
+        raise ValueError("扫描报告缺少有效文件清单")
+    seen, items, warnings = set(), [], []
+    roots = document.get("roots", [])
+    roots = sorted({root for root in roots if isinstance(root, str) and Path(root).is_absolute()
+                    and '..' not in Path(root).parts}, key=len, reverse=True) if isinstance(roots, list) else []
+    for record in records:
+        if (not isinstance(record, dict) or not isinstance(record.get("path"), str)
+                or not Path(record["path"]).is_absolute() or '..' in Path(record["path"]).parts
+                or '\x00' in record["path"] or not isinstance(record.get("kind"), str) or record["kind"] not in {"照片", "视频"}
+                or type(record.get("bytes")) is not int or record["bytes"] < 0):
+            raise ValueError("扫描报告含无效媒体路径、类型或大小")
+        path = record["path"]
+        if path in seen:
+            raise ValueError("扫描报告含重复原路径，不能可靠汇总大小")
+        seen.add(path)
+        month = "日期未分类"
+        if record["kind"] == "照片" and isinstance(record.get("suggested_path"), str):
+            match = re.match(r'^照片/([1-9][0-9]{3})/(0[1-9]|1[0-2])/', record["suggested_path"])
+            if match:
+                month = '/'.join(match.groups())
+        source = next((root for root in roots if Path(root) in Path(path).parents), "来源未提供")
+        items.append({"id": media_id(path), "path": path, "name": Path(path).name,
+                      "kind": record["kind"], "bytes": record["bytes"],
+                      "folder": str(Path(path).parent), "root": source,
+                      "month": month, "hardlink": bool(record.get("hardlink_to"))})
+
+    def aggregate(field, selected):
+        buckets = {}
+        for item in selected:
+            row = buckets.setdefault(item[field], {"name": item[field], "count": 0, "bytes": 0})
+            row["count"] += 1
+            row["bytes"] += item["bytes"]
+        return sorted(buckets.values(), key=lambda row: (-row["bytes"], row["name"]))
+
+    duplicates = exact_duplicate_catalog(document)
+    warnings.extend(duplicates["warnings"])
+    return {"logical_bytes": sum(item["bytes"] for item in items), "count": len(items),
+            "kinds": aggregate("kind", items), "roots": aggregate("root", items),
+            "folders": aggregate("folder", items),
+            "photo_months": aggregate("month", [item for item in items if item["kind"] == "照片"]),
+            "largest": sorted(items, key=lambda item: (-item["bytes"], item["path"]))[:100],
+            "largest_limit": 100, "hardlink_references": sum(item["hardlink"] for item in items),
+            "duplicate_logical_bytes": duplicates["counts"]["redundant_logical_bytes"],
+            "warnings": warnings}
 
 
 def exact_duplicate_catalog(document):

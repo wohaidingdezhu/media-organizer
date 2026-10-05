@@ -19,7 +19,8 @@ import webbrowser
 from organization_plan import OrganizationPlan
 from media_actions import MediaActions
 from file_operations import FileOperations
-from media_catalog import photo_catalog, root_status, previous_scan, load_notes, save_notes, clean_note, exact_duplicate_catalog
+from cleanup_basket import CleanupBasket
+from media_catalog import photo_catalog, root_status, previous_scan, load_notes, save_notes, clean_note, exact_duplicate_catalog, storage_catalog
 
 
 MAX_TAG_FILE = 1024 * 1024
@@ -170,8 +171,16 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
     tag_path = output_dir / "library-tags.json"
     note_path = output_dir / "library-notes.json"
     operations = FileOperations(report_dir, media, get_organization)
+    basket = None
+    def get_basket():
+        nonlocal basket
+        with organization_lock:
+            if basket is None:
+                basket = CleanupBasket(report_dir, document)
+            return basket
     changes = None
     duplicate_data = None
+    storage_data = None
 
     def read_document(path):
         with _open_report_file(path, ("report.json",)) as stream:
@@ -215,7 +224,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
             self.wfile.write(body)
 
         def do_GET(self):
-            nonlocal changes, duplicate_data
+            nonlocal changes, duplicate_data, storage_data
             route = self.route()
             if route is None:
                 self.send_error(404)
@@ -223,10 +232,16 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
             if route == "api/media":
                 self.send_json(200, media.snapshot())
                 return
-            if route in {"api/photos", "api/duplicates", "api/roots", "api/changes", "api/notes", "api/operations"} or route.startswith("api/operations/"):
+            if route in {"api/photos", "api/duplicates", "api/storage", "api/basket", "api/roots", "api/changes", "api/notes", "api/operations"} or route.startswith("api/operations/"):
                 try:
                     if route == "api/photos":
                         result = photo_catalog(document)
+                    elif route == "api/storage":
+                        if storage_data is None:
+                            storage_data = storage_catalog(document)
+                        result = storage_data
+                    elif route == "api/basket":
+                        result = get_basket().snapshot()
                     elif route == "api/duplicates":
                         if duplicate_data is None:
                             duplicate_data = exact_duplicate_catalog(document)
@@ -302,6 +317,9 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     if b"@@DUPLICATE_REVIEW@@" in body:
                         with _open_report_file(Path(__file__).resolve().parent, ("duplicate_review.js",)) as script:
                             body = body.replace(b"@@DUPLICATE_REVIEW@@", script.read())
+                    if b"@@STORAGE_CLEANUP@@" in body:
+                        with _open_report_file(Path(__file__).resolve().parent, ("storage_cleanup.js",)) as script:
+                            body = body.replace(b"@@STORAGE_CLEANUP@@", script.read())
                 if dashboard_link and route in {"report.html", "library.html", "organize.html", "photos.html"}:
                     if body is None:
                         body = stream.read()
@@ -324,13 +342,13 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
 
         def do_POST(self):
             route = self.route()
-            if route not in {"api/tags", "api/tags/toggle", "api/organization", "api/media/action", "api/notes",
+            if route not in {"api/tags", "api/tags/toggle", "api/organization", "api/media/action", "api/notes", "api/basket",
                              "api/operations/preview", "api/operations/start", "api/operations/stop", "api/operations/destination"}:
                 self.send_error(404)
                 return
             origin = self.headers.get("Origin")
             if ((origin and origin != f"http://127.0.0.1:{self.server.server_port}")
-                    or (route == "api/media/action" or route.startswith("api/operations/")) and origin != f"http://127.0.0.1:{self.server.server_port}"):
+                    or (route in {"api/media/action", "api/basket"} or route.startswith("api/operations/")) and origin != f"http://127.0.0.1:{self.server.server_port}"):
                 self.send_json(403, {"error": "页面来源不匹配"})
                 return
             if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
@@ -343,6 +361,10 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 payload = json.loads(self.rfile.read(length))
                 if not isinstance(payload, dict):
                     raise ValueError("请求内容必须是 JSON 对象")
+                if route == "api/basket":
+                    result = operations.update_plan(lambda: get_basket().update(payload['action'], payload['ids']))
+                    self.send_json(200, result)
+                    return
                 if route == "api/media/action":
                     self.send_json(200, media.perform(payload["id"], payload["action"]))
                     return
