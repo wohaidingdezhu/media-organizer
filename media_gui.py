@@ -2,7 +2,7 @@
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
-import os
+import portable_fs as os
 from pathlib import Path
 import re
 import secrets
@@ -134,6 +134,12 @@ def scan_arguments(folders, *, output=REPORTS, image_analysis=True, video_covers
 
 
 def compile_helpers(log, image_analysis=True, video_covers=True):
+    if sys.platform == "win32":
+        import media_backend
+        for name, enabled in (("image_probe", image_analysis), ("video_cover", image_analysis and video_covers)):
+            if enabled and not scan.helper_available(media_backend.helper(name)):
+                log("缺少图片或视频依赖；请运行 python -m pip install -r requirements-windows.txt。精确查重仍可继续。")
+        return
     compiler = shutil.which("swiftc")
     wanted = [("image_probe", "照片解析")] if image_analysis else []
     if image_analysis and video_covers:
@@ -167,6 +173,7 @@ class DashboardState:
         self.status = "准备就绪。请先添加照片或视频文件夹。"
         self.process = None
         self.cancel_requested = threading.Event()
+        self.cancel_file = self.output / (".scan-cancel-" + secrets.token_hex(12))
         self.library_server = None
         self.library_report = None
         self.library_url = None
@@ -224,7 +231,7 @@ class DashboardState:
                 raise ValueError("扫描进行中，不能更改文件夹")
             for choice in choices:
                 path = Path(choice).expanduser().absolute()
-                if path.is_symlink() or not path.is_dir():
+                if path.is_symlink() or getattr(path.lstat(), "st_file_attributes", 0) & 0x400 or not path.is_dir():
                     raise ValueError("请选择实际存在的普通文件夹，不要选择符号链接")
                 if str(path) not in self.folders:
                     self.folders.append(str(path))
@@ -268,13 +275,16 @@ class DashboardState:
             if self.cancel_requested.is_set():
                 code = 130
             else:
-                process = subprocess.Popen([sys.executable, "-u", *args], cwd=BASE,
+                environment = dict(os.environ, PYTHONUTF8="1")
+                if sys.platform == "win32":
+                    environment["MEDIA_ORGANIZER_CANCEL_FILE"] = str(self.cancel_file.absolute())
+                process = subprocess.Popen([sys.executable, "-X", "utf8", "-u", *args], cwd=BASE,
                                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                           text=True, bufsize=1)
+                                           text=True, encoding="utf-8", bufsize=1, env=environment)
                 with self.lock:
                     self.process = process
                     if self.cancel_requested.is_set():
-                        process.send_signal(signal.SIGINT)
+                        self._signal_scan(process)
                 for line in process.stdout:
                     self.log(line)
                 code = process.wait()
@@ -298,6 +308,7 @@ class DashboardState:
                 self.status = f"扫描无法启动：{error}"
             self.log(error)
         finally:
+            self.cancel_file.unlink(missing_ok=True)
             with self.lock:
                 self.process = None
                 self.running = False
@@ -309,8 +320,15 @@ class DashboardState:
             if self.running:
                 self.status = "正在取消扫描…"
         if process is not None and process.poll() is None:
-            process.send_signal(signal.SIGINT)
+            self._signal_scan(process)
         return self.snapshot()
+
+    def _signal_scan(self, process):
+        if sys.platform == "win32":
+            self.output.mkdir(parents=True, exist_ok=True)
+            self.cancel_file.touch()
+        else:
+            process.send_signal(signal.SIGINT)
 
     def view_report(self, report_id, view="overview"):
         if not isinstance(view, str) or view not in REPORT_VIEWS:
@@ -424,7 +442,8 @@ def create_dashboard_server(output=REPORTS):
                     result = state.view_report(data["report_id"], data.get("view", "overview"))
                 elif route == "api/reports/open":
                     state.output.mkdir(parents=True, exist_ok=True, mode=0o700)
-                    subprocess.Popen(["/usr/bin/open", str(state.output)])
+                    from system_integration import open_path
+                    open_path(state.output)
                     result = {"ok": True}
                 else:
                     from file_operations import shutdown_when_idle

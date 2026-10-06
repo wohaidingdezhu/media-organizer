@@ -1,3 +1,4 @@
+from test_support import make_symlink
 """Generated report candidates only; operations never touch source media."""
 import json
 from pathlib import Path
@@ -37,7 +38,8 @@ class BasketTests(unittest.TestCase):
         self.store.update('remove', self.ids[:1])
         self.assertEqual(second.snapshot()['ids'], sorted(self.ids[1:]))
         state = self.report/basket.STATE_FILE
-        self.assertEqual(state.stat().st_mode & 0o777, 0o600)
+        if sys.platform != 'win32':
+            self.assertEqual(state.stat().st_mode & 0o777, 0o600)
         second.update('clear', [])
         self.assertEqual(self.store.snapshot()['ids'], [])
 
@@ -72,7 +74,7 @@ class BasketTests(unittest.TestCase):
             basket.CleanupBasket(self.report, changed).update('add', self.ids[1:])
         self.assertEqual(state.read_bytes(), original)
         victim = self.root/'generated-unrelated.json'; victim.write_bytes(original)
-        state.unlink(); state.symlink_to(victim)
+        state.unlink(); make_symlink(state, victim)
         with self.assertRaises(OSError):
             self.store.update('clear', [])
         self.assertEqual(victim.read_bytes(), original)
@@ -96,7 +98,7 @@ class BasketTests(unittest.TestCase):
 
     def test_symlink_lock_is_rejected_without_modifying_unrelated_file(self):
         victim = self.root/'generated-unrelated.txt'; victim.write_bytes(b'keep generated data')
-        (self.report/'.cleanup-basket-lock').symlink_to(victim)
+        make_symlink(self.report/'.cleanup-basket-lock', victim)
         with self.assertRaises(OSError):
             self.store.update('add', self.ids)
         self.assertEqual(victim.read_bytes(), b'keep generated data')

@@ -1,3 +1,4 @@
+from test_support import make_symlink
 """All sources and destinations here are freshly generated temporary data."""
 import hashlib
 import json
@@ -103,7 +104,7 @@ class OperationTests(unittest.TestCase):
             self.ops.preview('copy', result['ids'], str(self.destination))
         self.plan.set_states(self.ids, 'include')
         preview = self.ops.preview('copy', result['ids'], str(self.destination))
-        self.assertTrue(preview['items'][0]['target'].endswith('/review-again/photo.png'))
+        self.assertEqual(Path(preview['items'][0]['target']).parts[-2:], ('review-again', 'photo.png'))
         self.assertFalse(any(self.destination.iterdir()))
         self.assertEqual(self.before, {path: (Path(path).read_bytes(), Path(path).stat().st_mtime_ns) for path in self.before})
 
@@ -151,7 +152,8 @@ class OperationTests(unittest.TestCase):
         self.assertEqual(reopened.snapshot(job['id']), job)
         self.assertEqual(reopened.history()['jobs'][0], job)
         self.assertEqual(reopened.request_stop(job['id']), job)
-        self.assertEqual((self.report/'operations'/f"{job['id']}.json").stat().st_mode & 0o777, 0o600)
+        if sys.platform != 'win32':
+            self.assertEqual((self.report/'operations'/f"{job['id']}.json").stat().st_mode & 0o777, 0o600)
         with self.assertRaises(ValueError):
             self.ops.start(preview['token'])
 
@@ -165,7 +167,7 @@ class OperationTests(unittest.TestCase):
         self.assertEqual(existing.read_bytes(), b'keep this target')
         other = self.root/'other'
         other.mkdir()
-        (self.destination/'link').symlink_to(other, target_is_directory=True)
+        make_symlink(self.destination/'link', other, target_is_directory=True)
         self.plan.set_target(self.ids[0], 'link/photo.png')
         self.plan.set_states(self.ids[:1], 'include')
         with self.assertRaises(OSError):
@@ -180,7 +182,7 @@ class OperationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.ops.preview('copy', self.ids, str(self.destination))
         self.plan.set_states(self.ids, 'include')
-        with mock.patch.object(operations.os, 'fstatvfs', return_value=type('Space', (), {'f_bavail': 0, 'f_frsize': 4096})()), self.assertRaises(ValueError):
+        with mock.patch.object(operations.os, 'free_bytes', return_value=0), self.assertRaises(ValueError):
             self.ops.preview('copy', self.ids, str(self.destination))
 
     def test_changed_source_plan_or_destination_after_preview_cannot_execute(self):
@@ -244,6 +246,7 @@ class OperationTests(unittest.TestCase):
         self.assertTrue(Path(job['items'][0]['target']).is_file())
         self.assertEqual(self.before, {path: (Path(path).read_bytes(), Path(path).stat().st_mtime_ns) for path in self.before})
 
+    @mock.patch.object(operations.sys, 'platform', 'darwin')
     def test_trash_requires_preview_keeps_duplicate_and_never_uses_permanent_delete(self):
         self.document['duplicates'] = [{'paths': [item['path'] for item in self.records]}]
         plan = OrganizationPlan(self.report, self.document)
@@ -256,7 +259,7 @@ class OperationTests(unittest.TestCase):
                 job = self.finished(self.ops.start(preview['token'])['id'])
             self.assertEqual(job['status'], 'complete')
             command = run.call_args.args[0]
-            self.assertEqual(command, ['/synthetic/trash-component'])
+            self.assertEqual(command, [str(Path('/synthetic/trash-component'))])
             payload = json.loads(run.call_args.kwargs['input'])
             self.assertEqual(payload['path'], self.records[0]['path'])
             self.assertEqual(payload['signature'], self.records[0]['source_signature'])
@@ -264,6 +267,7 @@ class OperationTests(unittest.TestCase):
         # Native Trash is mocked; no personal files or real Trash were touched.
         self.assertEqual(self.before, {path: (Path(path).read_bytes(), Path(path).stat().st_mtime_ns) for path in self.before})
 
+    @mock.patch.object(operations.sys, 'platform', 'darwin')
     def test_expiration_unknown_outcome_and_interrupted_journal_are_visible(self):
         preview = self.ops.preview('copy', self.ids, str(self.destination))
         self.ops.previews[preview['token']]['expires'] = 0
@@ -282,7 +286,7 @@ class OperationTests(unittest.TestCase):
             reopened.snapshot('../escape')
 
     def test_unwritable_or_symlink_journal_prevents_any_action(self):
-        (self.report/'operations').symlink_to(self.destination, target_is_directory=True)
+        make_symlink(self.report/'operations', self.destination, target_is_directory=True)
         preview = self.ops.preview('copy', self.ids, str(self.destination))
         with self.assertRaises(ValueError):
             self.ops.start(preview['token'])
@@ -355,7 +359,7 @@ class OperationTests(unittest.TestCase):
         self.ops._save_job(job)
         lock = self.report/'operations'/'.batch-lock'
         lock.write_text(identifier)
-        script = ('import fcntl,os,sys; fd=os.open(sys.argv[1],os.O_RDWR); '
+        script = ('import portable_lock as fcntl,os,sys; fd=os.open(sys.argv[1],os.O_RDWR); '
                   'fcntl.flock(fd,fcntl.LOCK_EX); print("locked",flush=True); sys.stdin.read(1); '
                   'assert os.path.isfile(sys.argv[2]); print("stop received",flush=True)')
         child = subprocess.Popen([sys.executable, '-c', script, str(lock), str(lock.parent/('.stop-'+identifier))],
@@ -531,8 +535,8 @@ class OperationTests(unittest.TestCase):
             job = self.ops.start(preview['token'])
         marker = self.report/'operations'/('.stop-'+job['id'])
         victim = self.root/'generated-unrelated.txt';victim.write_bytes(b'keep this sample')
-        marker.symlink_to(victim)
         try:
+            make_symlink(marker, victim)
             with self.assertRaises(OSError):
                 self.ops.request_stop(job['id'])
         finally:

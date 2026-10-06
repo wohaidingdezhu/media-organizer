@@ -8,7 +8,7 @@ import csv
 import hashlib
 import io
 import json
-import os
+import portable_fs as os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import secrets
 import stat
@@ -36,7 +36,17 @@ def _target_error(value):
         return "建议路径必须是相对路径"
     if any(part in {"", ".", ".."} for part in value.split("/")):
         return "建议路径含无效目录层级"
+    if any(invalid_windows_name(part) for part in value.split("/")):
+        return "建议路径含 Windows 不支持的文件名"
     return ""
+
+
+def invalid_windows_name(part):
+    import re
+    return (bool(re.search(r'[<>:"|?*]', part)) or part.endswith((" ", "."))
+            or part.split(".", 1)[0].rstrip().upper() in
+            {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+             *[f"{prefix}{number}" for prefix in ("COM", "LPT") for number in "123456789¹²³"]})
 
 
 def _canonical_target(value):

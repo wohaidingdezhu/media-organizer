@@ -1,7 +1,7 @@
 """Open selected scanned media with native apps; never modify media here."""
 import hashlib
 import math
-import os
+import portable_fs as os
 from pathlib import Path
 import stat
 import subprocess
@@ -17,7 +17,10 @@ def media_id(path):
 
 
 def file_signature(info):
-    return [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
+    # Windows stat/fstat differ in ctime semantics on recent Python versions.
+    # Use the stable creation time there, alongside file identity/size/mtime.
+    identity_time = getattr(info, "st_birthtime_ns", info.st_ctime_ns) if os.name == "nt" else info.st_ctime_ns
+    return [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, identity_time]
 
 
 def checked_stat(path):
@@ -67,7 +70,7 @@ class MediaActions:
             self.records[media_id(path)] = record
 
     def snapshot(self):
-        return {"available": sys.platform == "darwin",
+        return {"available": sys.platform in {"darwin", "win32"},
                 "ids_by_path": {record["path"]: key for key, record in self.records.items()}}
 
     def validate(self, identifier):
@@ -90,7 +93,12 @@ class MediaActions:
 
     def perform(self, identifier, action):
         if not isinstance(action, str) or action not in {"open", "reveal"}:
-            raise ValueError("仅支持打开媒体或在 Finder 定位")
+            raise ValueError("仅支持打开媒体或在文件管理器定位")
+        if sys.platform == "win32":
+            from system_integration import open_path
+            record, _ = self.validate(identifier)
+            open_path(record["path"], reveal=action == "reveal")
+            return {"ok": True, "action": action, "message": "已交给系统默认程序打开。" if action == "open" else "已在资源管理器定位原文件。"}
         if sys.platform != "darwin":
             raise ValueError("打开与定位功能目前需要 macOS")
         record, _ = self.validate(identifier)
@@ -101,10 +109,10 @@ class MediaActions:
         try:
             result = subprocess.run(command, capture_output=True, text=True, timeout=15, check=False)
         except (OSError, subprocess.TimeoutExpired) as error:
-            raise ValueError("无法启动系统打开功能；请重试或在 Finder 操作") from error
+            raise ValueError("无法启动系统打开功能；请重试或在 文件管理器 操作") from error
         if result.returncode:
-            raise ValueError("系统未能打开文件；请在 Finder 检查默认播放器或查看程序")
-        message = "已在 Finder 定位原文件。" if action == "reveal" else (
+            raise ValueError("系统未能打开文件；请在 文件管理器 检查默认播放器或查看程序")
+        message = "已在 文件管理器 定位原文件。" if action == "reveal" else (
             "已交给系统默认程序打开；播放情况请在播放器中查看。" if record["kind"] == "视频"
             else "已交给系统默认程序打开照片。")
         return {"ok": True, "action": action, "message": message}

@@ -1,7 +1,7 @@
 """Report-only photo catalog, movie notes and comparable scan changes."""
 import json
 import math
-import os
+import portable_fs as os
 from pathlib import Path
 import re
 import stat

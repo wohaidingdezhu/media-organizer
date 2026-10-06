@@ -4,9 +4,9 @@ Nothing happens at scan time. Each batch has a short-lived server-side preview,
 is revalidated before execution and keeps a private journal. Never overwrites.
 """
 import hashlib
-import fcntl
+import portable_lock as fcntl
 import json
-import os
+import portable_fs as os
 from pathlib import Path
 import secrets
 import shutil
@@ -170,14 +170,17 @@ def copy_one(media, identifier, destination, relative, expected, dest_identity=N
             raise ValueError("目标副本 SHA-256 校验失败")
         check_cancelled()
         # Exclusive publication: an existing file is never replaced.
-        os.link(temporary, parts[-1], src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
+        os.publish(temporary, parts[-1], parent)
         if progress:
             progress(verified, "verified")
         return {"target": str(Path(destination) / relative), "sha256": expected_hash}
     finally:
         try:
             if temporary_created:
-                os.unlink(temporary, dir_fd=parent)
+                try:
+                    os.unlink(temporary, dir_fd=parent)
+                except FileNotFoundError:
+                    pass  # Windows publishes by an exclusive rename.
         finally:
             if source is not None:
                 os.close(source)
@@ -187,23 +190,27 @@ def copy_one(media, identifier, destination, relative, expected, dest_identity=N
 
 
 def trash_helper():
+    if sys.platform == "win32":
+        from system_integration import recycle_available
+        recycle_available()
+        return None
     if sys.platform != "darwin":
-        raise ValueError("移到废纸篓需要 macOS")
+        raise ValueError("移到废纸篓 / 回收站需要 macOS")
     base = Path(__file__).resolve().parent / "native"
     source, helper = base / "trash_media.swift", base / "trash_media"
     with _COMPILE_LOCK:
         if helper.is_symlink() or source.is_symlink():
-            raise ValueError("废纸篓组件不能是符号链接")
+            raise ValueError("废纸篓 / 回收站组件不能是符号链接")
         if not helper.is_file() or helper.stat().st_mtime_ns < source.stat().st_mtime_ns:
             compiler = shutil.which("swiftc")
             if not compiler:
-                raise ValueError("缺少 Swift 编译器，无法准备废纸篓组件；可在 Finder 自行处理")
+                raise ValueError("缺少 Swift 编译器，无法准备废纸篓 / 回收站组件；可在 文件管理器 自行处理")
             try:
                 result = subprocess.run([compiler, str(source), "-o", str(helper)], capture_output=True, timeout=180)
             except (OSError, subprocess.TimeoutExpired) as error:
-                raise ValueError("废纸篓组件准备失败") from error
+                raise ValueError("废纸篓 / 回收站组件准备失败") from error
             if result.returncode:
-                raise ValueError("废纸篓组件编译失败；可在 Finder 自行处理")
+                raise ValueError("废纸篓 / 回收站组件编译失败；可在 文件管理器 自行处理")
     return helper
 
 
@@ -215,21 +222,24 @@ def trash_one(media, identifier, expected):
     record, info = media.validate(identifier)
     if file_signature(info) != expected:
         raise ValueError("文件自预览后发生变化")
+    if sys.platform == "win32":
+        from system_integration import recycle_file
+        return recycle_file(record["path"], expected)
     try:
         result = subprocess.run([str(trash_helper())], input=json.dumps({"path": record["path"], "signature": expected}),
                                 capture_output=True, text=True, timeout=60)
         answer = json.loads(result.stdout)
     except (subprocess.TimeoutExpired, json.JSONDecodeError) as error:
-        raise OutcomeUnknown("系统操作结果未确认；请先在 Finder 和废纸篓核对，不要直接重试") from error
+        raise OutcomeUnknown("系统操作结果未确认；请先在 文件管理器 和废纸篓 / 回收站核对，不要直接重试") from error
     if not isinstance(answer, dict):
-        raise OutcomeUnknown("系统返回的清理结果无效，请先在 Finder 核对")
+        raise OutcomeUnknown("系统返回的清理结果无效，请先在 文件管理器 核对")
     if result.returncode or not answer.get("ok"):
         try:
             if file_signature(checked_stat(record["path"])) != expected:
-                raise OutcomeUnknown("原路径已变化，清理结果未确认，请先在 Finder 核对")
+                raise OutcomeUnknown("原路径已变化，清理结果未确认，请先在 文件管理器 核对")
         except OSError as error:
-            raise OutcomeUnknown("原文件已不在原位置，清理结果未确认，请先在 Finder 核对") from error
-        raise ValueError(answer.get("error", "系统未能移到废纸篓"))
+            raise OutcomeUnknown("原文件已不在原位置，清理结果未确认，请先在 文件管理器 核对") from error
+        raise ValueError(answer.get("error", "系统未能移到废纸篓 / 回收站"))
     return {"trashed_path": answer.get("trashed_path", "")}
 
 
@@ -357,7 +367,7 @@ class FileOperations:
 
     def preview(self, mode, ids, destination=None):
         if mode not in {"copy", "trash"} or not isinstance(ids, list) or not 1 <= len(ids) <= 200:
-            raise ValueError("请选择 1–200 个文件并指定复制或废纸篓操作")
+            raise ValueError("请选择 1–200 个文件并指定复制或废纸篓 / 回收站操作")
         if any(not isinstance(item, str) for item in ids) or len(set(ids)) != len(ids):
             raise ValueError("文件选择无效")
         current = {item["id"]: item for item in self.plan().snapshot()["items"]}
@@ -368,7 +378,7 @@ class FileOperations:
             descriptor = open_directory(path)
             try:
                 dest_identity = [os.fstat(descriptor).st_dev, os.fstat(descriptor).st_ino]
-                available = os.fstatvfs(descriptor).f_bavail * os.fstatvfs(descriptor).f_frsize
+                available = os.free_bytes(descriptor)
             finally:
                 os.close(descriptor)
             for record in self.media.records.values():
@@ -386,7 +396,7 @@ class FileOperations:
         for identifier in ids:
             record, info = self.media.validate(identifier)
             if mode == "trash" and record.get("source_signature") is None:
-                raise ValueError("这份旧报告缺少文件身份记录，请重新扫描后再使用废纸篓清理")
+                raise ValueError("这份旧报告缺少文件身份记录，请重新扫描后再使用废纸篓 / 回收站清理")
             item = current.get(identifier)
             if item is None:
                 raise ValueError("文件不属于整理清单")
@@ -396,7 +406,7 @@ class FileOperations:
                     raise ValueError("复制前请先核对并纳入分类计划")
                 check_target(destination, target)
             items.append({"id": identifier, "path": record["path"], "bytes": info.st_size,
-                          "target": str(Path(destination) / target) if mode == "copy" else "macOS 废纸篓",
+                          "target": str(Path(destination) / target) if mode == "copy" else "系统回收站 / 废纸篓 / 回收站",
                           "relative": target, "signature": file_signature(info)})
         total = sum(item["bytes"] for item in items)
         if mode == "copy" and available < total:
@@ -491,6 +501,7 @@ class FileOperations:
             return json.loads(json.dumps(job))
 
     def _run(self, job, preview, batch_descriptor):
+        final_status = "stopped"
         def cancelled():
             requested = self._stop_requested(job["id"])
             if requested:
@@ -522,7 +533,7 @@ class FileOperations:
                         current = {record["id"]: record for record in self.plan().snapshot()["items"]}
                         self._check_kept_duplicates([entry["id"] for entry in preview["items"]], current)
                         if cancelled():
-                            raise OperationCancelled("已停止，当前文件未移到废纸篓")
+                            raise OperationCancelled("已停止，当前文件未移到废纸篓 / 回收站")
                         answer = trash_one(self.media, item["id"], item["signature"])
                     with self.lock:
                         result.update(answer, status="success")
@@ -544,20 +555,26 @@ class FileOperations:
             with self.lock:
                 success = all(item["status"] == "success" for item in job["items"])
                 if len(job["items"]) == job["total"] and success:
-                    job["status"] = "complete"
+                    final_status = "complete"
                 elif (job.get("stop_requested") or any(item["status"] == "cancelled" for item in job["items"])) and not any(item["status"] in {"failed", "unknown"} for item in job["items"]):
-                    job["status"] = "cancelled"
+                    final_status = "cancelled"
                 else:
-                    job["status"] = "stopped"
-                self._save_job(job)
+                    final_status = "stopped"
         except (OSError, ValueError) as error:
             with self.lock:
-                job.update(status="stopped", error="操作记录写入失败，先核对原文件和目标位置：" + str(error))
+                final_status = "stopped"
+                job.update(error="操作记录写入失败，先核对原文件和目标位置：" + str(error))
         finally:
             with self.lock:
-                _ACTIVE_JOBS.pop((self.report_key, job["id"]), None)
-            os.close(batch_descriptor)
-            _BATCH_LOCK.release()
+                try:
+                    job["status"] = final_status
+                    self._save_job(job)
+                except (OSError, ValueError) as error:
+                    job.update(status="stopped", error="操作记录写入失败，请先核对原文件和目标位置：" + str(error))
+                finally:
+                    _ACTIVE_JOBS.pop((self.report_key, job["id"]), None)
+                    os.close(batch_descriptor)
+                    _BATCH_LOCK.release()
 
     def _read_job(self, identifier):
         descriptor = open_directory(self.report_dir / "operations")
@@ -618,7 +635,7 @@ class FileOperations:
                     if job["status"] != "running":
                         return job
                     job["status"] = "interrupted"
-                    job["error"] = "服务已停止，部分结果可能未确认。请核对原文件、目标位置或废纸篓后再处理。"
+                    job["error"] = "服务已停止，部分结果可能未确认。请核对原文件、目标位置或废纸篓 / 回收站后再处理。"
             return job
 
     def _history(self):

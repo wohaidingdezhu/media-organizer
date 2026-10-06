@@ -1,3 +1,4 @@
+from test_support import make_symlink
 import json
 import os
 from pathlib import Path
@@ -65,7 +66,7 @@ class MediaActionTests(unittest.TestCase):
         target = self.root / "other.mp4"
         target.write_bytes(b"temporary synthetic video bytes")
         self.source.unlink()
-        self.source.symlink_to(target)
+        make_symlink(self.source, target)
         with self.assertRaises(ValueError):
             manager.validate(self.identifier)
         parent = self.root / "folder"
@@ -76,7 +77,7 @@ class MediaActionTests(unittest.TestCase):
         record = {"path": str(nested), "kind": "视频", "bytes": info.st_size, "mtime": info.st_mtime}
         manager = actions.MediaActions({"roots": [str(self.root)], "files": [record]})
         parent.rename(self.root / "moved")
-        parent.symlink_to(self.root / "moved", target_is_directory=True)
+        make_symlink(parent, self.root / "moved", target_is_directory=True)
         with self.assertRaises(ValueError):
             manager.validate(actions.media_id(str(nested)))
 

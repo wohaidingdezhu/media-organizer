@@ -38,11 +38,11 @@ function renderDuplicateGroups(){
       const actions=make('div','target-actions'),keep=make('button',keeper===item.id?'primary':'',keeper===item.id?'已选本组保留项':'选作本组保留项');
       keep.setAttribute('aria-label','选作本组保留项 '+item.name);keep.setAttribute('aria-pressed',String(keeper===item.id));keep.disabled=saving||operating||handled;
       keep.onclick=()=>{duplicateKeepers.set(group.number,item.id);duplicateErrors.delete(group.number);renderDuplicateGroups();};actions.append(keep);
-      for(const [action,label] of [['open',item.kind==='视频'?'播放影片':'打开原图'],['reveal','在 Finder 定位']]){
+      for(const [action,label] of [['open',item.kind==='视频'?'播放影片':'打开原图'],['reveal','在 文件管理器 定位']]){
         const button=make('button','',label);button.setAttribute('aria-label',label+' '+item.name);button.disabled=saving||operating||handled||!mediaIds[item.path];
         button.onclick=()=>openMedia(item,action,button);actions.append(button);
       }
-      if(handled)body.append(make('p','warning','已移到废纸篓，请重新扫描更新分组。'));
+      if(handled)body.append(make('p','warning','已移到废纸篓 / 回收站，请重新扫描更新分组。'));
       body.append(actions);row.append(body);box.append(row);
     }
     if(group.items.length>limit){const more=make('button','',`再显示 50 个成员（尚有 ${group.items.length-limit} 项）`);more.onclick=()=>{duplicateExpanded.set(group.number,limit+50);renderDuplicateGroups();};box.append(more);}

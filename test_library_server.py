@@ -1,3 +1,5 @@
+from test_support import sample_path
+from test_support import make_symlink
 """Report viewing checks use generated temporary reports and an in-memory HTTP handler."""
 from email.message import Message
 import io
@@ -52,9 +54,9 @@ class ReportServerTests(unittest.TestCase):
         self.key = "a" * 64
         (self.report / "report.json").write_text(json.dumps({
             "video_library": {"groups": [{"tag_key": self.key}]},
-            "files": [{"path": "/synthetic/photo.jpg", "kind": "照片", "bytes": 12,
+            "files": [{"path": sample_path('/synthetic/photo.jpg'), "kind": "照片", "bytes": 12,
                        "suggested_path": "照片/2026/10/photo.jpg"},
-                      {"path": "/synthetic/video.mp4", "kind": "视频", "bytes": 24,
+                      {"path": sample_path('/synthetic/video.mp4'), "kind": "视频", "bytes": 24,
                        "suggested_path": "视频/旅行/video.mp4"}],
             "duplicates": []
         }))
@@ -207,20 +209,20 @@ class ReportServerTests(unittest.TestCase):
     def test_remaining_api_is_read_only_and_uses_current_report_ids(self):
         path = self.report/'report.json'
         document = json.loads(path.read_text())
-        document['roots'] = ['/synthetic']
+        document['roots'] = [sample_path('/synthetic')]
         for item in document['files']:
             item['mtime'] = 0
         path.write_text(json.dumps(document))
         directory = self.report/'operations'; directory.mkdir()
         job = {'id': 'a'*24, 'mode': 'copy', 'status': 'cancelled', 'total': 1, 'items': [],
-               'planned_items': [{'path': '/synthetic/photo.jpg', 'target': '/synthetic-target/photo.jpg', 'bytes': 12}]}
+               'planned_items': [{'path': sample_path('/synthetic/photo.jpg'), 'target': sample_path('/synthetic-target/photo.jpg'), 'bytes': 12}]}
         journal = directory/(job['id']+'.json'); journal.write_text(json.dumps(job))
         before = {file: file.read_bytes() for file in (path, journal)}
         server = self.server()
         with mock.patch.object(file_operations, 'copy_one') as copy, mock.patch.object(file_operations, 'trash_one') as trash:
             headers, body = request(server, self.prefix+'api/operations/'+job['id']+'/remaining')
             self.assertIn('200 OK', headers)
-            self.assertEqual(json.loads(body)['ids'], [media_id('/synthetic/photo.jpg')])
+            self.assertEqual(json.loads(body)['ids'], [media_id(sample_path('/synthetic/photo.jpg'))])
             copy.assert_not_called(); trash.assert_not_called()
         self.assertEqual(before, {file: file.read_bytes() for file in before})
         headers, body = request(server, self.prefix+'api/operations')
@@ -246,7 +248,7 @@ class ReportServerTests(unittest.TestCase):
         self.assertFalse((self.report/'cleanup-basket.json').exists())
 
     def test_basket_api_persists_candidates_requires_origin_and_never_starts_operations(self):
-        server = self.server(); identifier = media_id('/synthetic/photo.jpg')
+        server = self.server(); identifier = media_id(sample_path('/synthetic/photo.jpg'))
         payload = {'action': 'add', 'ids': [identifier]}
         for origin in (None, 'http://evil.example'):
             headers, _ = request(server, self.prefix+'api/basket', 'POST', payload, origin=origin)
@@ -291,7 +293,7 @@ class ReportServerTests(unittest.TestCase):
         self.assertFalse((self.report/'operations').exists())
 
     def test_csv_download_uses_safe_attachment_name(self):
-        name = '影片"清单.csv'
+        name = '影片 清单.csv' if viewer.sys.platform == 'win32' else '影片"清单.csv'
         content = '影片,数量\n例子,1\n'.encode()
         (self.report / name).write_bytes(content)
         server = self.server()
@@ -303,10 +305,10 @@ class ReportServerTests(unittest.TestCase):
     def test_host_token_traversal_and_symlinks_are_rejected(self):
         server = self.server()
         (self.output / "outside.csv").write_text("outside report")
-        (self.report / "escape.csv").symlink_to(self.output / "outside.csv")
+        make_symlink(self.report / "escape.csv", self.output / "outside.csv")
         (self.output / "outside").mkdir()
         (self.output / "outside" / "poster.png").write_bytes(b"sample")
-        (self.report / "covers").symlink_to(self.output / "outside", target_is_directory=True)
+        make_symlink(self.report / "covers", self.output / "outside", target_is_directory=True)
         for path in ("/wrong/report.html", self.prefix + "../outside.csv",
                      self.prefix + "%2e%2e/outside.csv", self.prefix + "escape.csv",
                      self.prefix + "covers/poster.png", self.prefix + "foo%00.csv"):
@@ -314,7 +316,7 @@ class ReportServerTests(unittest.TestCase):
                 self.assertIn("404 Not Found", request(server, path)[0])
         self.assertIn("404 Not Found", request(server, self.prefix + "report.html", host="evil.example")[0])
         (self.report / "report.json").unlink()
-        (self.report / "report.json").symlink_to(self.output / "outside.csv")
+        make_symlink(self.report / "report.json", self.output / "outside.csv")
         with self.assertRaises(OSError):
             self.server()
 
@@ -356,11 +358,11 @@ class ReportServerTests(unittest.TestCase):
         self.assertIn('Content-Disposition: attachment; filename="organization.json"', headers)
         exported = json.loads(body)
         self.assertEqual(exported["mode"], "review_only")
-        self.assertEqual([item["path"] for item in exported["items"]], ["/synthetic/photo.jpg"])
+        self.assertEqual([item["path"] for item in exported["items"]], [sample_path('/synthetic/photo.jpg')])
         headers, body = request(reopened, self.prefix + "organization.csv")
         self.assertIn("text/csv", headers)
-        self.assertIn(b"/synthetic/photo.jpg", body)
-        self.assertNotIn(b"/synthetic/video.mp4", body)
+        self.assertIn(sample_path('/synthetic/photo.jpg').encode(), body)
+        self.assertNotIn(sample_path('/synthetic/video.mp4').encode(), body)
 
     def test_organization_rejects_invalid_requests_and_preserves_damaged_state(self):
         server = self.server()

@@ -2,7 +2,7 @@
 import html
 import json
 import mimetypes
-import os
+import portable_fs as os
 from pathlib import Path
 import re
 import secrets
@@ -304,7 +304,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 assets = {"organize.html": "organization.html", "photos.html": "organization.html"}
                 page_dir = Path(__file__).resolve().parent if route in assets else report_dir
                 stream = _open_report_file(page_dir, (assets[route],) if route in assets else parts)
-            except OSError:
+            except (OSError, ValueError):
                 self.send_error(404)
                 return
             with stream:
@@ -378,6 +378,11 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     self.send_json(200, operations.request_stop(payload["id"]))
                     return
                 if route == "api/operations/destination":
+                    if sys.platform == "win32":
+                        from system_integration import choose_directory
+                        destination = choose_directory("选择独立分类目标目录（复制保留原件，不覆盖已有文件）")
+                        self.send_json(200, {"destination": destination})
+                        return
                     if sys.platform != "darwin":
                         raise ValueError("请选择目标文件夹的绝对路径")
                     script = 'POSIX path of (choose folder with prompt "选择独立分类目标目录。复制会保留原媒体，不会覆盖已有文件。")'

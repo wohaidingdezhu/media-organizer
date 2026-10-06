@@ -1,3 +1,4 @@
+from test_support import make_symlink
 import csv
 import io
 import json
@@ -47,7 +48,8 @@ class OrganizationPlanTests(unittest.TestCase):
         plan.set_states(identifiers[:2], "include")
         result = self.plan().set_states(identifiers[2:], "hold")
         self.assertEqual(result["counts"], {"total": 3, "pending": 0, "include": 2, "hold": 1})
-        self.assertEqual(stat.S_IMODE((self.directory / STATE_FILE).stat().st_mode), 0o600)
+        if os.name != "nt":
+            self.assertEqual(stat.S_IMODE((self.directory / STATE_FILE).stat().st_mode), 0o600)
         self.assertEqual([path.name for path in self.directory.iterdir()], [STATE_FILE])
         result = plan.set_states(identifiers[:1], "pending")
         self.assertEqual(result["counts"]["pending"], 1)
@@ -105,7 +107,7 @@ class OrganizationPlanTests(unittest.TestCase):
         target = self.directory / "synthetic-original.jpg"
         target.write_bytes(b"temporary synthetic media bytes")
         before = target.stat()
-        state_path.symlink_to(target)
+        make_symlink(state_path, target)
         for action in [plan.snapshot, lambda: plan.set_states([identifier], "include")]:
             with self.assertRaises(OSError):
                 action()

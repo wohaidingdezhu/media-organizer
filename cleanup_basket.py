@@ -1,8 +1,8 @@
 """Persistent manual candidates scoped to a scan. No original media access."""
-import fcntl
+import portable_lock as fcntl
 import hashlib
 import json
-import os
+import portable_fs as os
 from pathlib import Path
 import secrets
 import stat

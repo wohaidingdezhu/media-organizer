@@ -1,3 +1,4 @@
+from test_support import make_symlink
 """Report navigation checks using generated reports and in-memory HTTP handlers."""
 from email.message import Message
 import io
@@ -93,7 +94,7 @@ class ReportHistoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary)
             safe = write_sample_report(output, "scan-safe")
-            (output / "scan-link").symlink_to(safe, target_is_directory=True)
+            make_symlink(output / "scan-link", safe, target_is_directory=True)
             state = media_gui.DashboardState(output)
             for invalid in (None, 0, "../scan-safe", "scan-safe/../scan-safe", "scan-%2e%2e", "scan-link"):
                 with self.subTest(report_id=invalid), self.assertRaises((ValueError, OSError)):
@@ -103,7 +104,7 @@ class ReportHistoryTests(unittest.TestCase):
                     path = safe / name
                     saved = output / ("saved-" + name)
                     path.replace(saved)
-                    path.symlink_to(saved)
+                    make_symlink(path, saved)
                     with self.assertRaises(ValueError):
                         state.view_report("scan-safe")
                     path.unlink()

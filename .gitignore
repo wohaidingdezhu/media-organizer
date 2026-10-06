@@ -5,3 +5,5 @@ native/image_probe
 native/video_cover
 native/trash_media
 PROJECT_STATUS.md
+.venv/
+.test-output/

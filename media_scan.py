@@ -8,8 +8,9 @@ import datetime as dt
 import hashlib
 import html
 import json
-import os
-from pathlib import Path
+import queue
+import portable_fs as os
+from pathlib import Path, PurePosixPath
 import re
 import select
 import stat
@@ -20,6 +21,7 @@ import time
 import unicodedata
 import webbrowser
 from library_server import load_tags, serve_library
+import media_backend
 
 BASE = Path(__file__).resolve().parent
 IMAGE_EXT = set("jpg jpeg png heic heif tif tiff gif bmp webp avif dng cr2 cr3 nef arw raf orf rw2 pef srw".split())
@@ -34,7 +36,8 @@ DATALESS_FLAG = 0x40000000  # macOS UF_DATALESS: avoid downloading cloud placeho
 
 
 def signature(st):
-    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+    from media_actions import file_signature
+    return tuple(file_signature(st))
 
 
 def inside(path, directory):
@@ -57,9 +60,13 @@ def normalize_roots(paths, output):
     roots = []
     for text in paths:
         selected = Path(text).expanduser()
-        if selected.is_symlink():
+        if selected.is_symlink() or getattr(selected.lstat(), "st_file_attributes", 0) & 0x400:
             raise ValueError(f"扫描目录不能是符号链接：{selected}")
         path = selected.resolve(strict=True)
+        if os.name == "nt":
+            from file_operations import open_directory
+            directory = open_directory(selected.absolute())
+            os.close(directory)
         if not path.is_dir():
             raise ValueError(f"请选择文件夹：{path}")
         if any(folder.suffix.lower() in PACKAGE_EXT for folder in (path, *path.parents)):
@@ -86,7 +93,7 @@ def discover(roots, output, include_hidden, issues, folders=None, sidecars=None)
                 path = Path(parent) / name
                 try:
                     st = path.lstat()
-                    if stat.S_ISLNK(st.st_mode):
+                    if stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & 0x400:
                         skipped["符号链接"] += 1
                     elif inside(path, output):
                         skipped["报告目录"] += 1
@@ -113,7 +120,7 @@ def discover(roots, output, include_hidden, issues, folders=None, sidecars=None)
                     continue
                 try:
                     st = path.lstat()
-                    if not stat.S_ISREG(st.st_mode):
+                    if not stat.S_ISREG(st.st_mode) or getattr(st, "st_file_attributes", 0) & 0x400:
                         skipped["符号链接或特殊文件"] += 1
                         continue
                     if getattr(st, "st_flags", 0) & DATALESS_FLAG:
@@ -263,7 +270,8 @@ def inspect_video_headers(records, issues, enabled):
 
 def helper_available(helper):
     try:
-        return stat.S_ISREG(helper.lstat().st_mode) and os.access(helper, os.X_OK)
+        return (stat.S_ISREG(helper.lstat().st_mode) and media_backend.portable_available(helper)
+                and (helper.suffix == ".py" or os.access(helper, os.X_OK)))
     except OSError:
         return False
 
@@ -299,6 +307,16 @@ class ImageProbeWorker:
         process.stdout.close()
 
     def _read_response(self, timeout):
+        if sys.platform == "win32":
+            try:
+                line = self._responses.get(timeout=timeout)
+            except queue.Empty as error:
+                raise subprocess.TimeoutExpired(str(self.helper), timeout) from error
+            if isinstance(line, Exception):
+                raise line
+            if not line or len(line) > 1024 * 1024 or not line.endswith(b"\n"):
+                raise OSError("图片解析进程提前退出或响应过长")
+            return line
         deadline = time.monotonic() + timeout
         maximum = 1024 * 1024
         while b"\n" not in self._stdout_buffer:
@@ -324,8 +342,22 @@ class ImageProbeWorker:
             if self.process is None:
                 if not helper_available(self.helper):
                     raise OSError("图片解析程序不存在、不可执行或是符号链接")
-                self.process = subprocess.Popen([str(self.helper), "--batch"], stdin=subprocess.PIPE,
-                                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
+                self.process = subprocess.Popen([*media_backend.command(self.helper), "--batch"], stdin=subprocess.PIPE,
+                                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0,
+                                                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
+                if sys.platform == "win32":
+                    responses, output = queue.Queue(), self.process.stdout
+                    self._responses = responses
+                    def read_lines():
+                        try:
+                            while True:
+                                line = output.readline(1024 * 1024 + 1)
+                                responses.put(line)
+                                if not line or len(line) > 1024 * 1024:
+                                    break
+                        except (OSError, ValueError) as error:
+                            responses.put(error)
+                    threading.Thread(target=read_lines, daemon=True).start()
             request = {"path": path}
             if thumbnail is not None:
                 request["thumbnail"] = thumbnail
@@ -382,7 +414,7 @@ def inspect_images(records, helper, issues, enabled):
         for worker in workers:
             worker.close()
     return {"available": True, "enabled": True, "inspected": success,
-            "note": "使用 macOS ImageIO；动画仅比较第一帧，支持格式取决于系统解码器。"}
+            "note": "使用 ImageIO 或 Pillow；动画仅比较第一帧，支持格式取决于已安装的解码器。"}
 
 
 def month_for(record):
@@ -407,7 +439,9 @@ def month_for(record):
 def safe_segment(text):
     text = unicodedata.normalize("NFC", text)
     text = re.sub(r'[\x00-\x1f/\\:*?"<>|]', "_", text).strip(" .")
-    return (text[:100].rstrip(" .") or "待整理")
+    text = text[:100].rstrip(" .") or "待整理"
+    from organization_plan import invalid_windows_name
+    return "_" + text if invalid_windows_name(text) else text
 
 
 def related_folders(folders, records, sidecars=()):
@@ -720,7 +754,7 @@ def classify(records, video_rule):
         record["suggested_path"], record["reason"] = target, reason
     occupied = set()
     for record in records:
-        original = Path(record["suggested_path"])
+        original = PurePosixPath(record["suggested_path"])
         proposal, index = str(original), 1
         while unicodedata.normalize("NFC", proposal).casefold() in occupied:
             token = hashlib.sha256(record["path"].encode()).hexdigest()[:8]
@@ -935,7 +969,7 @@ def export_video_frame_covers(directory, groups, records, helper, issues, limit=
     if not enabled or not helper_available(helper):
         return 0
     by_path = {record["path"]: record for record in records if record["kind"] == "视频"}
-    supported = {"mp4", "mov", "m4v", "3gp", "mpg", "mpeg"}
+    supported = VIDEO_EXT if helper.suffix == ".py" else {"mp4", "mov", "m4v", "3gp", "mpg", "mpeg"}
     pending = []
     for index, group in enumerate(groups):
         if group["poster"]:
@@ -1136,7 +1170,7 @@ def render_video_library(data):
     function mediaButtons(file, parent) {
       if (!mediaAvailable || !mediaIds[file.path]) return;
       const message=make('div','minor');message.setAttribute('role','status');
-      for (const [action,label] of [['open','播放'],['reveal','在 Finder 定位']]) {const button=make('button','',label);button.type='button';button.setAttribute('aria-label',label+' '+file.path.split('/').pop());button.addEventListener('click',()=>openMedia(file,action,button,message));parent.append(button);}parent.append(message);
+      for (const [action,label] of [['open','播放'],['reveal','在 文件管理器 定位']]) {const button=make('button','',label);button.type='button';button.setAttribute('aria-label',label+' '+file.path.split('/').pop());button.addEventListener('click',()=>openMedia(file,action,button,message));parent.append(button);}parent.append(message);
     }
     function render() {
       const query = search.value.trim().toLocaleLowerCase();
@@ -1260,6 +1294,10 @@ def write_reports(directory, data):
 
 
 def choose_folders():
+    if sys.platform == "win32":
+        from system_integration import choose_directory
+        selected = choose_directory("选择照片或视频文件夹（只读扫描，可继续添加多个目录）")
+        return [selected] if selected else []
     if sys.platform != "darwin":
         raise ValueError("请在命令后提供要扫描的文件夹路径。")
     script = '''set choices to choose folder with prompt "选择照片或视频文件夹（可多选）。只扫描，不修改文件。" with multiple selections allowed
@@ -1278,7 +1316,7 @@ return answer'''
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="媒体整理助手：仅扫描和生成报告，不移动、不删除、不上传文件。")
-    parser.add_argument("folders", nargs="*", help="扫描目录，可多个；不填则在 macOS 弹出选择窗口")
+    parser.add_argument("folders", nargs="*", help="扫描目录，可多个；不填则弹出文件夹选择窗口")
     parser.add_argument("--output", type=Path, default=BASE / "reports", help="报告存放目录")
     parser.add_argument("--video-rule", choices=["auto", "name", "folder"], default="auto", help="视频分类建议规则")
     parser.add_argument("--distance", type=int, choices=range(0, 17), default=6, metavar="0-16", help="图片 dHash 距离阈值，默认 6")
@@ -1293,6 +1331,16 @@ def main(argv=None):
     parser.add_argument("--edit-tags", action="store_true", help="扫描后打开本机资料库，可编辑标签；关闭终端停止服务")
     parser.add_argument("--serve-library", action="store_true", help="打开最近一次资料库并编辑标签，不重新扫描")
     args = parser.parse_args(argv)
+    cancel_path = os.environ.get("MEDIA_ORGANIZER_CANCEL_FILE")
+    cancel_monitor_done = threading.Event()
+    if cancel_path:
+        def monitor_cancel():
+            import _thread
+            while not cancel_monitor_done.wait(.2):
+                if Path(cancel_path).exists():
+                    _thread.interrupt_main()
+                    return
+        threading.Thread(target=monitor_cancel, daemon=True).start()
     if args.max_similar < 1:
         parser.error("--max-similar 必须大于 0")
     if args.max_video_covers < 0:
@@ -1318,7 +1366,7 @@ def main(argv=None):
         records, skipped = discover(roots, output, args.include_hidden, issues, folders_seen, found_sidecars)
         duplicates = exact_duplicates(records, issues)
         video_inspection = inspect_video_headers(records, issues, args.check_video_headers)
-        image_inspection = inspect_images(records, BASE / "native" / "image_probe", issues, not args.no_image_metadata)
+        image_inspection = inspect_images(records, media_backend.helper("image_probe"), issues, not args.no_image_metadata)
         classify(records, args.video_rule)
         sidecars = associate_sidecars(found_sidecars, records)
         similarity = similar_images(records, args.distance, args.max_similar, not args.no_similar and not args.no_image_metadata and image_inspection["available"])
@@ -1333,14 +1381,14 @@ def main(argv=None):
         video_library = build_video_library(records, sidecars, duplicates, issues, folder_groups, saved_tags)
         directory = output / dt.datetime.now().strftime("scan-%Y%m%d-%H%M%S-%f")
         directory.mkdir(parents=True, exist_ok=False, mode=0o700)
-        previews = export_previews(directory, records, similarity, BASE / "native" / "image_probe", issues,
+        previews = export_previews(directory, records, similarity, media_backend.helper("image_probe"), issues,
                                    photo_limit=500 if not args.no_image_metadata and image_inspection["available"] else 0)
         cover_issue_start = len(issues)
         video_library["poster_count"] = export_local_covers(directory, video_library["groups"], records,
-                                                             BASE / "native" / "image_probe", issues,
+                                                             media_backend.helper("image_probe"), issues,
                                                              enabled=not args.no_image_metadata)
         video_library["frame_count"] = export_video_frame_covers(directory, video_library["groups"], records,
-                                                                  BASE / "native" / "video_cover", issues,
+                                                                  media_backend.helper("video_cover"), issues,
                                                                   limit=args.max_video_covers,
                                                                   enabled=not args.no_image_metadata and not args.no_video_covers)
         video_library["poster_count"] += video_library["frame_count"]
@@ -1373,6 +1421,7 @@ def main(argv=None):
         print(f"无法完成：{error}", file=sys.stderr)
         return 1
     finally:
+        cancel_monitor_done.set()
         os.umask(previous_umask)
 
 

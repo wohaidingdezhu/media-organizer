@@ -1,3 +1,4 @@
+from test_support import make_symlink
 import contextlib
 import io
 import json
@@ -57,7 +58,7 @@ class MediaTests(unittest.TestCase):
             (source / "empty.mov").touch()
             (source / ".hidden.mp4").write_bytes(b"movie-one")
             os.link(source / "ABC-123-CD1.mp4", source / "hard.mp4")
-            (source / "link.mp4").symlink_to(source / "ABC-123-CD1.mp4")
+            make_symlink(source / "link.mp4", source / "ABC-123-CD1.mp4")
             library = source / "Photos.photoslibrary"
             library.mkdir()
             (library / "private.mp4").write_bytes(b"movie-one")
@@ -87,11 +88,12 @@ class MediaTests(unittest.TestCase):
             first, second = base / "one" / "Movies", base / "two" / "Movies"
             first.mkdir(parents=True)
             second.mkdir(parents=True)
-            for name, filename in [("Trip:2024", "clip-a.mp4"), ("Trip?2024", "clip-b.mp4")]:
+            first_name, second_name = ("Trip:2024", "Trip?2024") if os.name != "nt" else ("Trip" + "a" * 97 + "A", "Trip" + "a" * 97 + "B")
+            for name, filename in [(first_name, "clip-a.mp4"), (second_name, "clip-b.mp4")]:
                 folder = first / name
                 folder.mkdir()
                 (folder / filename).write_bytes(filename.encode())
-            (first / "Trip:2024" / "clip-a.srt").write_bytes(b"sample subtitle")
+            (first / first_name / "clip-a.srt").write_bytes(b"sample subtitle")
             (second / "clip-c.mp4").write_bytes(b"third video")
             originals = {p: (p.read_bytes(), p.stat().st_mtime_ns) for root in (first, second) for p in root.rglob("*.mp4")}
             with contextlib.redirect_stdout(io.StringIO()):
@@ -107,7 +109,7 @@ class MediaTests(unittest.TestCase):
             self.assertIn("文件夹名称冲突", next(r["reason"] for r in data["files"] if r["name"] == "clip-a.mp4"))
             self.assertEqual(len((report.parent / "folder_names.csv").read_text().splitlines()), 5)
             collision = next(g for g in data["folder_groups"] if g["type"] == "整理后名称冲突")
-            self.assertEqual(next(f for f in collision["folders"] if f["path"].endswith("Trip:2024"))["sidecar_files"], 1)
+            self.assertEqual(next(f for f in collision["folders"] if f["path"].endswith(first_name))["sidecar_files"], 1)
             self.assertIn("包含附属文件项", (report.parent / "folder_names.csv").read_text().splitlines()[0])
             self.assertEqual(originals, {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in originals})
 
@@ -239,7 +241,7 @@ class MediaTests(unittest.TestCase):
             (source / "Film.mp4.ja.forced.srt").write_bytes(b"sample subtitle 3")
             (source / "Film.en.srt").write_bytes(b"sample subtitle 4")
             (source / "Orphan.srt").write_bytes(b"orphan")
-            (source / "linked.srt").symlink_to(source / "Orphan.srt")
+            make_symlink(source / "linked.srt", source / "Orphan.srt")
             originals = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in source.iterdir() if p.is_file() and not p.is_symlink()}
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(scan.main([str(source), "--output", str(output), "--no-image-metadata"]), 0)
@@ -315,11 +317,11 @@ class MediaTests(unittest.TestCase):
     def test_image_worker_reuses_process_after_unreadable_sample(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
-            first, second, broken = base / "first.png", base / "中文\n照片.png", base / "broken.png"
+            first, second, broken = base / "first.png", base / ("中文 照片.png" if os.name == "nt" else "中文\n照片.png"), base / "broken.png"
             sample_png(first, "A")
             sample_png(second, "B")
             broken.write_bytes(b"not an image")
-            worker = scan.ImageProbeWorker(scan.BASE / "native" / "image_probe")
+            worker = scan.ImageProbeWorker(scan.media_backend.helper("image_probe"))
             try:
                 self.assertIsNotNone(worker.request(str(first))["dhash"])
                 process_id = worker.process.pid
@@ -333,7 +335,7 @@ class MediaTests(unittest.TestCase):
     def test_image_worker_repeated_descriptor_reads_keep_all_previews(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
-            worker = scan.ImageProbeWorker(scan.BASE / "native" / "image_probe")
+            worker = scan.ImageProbeWorker(scan.media_backend.helper("image_probe"))
             try:
                 process_id = None
                 for index in range(60):
@@ -432,8 +434,8 @@ class MediaTests(unittest.TestCase):
             sample_png(source, "A")
             original = source.read_bytes()
             linked_source, linked_output = base / "linked.png", base / "preview.png"
-            linked_source.symlink_to(source)
-            linked_output.symlink_to(source)
+            make_symlink(linked_source, source)
+            make_symlink(linked_output, source)
             helper = scan.BASE / "native" / "image_probe"
             self.assertFalse(scan.helper_available(linked_source))
             self.assertNotEqual(subprocess.run([str(helper), str(linked_source)], capture_output=True).returncode, 0)
@@ -450,7 +452,7 @@ class MediaTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 scan.full_hash(record)
             link = Path(temporary) / "link.mp4"
-            link.symlink_to(path)
+            make_symlink(link, path)
             record = {"path": str(link), "name": link.name, "_signature": scan.signature(path.stat())}
             with self.assertRaises((ValueError, OSError)):
                 scan.full_hash(record)
@@ -461,7 +463,7 @@ class MediaTests(unittest.TestCase):
             target = base / "photos"
             target.mkdir()
             link = base / "linked-photos"
-            link.symlink_to(target, target_is_directory=True)
+            make_symlink(link, target, target_is_directory=True)
             with self.assertRaisesRegex(ValueError, "符号链接"):
                 scan.normalize_roots([str(link)], base / "reports")
             nested = base / "Library.photoslibrary" / "originals"
