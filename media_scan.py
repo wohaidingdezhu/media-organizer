@@ -128,7 +128,7 @@ def discover(roots, output, include_hidden, issues, folders=None, sidecars=None)
                         issue(issues, path, "云端占位文件，未下载或读取")
                         continue
                     if is_sidecar:
-                        sidecars.append({"path": str(path), "extension": ext, "bytes": st.st_size})
+                        sidecars.append({"path": str(path), "extension": ext, "bytes": st.st_size, "_signature": signature(st)})
                         continue
                     identity = (st.st_dev, st.st_ino)
                     record = {
@@ -1102,7 +1102,9 @@ def render_report(data):
 
 
 def render_video_library(data):
-    library = data["video_library"]
+    library = dict(data["video_library"])
+    if data.get("restored_snapshot"):
+        library["restored_snapshot"] = True
     payload = json.dumps(library, ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     template = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' file: data:; connect-src 'self'"><title>影片资料库 · 媒体整理助手</title><style>
     *{box-sizing:border-box}body{margin:0;background:#f3f6f8;color:#1d2939;font:15px/1.65 -apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif}main{max-width:1180px;margin:32px auto;padding:0 24px}header{background:#14352f;color:white;padding:28px;border-radius:18px}h1{font-size:31px;margin:4px 0}header p{margin:4px 0;color:#d5e9e2}a{color:#126653}header a{color:#b9f0d8}.stats{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0}.stat{background:white;border:1px solid #dce5e5;border-radius:12px;padding:13px 20px;min-width:170px}.stat strong{display:block;font-size:25px}.controls{display:flex;gap:10px;flex-wrap:wrap;margin:20px 0}input,select,button{font:inherit;border:1px solid #a8babc;border-radius:8px;padding:9px;background:white}input{flex:1;min-width:220px}section{background:white;border:1px solid #dce5e5;border-radius:12px;padding:18px;margin:12px 0}.wall{display:grid;grid-template-columns:repeat(auto-fill,minmax(205px,1fr));gap:16px;align-items:start}.card{background:#fff;border:1px solid #dce5e5;border-radius:12px;overflow:hidden;overflow-wrap:anywhere;box-shadow:0 3px 12px #1d29390d}.poster{display:block;width:100%;aspect-ratio:2/3;object-fit:cover;background:#e4eae8}.poster-placeholder{display:grid;place-items:center;background:linear-gradient(145deg,#194438,#537d69);color:#f2fff8;padding:18px;text-align:center;font-size:27px;font-weight:700}.card-body{padding:14px}.card h3{margin:0 0 4px;font-size:18px;line-height:1.4}.card details{border-top:1px solid #e3eaeb;margin-top:10px;padding-top:8px}.card summary{cursor:pointer;color:#126653}.meta{color:#627378;font-size:13px}.badge{display:inline-block;background:#e5f3ec;color:#205640;border-radius:999px;padding:2px 9px;margin:5px 6px 5px 0;font-size:12px}.alert{background:#fff0d7;color:#80520c}.file{border-top:1px solid #e3eaeb;padding:10px 0}.path{font-weight:600;overflow-wrap:anywhere}.minor{color:#607076;font-size:13px;overflow-wrap:anywhere}.issue{border-bottom:1px solid #e3eaeb;padding:10px 0}.pager{display:flex;align-items:center;gap:10px;margin:12px 0}.muted{color:#627378}.empty{padding:15px;color:#627378}.tag-editor{background:#f3f8f5;border:1px solid #c9ded3;border-radius:8px;padding:9px;margin:8px 0}.tag-editor input{display:block;width:100%;min-width:0;margin-bottom:8px}.tag-editor button{padding:5px 8px;margin-right:5px;font-size:12px}.tag-editor .minor{margin-top:5px}@media(max-width:650px){main{padding:0 12px}h1{font-size:25px}.wall{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.card-body{padding:10px}}
@@ -1334,6 +1336,7 @@ def main(argv=None):
     parser.add_argument("--no-similar", action="store_true", help="关闭相似图片比较")
     parser.add_argument("--no-image-metadata", action="store_true", help="跳过照片解析和封面生成，加快扫描；仍有精确文件查重")
     parser.add_argument("--check-video-headers", action="store_true", help="可选：读取少量视频文件头并提示常见容器是否可识别；不验证能否播放")
+    parser.add_argument("--no-local-metadata", action="store_true", help="不读取本地 NFO 影片资料和剧照")
     parser.add_argument("--no-video-covers", action="store_true", help="不从视频截帧生成封面；仍使用本地图片封面")
     parser.add_argument("--max-video-covers", type=int, default=500, help="视频截帧封面数量上限，默认 500")
     parser.add_argument("--include-hidden", action="store_true", help="包含隐藏文件和目录（仍跳过资料库和系统目录）")
@@ -1389,6 +1392,11 @@ def main(argv=None):
             issue(issues, tag_path, f"标签文件未读取：{error}")
             saved_tags = {}
         video_library = build_video_library(records, sidecars, duplicates, issues, folder_groups, saved_tags)
+        from local_movie_metadata import enrich_library, export_stills
+        metadata_issue_start = len(issues)
+        if not args.no_local_metadata:
+            enrich_library(video_library["groups"], sidecars, issues)
+        video_library["issues"].extend({"path": item["path"], "reason": item["reason"], "type": "影片资料"} for item in issues[metadata_issue_start:])
         directory = output / dt.datetime.now().strftime("scan-%Y%m%d-%H%M%S-%f")
         directory.mkdir(parents=True, exist_ok=False, mode=0o700)
         previews = export_previews(directory, records, similarity, media_backend.helper("image_probe"), issues,
@@ -1401,6 +1409,7 @@ def main(argv=None):
                                                                   media_backend.helper("video_cover"), issues,
                                                                   limit=args.max_video_covers,
                                                                   enabled=not args.no_image_metadata and not args.no_video_covers)
+        video_library["still_count"] = export_stills(directory, video_library["groups"], records, previews, media_backend.helper("image_probe"), issues, enabled=not args.no_image_metadata and not args.no_local_metadata)
         video_library["poster_count"] += video_library["frame_count"]
         video_library["issues"].extend({"path": item["path"], "reason": item["reason"], "type": "封面"}
                                        for item in issues[cover_issue_start:])
@@ -1416,9 +1425,14 @@ def main(argv=None):
                             "video_covers_enabled": not args.no_video_covers and not args.no_image_metadata},
                 "image_inspection": image_inspection, "video_inspection": video_inspection,
                 "files": clean_records, "duplicates": duplicates,
-                "similar": similarity, "previews": previews, "video_groups": video_groups, "sidecars": sidecars,
+                "similar": similarity, "previews": previews, "video_groups": video_groups, "sidecars": [{key: value for key, value in item.items() if not key.startswith("_")} for item in sidecars],
                 "folder_groups": folder_groups, "video_library": video_library, "issues": issues, "skipped": skipped}
         write_reports(directory, data)
+        try:
+            from library_index import sync_index
+            sync_index(output)
+        except (OSError, ValueError) as error:
+            print(f"长期清单未更新（本次报告保留）：{error}", flush=True)
         print(f"\n完成：{len(records)} 个媒体文件，{len(duplicates)} 组精确重复，{len(similarity['pairs'])} 对图片相似候选，{len(video_groups)} 组相关视频候选，{len(sidecars)} 个附属文件，{len(folder_groups)} 组文件夹名称候选。")
         print(f"读取问题 {len(issues)} 条。报告：{directory / 'report.html'}")
         if args.edit_tags:

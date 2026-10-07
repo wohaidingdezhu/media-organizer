@@ -21,7 +21,7 @@ jobs:
         with:
           node-version: '22'
       - name: Install shared media and platform desktop backends
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements-desktop.txt
       - name: Compile native macOS backends
         if: runner.os == 'macOS'
         run: |
@@ -29,13 +29,54 @@ jobs:
           swiftc native/video_cover.swift -o native/video_cover
       - name: Test with generated sample files
         run: python -X utf8 -m unittest -v
+  package:
+    name: Desktop package (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15-intel, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install declared packaging and shared media dependencies
+        run: python -m pip install -r requirements-desktop.txt
+      - name: Build apps and exercise bundled backend with generated media
+        run: python -X utf8 build_desktop.py
+      - name: Verify native window and shared dashboard on macOS
+        if: runner.os == 'macOS'
+        run: python -c "import subprocess; subprocess.run(['dist/desktop/MediaOrganizer.app/Contents/MacOS/MediaOrganizer', '--ui-smoke-test'], check=True, timeout=150)"
+      - name: Verify native window and shared dashboard on Windows
+        if: runner.os == 'Windows'
+        run: python -c "import subprocess; subprocess.run(['dist/desktop/MediaOrganizer/MediaOrganizer.exe', '--ui-smoke-test'], check=True, timeout=150)"
+      - name: Create macOS installer
+        if: runner.os == 'macOS'
+        run: python packaging/macos_package.py
+      - name: Create Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $compiler = "${env:ProgramFiles(x86)}/Inno Setup 6/ISCC.exe"
+          if (!(Test-Path $compiler)) { throw 'Inno Setup compiler unavailable' }
+          & $compiler packaging/windows.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os }}
+          path: dist/installers/*
+          if-no-files-found: error
   compatibility:
     name: Dual-platform compatibility
     if: always()
-    needs: test
+    needs: [test, package]
     runs-on: ubuntu-latest
     steps:
       - name: Require every platform and Python version to succeed
         env:
+          PACKAGE_RESULT: ${{ needs.package.result }}
           MATRIX_RESULT: ${{ needs.test.result }}
-        run: test "$MATRIX_RESULT" = "success"
+        run: test "$MATRIX_RESULT" = "success" && test "$PACKAGE_RESULT" = "success"

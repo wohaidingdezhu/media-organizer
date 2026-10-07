@@ -46,6 +46,9 @@ def checked_stat(path):
 class MediaActions:
     def __init__(self, document):
         self.records = {}
+        if document.get('restored_snapshot'):
+            self.roots = []
+            return
         roots = document.get("roots", [])
         if not isinstance(roots, list):
             roots = []
