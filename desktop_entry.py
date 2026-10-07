@@ -54,7 +54,7 @@ def prepare_console(root, name='desktop-session.log'):
     parent = open_directory(root)
     try:
         descriptor = fs.open(name, fs.O_WRONLY | fs.O_NOFOLLOW, dir_fd=parent)
-        return fs.fdopen(descriptor, 'w', encoding='utf-8', newline='\\n', buffering=1)
+        return fs.fdopen(descriptor, 'w', encoding='utf-8', newline='\n', buffering=1)
     finally:
         fs.close(parent)
 
