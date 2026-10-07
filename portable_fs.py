@@ -20,7 +20,7 @@ def open_lock(name, directory):
     Separate exclusive creation from opening: concurrent O_CREAT opens can
     transiently fail with ENOENT on macOS. Both paths reject links/reparse points.
     """
-    if sys.platform == "win32":
+    if _os.name == "nt":
         flags, opener = _os.O_RDWR | O_NOFOLLOW | O_NONBLOCK, open
     else:
         flags, opener = _os.O_RDWR | _os.O_NOFOLLOW | _os.O_NONBLOCK, _os.open

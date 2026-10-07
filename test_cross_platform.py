@@ -24,6 +24,26 @@ import library_server
 
 
 class CrossPlatformTests(unittest.TestCase):
+    def test_lock_reopen_keeps_header_with_a_substituted_desktop_platform(self):
+        from file_operations import open_directory
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            directory = open_directory(root)
+            try:
+                # Desktop actions are substituted in shared tests. Filesystem
+                # handles must keep using the real host's OS adapter.
+                with mock.patch.object(sys, 'platform', 'darwin' if os.name == 'nt' else 'win32'):
+                    descriptor = fs.open_lock('.generated-lock', directory)
+                    os.write(descriptor, b'generated job header')
+                    fs.close(descriptor)
+                    descriptor = fs.open_lock('.generated-lock', directory)
+                    try:
+                        self.assertEqual(os.read(descriptor, 64), b'generated job header')
+                    finally:
+                        fs.close(descriptor)
+            finally:
+                fs.close(directory)
+
     def test_single_character_targets_publish_without_overwriting(self):
         from file_operations import open_directory
         with tempfile.TemporaryDirectory() as temporary:
