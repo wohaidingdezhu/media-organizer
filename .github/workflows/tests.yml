@@ -17,6 +17,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - name: Install shared media and platform desktop backends
         run: python -m pip install -r requirements.txt
       - name: Compile native macOS backends
