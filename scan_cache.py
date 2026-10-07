@@ -5,9 +5,44 @@ import json
 from pathlib import Path, PurePosixPath
 import re
 import sys
+import struct
+import zlib
 
 import portable_fs as fs
 from media_actions import checked_stat, file_signature
+
+
+def valid_thumbnail(body):
+    """Bounded PNG structure/CRC checks; invalid cache falls back to decoding."""
+    if not body.startswith(b'\x89PNG\r\n\x1a\n'):
+        return False
+    offset, header, data = 8, False, False
+    while offset + 12 <= len(body):
+        length = struct.unpack_from('>I', body, offset)[0]
+        end = offset + 12 + length
+        if end > len(body):
+            return False
+        kind = body[offset + 4:offset + 8]
+        payload = body[offset + 8:end - 4]
+        crc = struct.unpack_from('>I', body, end - 4)[0]
+        if zlib.crc32(kind + payload) & 0xffffffff != crc:
+            return False
+        if not header:
+            if kind != b'IHDR' or length != 13:
+                return False
+            width, height = struct.unpack_from('>II', payload)
+            # Shared thumbnails fit 512; native macOS video fallback allows 600.
+            if not 0 < width <= 600 or not 0 < height <= 600:
+                return False
+            header = True
+        elif kind == b'IHDR':
+            return False
+        elif kind == b'IDAT':
+            data = data or bool(length)
+        elif kind == b'IEND':
+            return length == 0 and data and end == len(body)
+        offset = end
+    return False
 
 
 def analysis_fingerprint(image_helper, video_helper):
@@ -93,7 +128,7 @@ class ScanCache:
             if not self.unchanged(record):
                 return False
             body = fs.read_private_file(self.output, (self.report, *PurePosixPath(relative).parts), 2 * 1024 * 1024)
-            if len(body) < 24 or not body.startswith(b'\x89PNG\r\n\x1a\n'):
+            if not valid_thumbnail(body):
                 return False
             descriptor = fs.open(destination, fs.O_WRONLY | fs.O_CREAT | fs.O_EXCL | fs.O_NOFOLLOW, 0o600)
             created = True

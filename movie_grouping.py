@@ -48,6 +48,11 @@ def load_assignments(root):
     return validate_assignments(value)
 
 
+def assignments_revision(values):
+    return hashlib.sha256(json.dumps(values, ensure_ascii=False, sort_keys=True,
+                                    separators=(',', ':')).encode('utf-8')).hexdigest()
+
+
 def validate_assignments(value):
     if not isinstance(value, dict) or value.get('version') != 1 or not isinstance(value.get('files'), dict):
         raise ValueError('影片分组修正文件损坏，保留原记录')
@@ -108,7 +113,7 @@ def apply_grouping(library, assignments, art_library=None):
     return result
 
 
-def update_assignments(root, document, edits):
+def update_assignments(root, document, edits, expected_revision=None):
     files = {media_id(file['path']): file for group in document['video_library']['groups'] for file in group['files']}
     allowed = {group.get('work_key', group['tag_key']): group['title'] for group in document['video_library']['groups']}
     if not isinstance(edits, list) or not 1 <= len(edits) <= 200:
@@ -133,6 +138,8 @@ def update_assignments(root, document, edits):
         prepared[edit['id']] = assignment
     with data_lock(root):
         values = load_assignments(root)
+        if expected_revision is not None and expected_revision != assignments_revision(values):
+            raise ValueError('另一窗口已修改影片分组，请刷新页面后重新修正；本次未保存')
         for key, value in prepared.items():
             if value is None:
                 values.pop(key, None)

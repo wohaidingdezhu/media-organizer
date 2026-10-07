@@ -36,16 +36,12 @@ class BundleActions:
 
 
 def bundle_selection(document, ids, current, media):
-    from media_scan import local_cover_candidates
+    from movie_attachments import attachment_manifests
     groups = document.get('video_library', {}).get('groups', [])
     selected = {media.records[key]['path'] for key in ids if key in media.records}
     if len(selected) != len(ids) or any(media.records[key]['kind'] != '视频' for key in ids):
         raise ValueError('整组复制请只勾选视频，封面和附件将在预览中展开')
-    covers = local_cover_candidates(groups, document.get('files', []))
-    folder_owners = {}
-    for number, group in enumerate(groups):
-        for file in group['files']:
-            folder_owners.setdefault(Path(file['path']).parent, set()).add(number)
+    manifests = attachment_manifests(document)
     main, companions, skipped = {}, {}, []
     for number, group in enumerate(groups):
         paths = {file['path'] for file in group['files']}
@@ -68,34 +64,14 @@ def bundle_selection(document, ids, current, media):
         if len(parents) != 1:
             raise ValueError('同一影片版本的分类目录不一致，请先调整到同一目录')
         parent, = parents
-        attachments = []
-        folders = {Path(path).parent for path in paths}
-        for item in document.get('sidecars', []):
-            matches = set(item.get('media_paths', []))
-            if item.get('status') == '已关联' and matches and matches <= paths:
-                attachments.append((item['path'], Path(item['path']).name))
-            elif matches & paths or Path(item['path']).parent in folders:
-                skipped.append({'path': item['path'], 'reason': '附件未唯一关联到本组，未加入复制'})
-        attachments.extend((item['path'], Path(item['path']).name) for item in covers[number])
-        for item in document.get('files', []):
-            if item.get('kind') != '照片':
-                continue
-            path = Path(item['path'])
-            owner = path.parent.parent if path.parent.name.casefold() == 'extrafanart' else path.parent
-            if folder_owners.get(owner) == {number} and (path.parent.name.casefold() == 'extrafanart' or path.stem.casefold() in {'fanart', 'backdrop'} or path.stem.casefold().endswith('-fanart')):
-                attachments.append((str(path), 'extrafanart/' + path.name if path.parent.name.casefold() == 'extrafanart' else path.name))
-        for path, name in attachments:
+        skipped.extend(manifests[number]['skipped'])
+        for item in manifests[number]['items']:
+            path, name = item['path'], item['relative']
             key = media_id(path)
             target = str(PurePosixPath(parent) / name)
             if key in companions and companions[key] != target:
                 raise ValueError('附件对应多个目标，请分别复制影片组：' + path)
             companions[key] = target
-        for item in document.get('files', []):
-            path = Path(item['path'])
-            if (item.get('kind') == '照片' and path.parent in folders and media_id(str(path)) not in companions
-                    and (path.stem.casefold() in {'poster', 'folder', 'cover', '封面', 'fanart', 'backdrop'}
-                         or path.stem.casefold().endswith(('-poster', '-cover', '-fanart')))):
-                skipped.append({'path': str(path), 'reason': '疑似封面或剧照未明确关联到本组，未加入复制'})
     if not main:
         raise ValueError('所选视频缺少影片分组，请重新扫描')
     actions = BundleActions(media, document)

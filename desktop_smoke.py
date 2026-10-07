@@ -64,6 +64,22 @@ def run():
             time.sleep(.02)
         assert result['status'] == 'complete', result
         assert all(Path(item['target']).read_bytes() == Path(item['path']).read_bytes() for item in preview['items'])
+        assert preview['bundles'][0]['counts'] == {'subtitle': 0, 'nfo': 1, 'cover': 1, 'still': 1}
+        assert result['bundle'] and {item['role'] for item in result['planned_items']} == {'影片', 'NFO', '封面', '剧照'}
+        # A second generated library has no local poster, exercising actual FFmpeg
+        # extraction and its cached PNG inside the frozen application as well.
+        frame_source, frame_output = base / '截帧样例', base / 'frame-reports'
+        frame_source.mkdir()
+        frame_video = frame_source / 'frame.mp4'
+        frame_video.write_bytes(video.read_bytes())
+        frame_before = hashlib.sha256(frame_video.read_bytes()).hexdigest()
+        for number in range(2):
+            assert media_scan.main([str(frame_source), '--output', str(frame_output)]) == 0
+            frame_report = max(frame_output.glob('scan-*/report.json'))
+            frame_document = json.loads(frame_report.read_text(encoding='utf-8'))
+            assert frame_document['video_library']['frame_count'] == 1
+            assert frame_document['scan_reuse']['video_covers'] == number
+        assert hashlib.sha256(frame_video.read_bytes()).hexdigest() == frame_before
         assert len(catalog(output)['items']) == 3
         files, _ = validate_backup(export_backup(output))
         restored = restore_backup(output, files)
@@ -84,4 +100,4 @@ def run():
             server.server_close()
         after = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in source.rglob('*') if path.is_file()}
         assert before == after
-        print('PACKAGED_SMOKE_OK: scan, reuse, grouping, bundle copy, NFO, poster, still, catalog, backup, restore, HTTP, originals unchanged', flush=True)
+        print('PACKAGED_SMOKE_OK: scan, reuse, FFmpeg frame cache, grouping, attachment audit, bundle copy, NFO, poster, still, catalog, backup, restore, HTTP, originals unchanged', flush=True)
