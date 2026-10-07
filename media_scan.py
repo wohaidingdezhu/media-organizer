@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# coding: utf-8
 """只读媒体清点、SHA-256 精确查重、图片相似候选与分类预览。Python 3.9+。"""
 import argparse
 import collections

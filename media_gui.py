@@ -1,3 +1,4 @@
+# coding: utf-8
 """Local browser dashboard for the read-only media scanner."""
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
