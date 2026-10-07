@@ -10,7 +10,7 @@
 - **Windows 10/11 x64：**下载 `desktop-windows-latest` 产物，解压并运行 `MediaOrganizer-Windows-x64-Setup.exe`，安装到当前用户目录，从开始菜单启动。窗口使用系统 WebView2，需要 [.NET Framework 4.8](https://dotnet.microsoft.com/download/dotnet-framework/net48) 和 [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。较旧 Windows 缺少时须手动安装，不会在扫描时联网补装。
 - **签名状态：**当前 Mac 包只有本机 ad-hoc 签名，没有 Apple 公证；Windows 包没有发布者证书。系统可能要求确认来源。源码入口仍可用，两端行为相同。
 
-独立应用资料保存在 Mac 的 `~/Library/Application Support/MediaOrganizer/reports`、Windows 的 `%LOCALAPPDATA%\MediaOrganizer\reports`；升级、卸载应用不会自动删除它们。源码版继续使用项目 `reports/`。两者互换资料时使用下面的备份恢复，恢复后重新选择本机来源并扫描。关闭原生窗口与页面“退出本机服务”走同一安全退出流程；有正在执行的文件操作时会拒绝退出，先完成或安全停止它。源码版 `.app` / `.command` / `.bat` 仍打开浏览器界面，与安装版功能共用。
+独立应用资料保存在 Mac 的 `~/Library/Application Support/MediaOrganizer/reports`、Windows 的 `%LOCALAPPDATA%\MediaOrganizer\reports`；升级、卸载应用不会自动删除它们。源码版继续使用项目 `reports/`。两者互换资料时使用下面的备份恢复，恢复后重新选择本机来源并扫描。启动诊断保存在资料目录的 `desktop-session.log`，每次启动更新；打包程序会为原生组件保留有效的 UTF-8 输出流，不依赖可见终端。关闭原生窗口与页面“退出本机服务”走同一安全退出流程；有正在执行的文件操作时会拒绝退出，先完成或安全停止它。源码版 `.app` / `.command` / `.bat` 仍打开浏览器界面，与安装版功能共用。
 
 从源码生成安装包时，在目标平台安装 `requirements-desktop.txt`，运行 `python build_desktop.py`；Mac 再运行 `python packaging/macos_package.py`，Windows 用 Inno Setup 6 编译 `packaging/windows.iss`。构建必须在对应操作系统完成。Python 3.9/3.12 可选安装原生窗口组件；当前 Windows pythonnet 不支持 Python 3.14，所以 **3.14 源码版使用同功能浏览器入口**，不安装 pywebview。发布的两端独立包均内置 Python 3.12，不受本机 Python 版本影响。Python 3.9 的 Mac 桌面依赖限定 PyObjC <12，避开错误的兼容性元数据。
 

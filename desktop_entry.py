@@ -46,6 +46,19 @@ def native_value(window, expression):
     return value
 
 
+def prepare_console(root, name='desktop-session.log'):
+    import portable_fs as fs
+    from file_operations import open_directory
+    root = fs.ensure_private_directory(root)
+    fs.write_private_file(root, name, b'')
+    parent = open_directory(root)
+    try:
+        descriptor = fs.open(name, fs.O_WRONLY | fs.O_NOFOLLOW, dir_fd=parent)
+        return fs.fdopen(descriptor, 'w', encoding='utf-8', buffering=1)
+    finally:
+        fs.close(parent)
+
+
 def main(argv=None):
     import argparse
     parser = argparse.ArgumentParser()
@@ -55,18 +68,19 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.smoke_test:
         return subprocess.call([*backend_command(), '--smoke-test'], **hidden_process_options())
-    if args.ui_smoke_test:
-        diagnostic_dir = Path.cwd() / '.test-output'
-        diagnostic_dir.mkdir(exist_ok=True)
-        diagnostic_stream = (diagnostic_dir / 'native-window.log').open('w', encoding='utf-8', buffering=1)
-        sys.stdout = diagnostic_stream
-        sys.stderr = diagnostic_stream
-        print('Native window smoke: start', flush=True)
-    import webview
     import tempfile
     import time
     temporary = tempfile.TemporaryDirectory() if args.ui_smoke_test else None
     output = Path(temporary.name).resolve() / 'reports' if temporary else args.output or application_data_directory()
+    # Windows windowed executables have no stdout/stderr. Native libraries need
+    # valid streams in production as well as tests; retain last startup's log.
+    diagnostic_dir = Path.cwd() / '.test-output' if args.ui_smoke_test else output
+    diagnostic_stream = prepare_console(diagnostic_dir, 'native-window.log' if args.ui_smoke_test else 'desktop-session.log')
+    sys.stdout = diagnostic_stream
+    sys.stderr = diagnostic_stream
+    if args.ui_smoke_test:
+        print('Native window smoke: start', flush=True)
+    import webview
     ui_result = [False]
     process = subprocess.Popen([*backend_command(), '--dashboard', '--output', str(output)], stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT, text=True, encoding='utf-8', **hidden_process_options())

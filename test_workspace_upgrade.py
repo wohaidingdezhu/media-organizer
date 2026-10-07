@@ -250,6 +250,19 @@ class WorkspaceTests(unittest.TestCase):
             with self.assertRaises(ValueError): desktop_entry.local_url(url)
         self.assertEqual(desktop_entry.local_url('http://127.0.0.1:12345/'+'a'*24+'/'),'http://127.0.0.1:12345/'+'a'*24+'/')
 
+    def test_native_window_has_valid_private_console_in_production(self):
+        with desktop_entry.prepare_console(self.output) as stream:
+            stream.write('中文启动记录\n')
+            self.assertIsInstance(stream.fileno(), int)
+        self.assertEqual(fs.read_private_file(self.output, ('desktop-session.log',)).decode('utf-8'), '中文启动记录\n')
+        target = self.base / 'log-target'
+        target.write_bytes(b'unchanged')
+        (self.output / 'desktop-session.log').unlink()
+        make_symlink(self.output / 'desktop-session.log', target)
+        with self.assertRaises((OSError, ValueError)):
+            desktop_entry.prepare_console(self.output)
+        self.assertEqual(target.read_bytes(), b'unchanged')
+
     def test_native_script_values_do_not_require_unsafe_eval(self):
         window = mock.Mock()
         for raw in (True, 'true', '"true"'):
