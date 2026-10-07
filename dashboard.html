@@ -26,7 +26,7 @@
 <body>
 <main>
   <header><div><div class="eyebrow">LOCAL MEDIA LIBRARY</div><h1>媒体整理助手</h1><p>浏览照片与影片，核对后分类整理或移到废纸篓 / 回收站。</p></div><span class="safe">● 扫描只读 · 文件操作需确认</span></header>
-  <nav class="app-nav" aria-label="主要功能"><button id="nav-results" aria-current="page">整理工作台</button><button id="nav-scan">新建扫描</button><button id="reports" class="ghost right">打开结果文件夹</button></nav>
+  <nav class="app-nav" aria-label="主要功能"><button id="nav-results" aria-current="page">整理工作台</button><button id="nav-catalog">长期资料库</button><button id="nav-scan">新建扫描</button><button id="reports" class="ghost right">打开结果文件夹</button></nav>
   <div id="notice" class="notice" role="alert"></div>
   <div id="scan-banner" class="scan-banner" hidden>扫描正在进行，完成后会自动显示本次结果。你可以继续查看已有结果。</div>
 
@@ -48,7 +48,7 @@
   </section>
 
   <section id="scan-pane" aria-label="新建扫描" hidden><div class="grid">
-    <section class="panel"><h2>1. 选择扫描文件夹</h2><ul id="folders" class="folder-list"><li class="empty">尚未选择文件夹</li></ul><button id="add-folder" class="ghost">＋ 添加文件夹…</button><p class="sub">可在 Mac 弹出的窗口中一次选择多个文件夹。首次建议先试一个较小目录。</p></section>
+    <section class="panel"><h2>1. 选择扫描文件夹</h2><ul id="folders" class="folder-list"><li class="empty">尚未选择文件夹</li></ul><button id="add-folder" class="ghost">＋ 添加文件夹…</button><p class="sub">Mac 可一次选择多个文件夹；Windows 可多次添加。首次建议先试一个较小目录。</p></section>
     <section class="panel"><h2>2. 扫描选项</h2>
       <label class="option"><input id="images" type="checkbox" checked><span>解析照片日期与相似候选<small>同时生成本地图片封面；完整 SHA-256 查重始终开启。</small></span></label>
       <label class="option"><input id="covers" type="checkbox" checked><span>无本地封面时截取视频画面<small>封面只保存在报告目录。</small></span></label>
@@ -57,6 +57,13 @@
     </section>
     <section class="panel wide"><h2>3. 开始扫描</h2><div class="actions"><button id="scan" class="primary" disabled>开始只读扫描</button><button id="cancel" class="danger" disabled>取消扫描</button></div><div id="status" class="status"><span class="dot"></span><span id="status-text">准备就绪。</span></div><div id="bar" class="bar" hidden><span></span></div><details id="scan-details" style="margin-top:16px"><summary>查看扫描记录</summary><pre id="log" class="log" aria-label="扫描记录">扫描记录会显示在这里。</pre></details></section>
   </div></section>
+  <section id="catalog-pane" aria-label="长期资料库" hidden>
+    <div class="panel"><h2>长期资料库与目录合集</h2><p>保留历次扫描的媒体清单，包括暂未连接的磁盘。未扫描到不代表文件已删除。</p>
+    <div class="row"><input id="catalog-query" type="search" placeholder="搜索文件名或路径" aria-label="搜索长期资料库"><select id="catalog-kind" aria-label="媒体类型"><option value="">照片与视频</option><option>照片</option><option>视频</option></select><select id="catalog-state" aria-label="变化筛选"><option value="">所有状态</option><option value="new">新增</option><option value="changed">变化</option><option value="seen">仍在清单中</option><option value="not_seen">本次未扫描到</option></select><button id="catalog-search">查询</button><button id="catalog-root" class="ghost">全部目录</button></div>
+    <p id="catalog-location" class="sub"></p><div id="catalog-folders" class="row"></div><p id="catalog-summary" class="sub" role="status"></p><ul id="catalog-items" class="folder-list"></ul><div class="row"><button id="catalog-prev">上一页</button><span id="catalog-page"></span><button id="catalog-next">下一页</button></div></div>
+    <div class="grid" style="margin-top:18px"><section class="panel"><h2>定时只读更新</h2><label class="option"><input id="monitor-enabled" type="checkbox"><span>应用运行期间定时重扫已选择的目录<small>完整 SHA-256 仍会重新读取；大磁盘耗时较长，扫描进行中不会再启动一份。</small></span></label><label>间隔（分钟） <input id="monitor-minutes" type="number" min="1" max="1440" value="15" style="width:85px"></label><button id="monitor-save">保存</button><p id="monitor-status" class="sub"></p></section>
+    <section class="panel"><h2>资料库备份与恢复</h2><p>包含报告、预览、标签、收藏、评分和整理记录。原始照片与视频须另行备份。</p><div class="row"><button id="backup-download">下载备份 ZIP</button><label class="button ghost">选择备份…<input id="restore-file" type="file" accept=".zip,application/zip" hidden></label></div><p id="backup-status" class="sub" role="status"></p><button id="restore-confirm" class="primary" hidden>确认恢复为独立副本</button></section></div>
+  </section>
   <footer>扫描只读原始照片和视频。结果与标签保存在本机。<button id="quit" class="small ghost" style="margin-left:8px">退出本机服务</button></footer>
 </main>
 <script>
@@ -68,7 +75,7 @@ try { const saved=JSON.parse(sessionStorage.getItem('media-result-selection') ||
 const saveSelection=()=>{try{sessionStorage.setItem('media-result-selection',JSON.stringify({report:selectedReport,view:selectedView}));}catch(_){}};
 async function request(path,body){const options=body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)};const response=await fetch('api/'+path,options);const data=await response.json();if(!response.ok)throw new Error(data.error||'操作失败');return data;}
 function notice(error){if(stopped)return;$('notice').textContent=error?String(error.message||error):'';}
-function showPane(name){$('scan-pane').hidden=name!=='scan';$('result-pane').hidden=name!=='results';for(const pane of ['scan','results']){if(pane===name)$('nav-'+pane).setAttribute('aria-current','page');else $('nav-'+pane).removeAttribute('aria-current');}}
+function showPane(name){$('scan-pane').hidden=name!=='scan';$('result-pane').hidden=name!=='results';$('catalog-pane').hidden=name!=='catalog';for(const pane of ['scan','results','catalog']){if(pane===name)$('nav-'+pane).setAttribute('aria-current','page');else $('nav-'+pane).removeAttribute('aria-current');}}
 function formatTime(value){const date=new Date(value);return Number.isNaN(date.getTime())?'时间未记录':date.toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});}
 function renderSummary(){const report=reports.find(item=>item.id===selectedReport);if(!report)return;
   $('history').value=report.id;$('result-title').textContent=report.id===reports[0].id?'最近一次扫描':'历史扫描';$('result-time').textContent=formatTime(report.created_at);
@@ -99,6 +106,8 @@ async function loadReports(selectLatest=false){if(historyLoading)return;historyL
 }catch(error){notice(error);}finally{historyLoading=false;}}
 function renderStatus(data){const folderState=JSON.stringify([data.folders,data.running]);if(folderState!==lastFolders){lastFolders=folderState;$('folders').replaceChildren();if(!data.folders.length){const li=document.createElement('li');li.className='empty';li.textContent='尚未选择文件夹';$('folders').append(li);}data.folders.forEach((path,index)=>{const li=document.createElement('li'),name=document.createElement('span'),remove=document.createElement('button');name.className='path';name.textContent=path;remove.className='small ghost';remove.textContent='移除';remove.disabled=data.running;remove.onclick=()=>act('folders/remove',{index});li.append(name,remove);$('folders').append(li);});}
   $('scan').disabled=data.running||!data.folders.length;$('cancel').disabled=!data.running;$('add-folder').disabled=data.running;$('status').classList.toggle('busy',data.running);$('status-text').textContent=data.status;$('bar').hidden=!data.running;$('scan-banner').hidden=!data.running;
+  if(document.activeElement!==$('monitor-enabled')&&document.activeElement!==$('monitor-minutes')&&!monitorEditing){$('monitor-enabled').checked=!!data.monitor?.enabled;$('monitor-minutes').value=data.monitor?.minutes||15;}
+  $('monitor-status').textContent=data.monitor?.enabled?`已开启 · 每 ${data.monitor.minutes} 分钟更新；应用退出后停止。`:'未开启；目录合集会保存在本机。';
   const joined=data.logs.join('\n');if(lastLog!==joined){$('log').textContent=joined||'扫描记录会显示在这里。';$('log').scrollTop=$('log').scrollHeight;lastLog=joined;}
 }
 async function refresh(){if(stopped)return;try{const data=await request('status');if(stopped)return;renderStatus(data);const completed=previousRunning&&!data.running;const changed=knownLatest!==undefined&&knownLatest!==data.latest_report;if(knownLatest===undefined||changed||completed)await loadReports((completed||changed)&&!!data.latest_report);knownLatest=data.latest_report;previousRunning=data.running;}catch(error){notice('本机服务暂时无法连接；请确认启动的终端仍在运行。');}finally{if(!stopped)pollTimer=setTimeout(refresh,1200);}}
@@ -109,6 +118,19 @@ $('add-folder').onclick=async()=>{$('add-folder').disabled=true;try{await act('f
 $('scan').onclick=async()=>{const data=await act('scan/start',{image_analysis:$('images').checked,video_covers:$('covers').checked,video_headers:$('headers').checked,video_rule:$('rule').value});if(data){previousRunning=data.running;$('scan-details').open=true;}};
 $('cancel').onclick=()=>act('scan/cancel');$('reports').onclick=()=>act('reports/open');
 $('quit').onclick=async()=>{if(await act('quit')){stopped=true;clearTimeout(pollTimer);document.body.innerHTML='<main><h1>媒体整理助手已退出</h1><p>重新打开应用即可继续使用。</p></main>';}};
+let catalogFolder='', catalogPage=0, catalogPages=1, restoreToken='', monitorEditing=false;
+const stateLabels={new:'新增',changed:'变化',seen:'仍在清单中',not_seen:'本次未扫描到'};
+async function loadCatalog(){notice();try{const data=await request('catalog',{query:$('catalog-query').value,kind:$('catalog-kind').value,state:$('catalog-state').value,folder:catalogFolder,page:catalogPage});catalogPage=data.page;catalogPages=data.pages;
+  $('catalog-location').textContent=catalogFolder||'全部已扫描目录';$('catalog-summary').textContent=`长期清单 ${data.all_count} 项 · 当前 ${data.total} 项 · ${data.scans} 次扫描。`+data.warnings.join(' ');$('catalog-folders').replaceChildren();for(const folder of data.folders){const button=document.createElement('button');button.className='ghost';button.textContent=folder.name+' · '+folder.count;button.title=folder.path;button.onclick=()=>{catalogFolder=folder.path;catalogPage=0;loadCatalog();};$('catalog-folders').append(button);}
+  $('catalog-items').replaceChildren();for(const item of data.items){const li=document.createElement('li'),details=document.createElement('span'),name=document.createElement('strong'),path=document.createElement('div'),status=document.createElement('div'),view=document.createElement('button');details.className='path';name.textContent=item.name;path.textContent=item.path;path.className='sub';status.textContent=item.kind+' · '+stateLabels[item.state]+(item.restored?' · 备份快照':'');status.className='sub';details.append(name,path,status);view.textContent='查看扫描快照';view.className='small';view.onclick=async()=>{try{const data=await request('reports/view',{report_id:item.report_id,view:item.kind==='视频'?'library':'photos'});$('result-empty').hidden=true;$('result-content').hidden=false;$('result-title').textContent='长期资料库中的扫描快照';$('result-time').textContent=item.report_id;$('metrics').replaceChildren();$('view-description').textContent='此处显示该文件所在的完整扫描快照。';$('result-frame').src=data.url;$('result-frame').hidden=false;$('standalone').href=data.url;showPane('results');}catch(error){notice(error);}};li.append(details,view);$('catalog-items').append(li);}
+  if(!data.items.length){const li=document.createElement('li');li.className='empty';li.textContent='没有符合条件的媒体；先完成扫描或调整筛选。';$('catalog-items').append(li);}$('catalog-page').textContent=`${catalogPage+1} / ${catalogPages}`;$('catalog-prev').disabled=!catalogPage;$('catalog-next').disabled=catalogPage+1>=catalogPages;
+}catch(error){notice(error);}}
+$('nav-catalog').onclick=()=>{showPane('catalog');loadCatalog();};$('catalog-search').onclick=()=>{catalogPage=0;loadCatalog();};$('catalog-query').onkeydown=event=>{if(event.key==='Enter')$('catalog-search').click();};for(const id of ['catalog-kind','catalog-state'])$(id).onchange=$('catalog-search').onclick;
+$('catalog-root').onclick=()=>{catalogFolder='';catalogPage=0;loadCatalog();};$('catalog-prev').onclick=()=>{catalogPage--;loadCatalog();};$('catalog-next').onclick=()=>{catalogPage++;loadCatalog();};
+$('monitor-enabled').onchange=$('monitor-minutes').oninput=()=>{monitorEditing=true;};$('monitor-save').onclick=async()=>{const data=await act('monitor',{enabled:$('monitor-enabled').checked,minutes:Number($('monitor-minutes').value)});if(data){monitorEditing=false;renderStatus(data);}};
+$('backup-download').onclick=async()=>{const button=$('backup-download');button.disabled=true;$('backup-status').textContent='正在核对并生成备份…';try{const response=await fetch('api/backup');if(!response.ok)throw new Error((await response.json()).error);const blob=await response.blob(),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download='media-library-backup.zip';link.click();setTimeout(()=>URL.revokeObjectURL(url),60000);$('backup-status').textContent='备份已生成，请保存 ZIP 文件。';}catch(error){$('backup-status').textContent=error.message;}finally{button.disabled=false;}};
+$('restore-file').onchange=async()=>{restoreToken='';$('restore-confirm').hidden=true;const file=$('restore-file').files[0];if(!file)return;if(file.size>64*1024*1024){$('backup-status').textContent='备份最大 64 MB。';return;}$('backup-status').textContent='正在校验备份，尚未恢复…';try{const response=await fetch('api/restore/preview',{method:'POST',headers:{'Content-Type':'application/zip'},body:file}),data=await response.json();if(!response.ok)throw new Error(data.error);restoreToken=data.token;$('backup-status').textContent=`校验通过：${data.reports} 次扫描、${data.files} 个资料文件。`+data.message;$('restore-confirm').hidden=false;}catch(error){$('backup-status').textContent=error.message;}};
+$('restore-confirm').onclick=async()=>{const data=await act('restore/confirm',{token:restoreToken});if(data){restoreToken='';$('restore-confirm').hidden=true;$('backup-status').textContent=data.status;selectedReport='';knownLatest=undefined;lastFolders='';renderStatus(data);await loadReports();showPane('catalog');loadCatalog();}};
 $('images').onchange=()=>{$('covers').disabled=!$('images').checked;};refresh();
 </script>
 </body>

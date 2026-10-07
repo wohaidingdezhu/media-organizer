@@ -20,6 +20,7 @@ from organization_plan import OrganizationPlan
 from media_actions import MediaActions
 from file_operations import FileOperations
 from cleanup_basket import CleanupBasket
+from workspace_data import data_lock
 from media_catalog import photo_catalog, root_status, previous_scan, load_notes, save_notes, clean_note, exact_duplicate_catalog, storage_catalog
 
 
@@ -253,7 +254,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                             changes = previous_scan(report_dir, document, read_document)
                         result = changes
                     elif route == "api/notes":
-                        with self.server.tag_lock:
+                        with self.server.tag_lock, data_lock(output_dir):
                             notes = load_notes(note_path)
                         result = {"groups": {key: notes.get(key, {"rating": 0, "note": ""}) for key in allowed_keys}}
                     elif route == "api/operations":
@@ -297,7 +298,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 self.send_error(404)
                 return
             if not (len(parts) == 1 and Path(route).suffix.lower() in {".html", ".json", ".csv"}
-                    or len(parts) == 2 and parts[0] in {"covers", "previews"} and Path(route).suffix.lower() == ".png"):
+                    or len(parts) == 2 and parts[0] in {"covers", "previews", "stills"} and Path(route).suffix.lower() == ".png"):
                 self.send_error(404)
                 return
             try:
@@ -399,7 +400,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     if key not in allowed_keys:
                         raise ValueError("影片标识无效")
                     value = clean_note(payload)
-                    with self.server.tag_lock:
+                    with self.server.tag_lock, data_lock(output_dir):
                         notes = load_notes(note_path)
                         notes[key] = value
                         save_notes(note_path, notes)
@@ -418,7 +419,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 key = payload["key"]
                 if key not in allowed_keys:
                     raise ValueError("影片标识无效")
-                with self.server.tag_lock:
+                with self.server.tag_lock, data_lock(output_dir):
                     groups = load_tags(tag_path)
                     if route == "api/tags/toggle":
                         tag, enabled = payload["tag"], payload["enabled"]

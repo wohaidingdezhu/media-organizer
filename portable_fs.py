@@ -14,6 +14,97 @@ def __getattr__(name):
     return getattr(_os, name)
 
 
+def private_data_path(path):
+    """Expand only macOS system aliases; reject user-controlled links later."""
+    path = Path(path).absolute()
+    if sys.platform == 'darwin' and len(path.parts) > 1 and path.parts[1] in {'var', 'tmp'}:
+        path = Path('/private').joinpath(*path.parts[1:])
+    return path
+
+
+def ensure_private_directory(path):
+    """Create ordinary data directories using pinned parents on either OS."""
+    from file_operations import open_directory
+    api = sys.modules[__name__]
+    path = private_data_path(path)
+    if '..' in path.parts:
+        raise ValueError('数据目录不能包含上级路径')
+    parent = open_directory(path.anchor)
+    try:
+        for part in path.parts[1:]:
+            try:
+                child = api.open(part, api.O_RDONLY | api.O_DIRECTORY | api.O_NOFOLLOW, dir_fd=parent)
+            except FileNotFoundError:
+                try:
+                    api.mkdir(part, 0o700, dir_fd=parent)
+                except FileExistsError:
+                    pass
+                child = api.open(part, api.O_RDONLY | api.O_DIRECTORY | api.O_NOFOLLOW, dir_fd=parent)
+            api.close(parent)
+            parent = child
+    finally:
+        api.close(parent)
+    return path
+
+
+def read_private_file(root, parts, limit=128 * 1024 * 1024):
+    import stat as file_stat
+    from file_operations import open_directory
+    api = sys.modules[__name__]
+    parts = tuple(parts)
+    if not parts or any(not part or part in {'.', '..'} or '/' in part or '\\' in part for part in parts):
+        raise ValueError('资料路径无效')
+    parent = open_directory(private_data_path(root))
+    try:
+        for part in parts[:-1]:
+            child = api.open(part, api.O_RDONLY | api.O_DIRECTORY | api.O_NOFOLLOW, dir_fd=parent)
+            api.close(parent)
+            parent = child
+        descriptor = api.open(parts[-1], api.O_RDONLY | api.O_NOFOLLOW | api.O_NONBLOCK, dir_fd=parent)
+        with api.fdopen(descriptor, 'rb') as stream:
+            before = api.fstat(stream.fileno())
+            if not file_stat.S_ISREG(before.st_mode) or before.st_size > limit:
+                raise ValueError('资料不是普通文件或过大')
+            body = stream.read(limit + 1)
+            after = api.fstat(stream.fileno())
+            if len(body) > limit or (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+                raise ValueError('资料过大或正在变化')
+            return body
+    finally:
+        api.close(parent)
+
+
+def write_private_file(root, name, body):
+    import secrets
+    import stat as file_stat
+    from file_operations import open_directory
+    api = sys.modules[__name__]
+    if not name or name in {'.', '..'} or '/' in name or '\\' in name:
+        raise ValueError('资料名称无效')
+    parent = open_directory(private_data_path(root))
+    temporary = '.data-' + secrets.token_hex(16)
+    try:
+        try:
+            info = api.stat(name, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            if not file_stat.S_ISREG(info.st_mode):
+                raise ValueError('拒绝覆盖链接或非普通资料文件')
+        descriptor = api.open(temporary, api.O_WRONLY | api.O_CREAT | api.O_EXCL, 0o600, dir_fd=parent)
+        with api.fdopen(descriptor, 'wb') as stream:
+            stream.write(body)
+            stream.flush()
+            api.fsync(stream.fileno())
+        api.replace(temporary, name, src_dir_fd=parent, dst_dir_fd=parent)
+    finally:
+        try:
+            api.unlink(temporary, dir_fd=parent)
+        except FileNotFoundError:
+            pass
+        api.close(parent)
+
+
 def open_lock(name, directory):
     """Create once, then open the existing lock without truncating its header.
 

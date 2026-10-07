@@ -27,4 +27,6 @@ def portable_available(path):
 
 
 def command(path):
+    if path.suffix == ".py" and getattr(sys, "frozen", False):
+        return [sys.executable, "--worker", path.stem]
     return [sys.executable, "-X", "utf8", str(path)] if path.suffix == ".py" else [str(path)]

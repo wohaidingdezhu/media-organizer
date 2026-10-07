@@ -18,7 +18,7 @@
 1. 确认同一功能在两平台的入口、正常流程、取消和失败处理；需要原生接口时一并实现两平台适配。
 2. 更新使用临时样例的行为测试；既验证正常结果，也验证相关保护仍有效。禁止测试访问真实媒体或真实回收站。
 3. 本机运行测试，更新 README 的依赖与使用方式，并在 PR 中说明实际验证的平台。
-4. 等待 GitHub Actions 的 macOS/Windows、Python 3.9/3.12/3.14 全部通过。汇总检查 `Dual-platform compatibility` 成功才允许合并。
+4. 等待 GitHub Actions 的 macOS/Windows、Python 3.9/3.12/3.14 全部通过；桌面安装包与原生窗口测试也必须全部通过。汇总检查 `Dual-platform compatibility` 成功才允许合并。
 
 macOS 安装 `requirements.txt` 后运行 `./.venv/bin/python -m unittest -v`，验证共用媒体路径；原生降级测试另需编译 Mac 原生组件。应用启动脚本与资料库入口都必须使用同一项目 `.venv`。
 开发环境另需 Node.js 22+ 来测试页面实际使用的 JavaScript；仅测试需要，应用运行不依赖 Node.js。两平台 CI 都显式安装它，不通过跳过浏览行为测试来隐藏差异。
@@ -39,3 +39,7 @@ GitHub Actions 会在两端自动安装同一依赖并编译 Mac 降级后端。
 ## 支持范围的调整
 
 不得通过删掉一个平台、缩小测试矩阵、改为允许失败、取消安全检查来修复红色 CI。确需调整系统或 Python 支持范围时，先由维护者明确决定，同步修改 README、AGENTS、依赖和 CI，并在 PR 描述中说明用户影响。
+
+## 桌面打包
+
+`requirements-desktop.txt` 的原生窗口组件独立于扫描依赖，两端发布包均使用 Python 3.12。不要为 Python 3.14 安装尚不兼容的 pythonnet；该版本源码版继续使用相同的浏览器界面。CI 同时安装验证各版本的适用依赖，在 Mac arm64、Mac x86_64 和 Windows x64 构建，并运行内置媒体与原生窗口检查。安装包只能在对应目标系统生成。应用内不自动安装依赖。

@@ -19,6 +19,7 @@ import unicodedata
 
 from media_actions import checked_stat, file_signature
 from organization_plan import _target_error
+from contextlib import contextmanager
 
 _BATCH_LOCK = threading.Lock()
 _COMPILE_LOCK = threading.Lock()
@@ -41,6 +42,34 @@ def shutdown_when_idle(callback):
     except BaseException:
         _BATCH_LOCK.release()
         raise
+
+
+@contextmanager
+def maintenance_when_idle(output):
+    """Reserve both this process and existing report batch locks for backups."""
+    if not _BATCH_LOCK.acquire(blocking=False):
+        raise ValueError('文件操作正在执行，请等待完成再维护资料库')
+    descriptors = []
+    try:
+        for report in sorted(Path(output).glob('scan-*')):
+            operations = report / 'operations'
+            if not operations.exists():
+                continue
+            parent = open_directory(operations.absolute())
+            try:
+                descriptor = os.open_lock('.batch-lock', parent)
+                descriptors.append(descriptor)
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except (BlockingIOError, OSError) as error:
+                    raise ValueError('另一服务正在操作文件，请等待完成再维护资料库') from error
+            finally:
+                os.close(parent)
+        yield
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+        _BATCH_LOCK.release()
 
 
 def open_directory(path):

@@ -7,3 +7,6 @@ native/trash_media
 PROJECT_STATUS.md
 .venv/
 .test-output/
+build/
+dist/
+*.spec

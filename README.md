@@ -2,6 +2,36 @@
 
 管理本地磁盘里的照片与影片：离线清点、精确查重、照片缩略图墙、影片海报墙、标签、评分、观看备注与收藏，并可打开原文件或在 Finder / Windows 资源管理器定位。所有可修改源码、启动文件和说明都集中在此项目目录。**扫描只读；复制分类和移到废纸篓 / 回收站须手动勾选、预览并再次确认。尚无原媒体改名、分类移动、永久删除或联网上传功能。**
 
+## 独立应用与安装包
+
+两端沿用同一套 Python 后台、网页界面与 Pillow/FFmpeg 媒体组件。独立版本使用 **pywebview 原生窗口 + PyInstaller 内置 Python 3.12**，不用安装 Python，也不用保持终端运行。参考项目的资料库与桌面管理思路已用于本工具；没有复制它们的 GPL 源码，也没有拆成两套业务应用。
+
+- **macOS：**在仓库 Actions 最新通过的运行中下载 `desktop-macos-latest`（Apple Silicon）或 `desktop-macos-15-intel`（Intel）产物，解压得到 DMG，打开后把 `MediaOrganizer.app` 拖入 Applications，再双击启动。
+- **Windows 10/11 x64：**下载 `desktop-windows-latest` 产物，解压并运行 `MediaOrganizer-Windows-x64-Setup.exe`，安装到当前用户目录，从开始菜单启动。窗口使用系统 WebView2，需要 [.NET Framework 4.8](https://dotnet.microsoft.com/download/dotnet-framework/net48) 和 [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。较旧 Windows 缺少时须手动安装，不会在扫描时联网补装。
+- **签名状态：**当前 Mac 包只有本机 ad-hoc 签名，没有 Apple 公证；Windows 包没有发布者证书。系统可能要求确认来源。源码入口仍可用，两端行为相同。
+
+独立应用资料保存在 Mac 的 `~/Library/Application Support/MediaOrganizer/reports`、Windows 的 `%LOCALAPPDATA%\MediaOrganizer\reports`；升级、卸载应用不会自动删除它们。源码版继续使用项目 `reports/`。两者互换资料时使用下面的备份恢复，恢复后重新选择本机来源并扫描。启动诊断保存在资料目录的 `desktop-session.log`，每次启动更新；打包程序会为原生组件保留有效的 UTF-8 输出流，不依赖可见终端。关闭原生窗口与页面“退出本机服务”走同一安全退出流程；有正在执行的文件操作时会拒绝退出，先完成或安全停止它。源码版 `.app` / `.command` / `.bat` 仍打开浏览器界面，与安装版功能共用。
+
+从源码生成安装包时，在目标平台安装 `requirements-desktop.txt`，运行 `python build_desktop.py`；Mac 再运行 `python packaging/macos_package.py`，Windows 用 Inno Setup 6 编译 `packaging/windows.iss`。构建必须在对应操作系统完成。Python 3.9/3.12 可选安装原生窗口组件；当前 Windows pythonnet 不支持 Python 3.14，所以 **3.14 源码版使用同功能浏览器入口**，不安装 pywebview。发布的两端独立包均内置 Python 3.12，不受本机 Python 版本影响。Python 3.9 的 Mac 桌面依赖限定 PyObjC <12，避开错误的兼容性元数据。
+
+## 长期资料库、目录合集与备份
+
+“长期资料库”将历次完整扫描结果汇入本机 JSON 索引，按路径保存最新记录，支持照片/视频、文件名/路径、目录层级和变化状态筛选；每页 50 项。同名文件夹保留完整路径区别，Windows 盘符、网络共享与 Mac 路径都能显示。点击“查看扫描快照”打开当时的照片墙或影片海报墙。未连接的其他磁盘记录会保留；索引仅缓存报告，不用于绕过原文件身份检查或 SHA-256 校验。
+
+“新增”表示该路径首次出现；“变化”根据本次报告里的大小、修改时间或已有 SHA-256 比较；“仍在清单中”表示下一次扫描仍有相同记录；“本次未扫描到”可能是移走、跳过或读取失败，不证明文件被删除。来源范围不同的磁盘不会互相清空记录。所有状态来自快照，不是即时文件监控。
+
+已添加的扫描目录会记住。需要自动更新时，在长期资料库开启“定时只读更新”并设置 1–1440 分钟间隔；应用运行期间对目录合集完整重扫，默认关闭，退出后停止。正在扫描时不会同时启动另一份；不会自动删除、移动、复制或改名。大磁盘的完整查重会耗时；依赖、隐藏项等规则与手动扫描相同。重启后使用默认扫描选项，定时更新不是增量文件指纹缓存。
+
+点击“下载备份 ZIP”保存报告、生成的小图、标签、已观看、收藏、评分、备注、整理计划及操作记录；**不包含原始照片与视频**。单份压缩包最多 64 MB、解压最多 512 MB、10000 个资料文件；过大时保留原资料并提示分库保存。扫描或文件操作进行中不能备份/恢复。目录合集与定时设置存于 `workspace-settings.json`。
+
+恢复先选择 ZIP，检查 SHA-256、允许的文件清单、路径和大小，显示预览，再点击“确认恢复为独立副本”。不会覆盖当前库或改动原媒体；恢复副本位于 `reports/restored-日期-随机标识/`，`active-workspace.json` 记住当前副本，原库保留。恢复的页面会重新生成，不执行备份中携带的 HTML。恢复后关闭自动更新并清空本机来源选择；**备份快照仅浏览，重新扫描前禁止操作其中的原文件**。标签、评分等资料仍保留。要切回原库，退出应用后备份并移走 `active-workspace.json`，不要改动媒体路径。
+
+## 本地影片资料与剧照
+
+默认只读取同目录、唯一关联影片的 UTF-8 NFO（`movie` / `episodedetails`），展示标题、年份、简介、演员、类型、导演和本地资料标签，并可通过海报墙搜索。个人标签和评分单独保留，不被 NFO 覆盖。多个 NFO 对应同一分组、格式错误、文件变化或超过 1 MB 时加入读取问题；拒绝 DTD/实体声明，不访问 NFO 中的封面网址，不联网抓取资料。
+
+已有本地海报继续优先使用；“影片详情”同时显示同一影片目录的 `extrafanart/` 下已扫描图片、`fanart` / `backdrop` 或 `-fanart` 图片的小预览，点击放大。目录必须只对应一个影片分组，避免同目录多部影片串图；每组最多 8 张、每次最多 200 张。预览写入报告，不改动原图。图片解码失败列入问题；`--no-image-metadata` 关闭图片预览，`--no-local-metadata` 关闭 NFO 和剧照，Mac/Windows 参数相同。视频仍由默认播放器播放，当前不提供悬停播放视频片段或在线刮削。
+
 ## 开始使用
 
 1. **macOS：**首次使用先双击 **`安装媒体依赖.command`**，再双击 **`媒体整理助手.app`**。它会通过终端启动本机服务，并在默认浏览器打开图形控制台；终端窗口需要保持打开。也可以直接双击 `开始扫描.command`，效果相同。
@@ -74,7 +104,7 @@ Windows 文件身份结合设备/文件编号、大小、修改时间和创建�
 
 卡片上可以手动“标记已观看”或“收藏”，也可取消标记；筛选菜单支持“未标记已观看／已观看／收藏”。这些标记作为标签与自定义标签一起保存，重新打开及新扫描继续读取。打开影片不会自动标记已观看；同编号影片的不同版本或分段共用观看标记。
 
-“影片详情”集中列出分段或版本文件、大小、修改时间、字幕等已关联附属文件、精确重复与读取问题，并提供播放和 Finder 定位。可以设置 1–5 星个人评分（0 为未评分）及最多 2000 字观看备注，保存于 `reports/library-notes.json`，从本机服务重新打开或新扫描后保留，也可搜索备注。同编号影片共用评分与备注；无编号影片按原目录与名称保存，改名或搬动后需重新设置。不抓取在线演员、简介或评分。
+“影片详情”集中列出分段或版本文件、大小、修改时间、字幕等已关联附属文件、精确重复与读取问题，并提供播放和文件管理器定位。可以设置 1–5 星个人评分（0 为未评分）及最多 2000 字观看备注，保存于 `reports/library-notes.json`，从本机服务重新打开或新扫描后保留，也可搜索备注。同编号影片共用评分与备注；无编号影片按原目录与名称保存，改名或搬动后需重新设置。本地 NFO 的演员与简介展示在同一详情中，不抓取在线评分。
 
 封面优先使用同目录与影片或编号同名的图片，也识别 `-poster`、`-cover` 后缀；仅当一个目录属于同一影片分组时，才使用 `poster`、`folder`、`cover` 等通用名称。没有本地封面时，两端默认用共用 FFmpeg 后端截取视频约 10% 位置的一帧，无法获取时长时尝试开头，缩放至最大 512×512 并保持比例。两端都对支持清点的视频扩展名尝试截帧，包括 MP4、MOV、MKV、AVI、WebM；单次最多处理 500 个影片分组。不支持、无法解码或超过上限时显示占位图。海报小图只生成在报告目录 `covers/` 中，不改动原图或视频。截帧不代表真正的官方海报，也不能证明视频完整或可播放。可用 `--no-video-covers` 关闭视频截帧，或用 `--max-video-covers` 调整上限；`--no-image-metadata` 会连同封面解码一起关闭。`report.json` 的 `options.image_backend` / `video_backend` 记录该次选择的组件，便于区分共用模式与原生降级路径。
 
@@ -205,6 +235,9 @@ swiftc native/video_cover.swift -o native/video_cover
 - `file_operations.py` / `portable_fs.py` / `portable_lock.py` / `native/trash_media.swift`：共用操作预览、确认后的复制分类与可恢复清理，平台句柄、锁、逐项记录与安全停止。
 - `cleanup_basket.py` / `storage_cleanup.js`：按扫描报告汇总媒体逻辑大小，保存手动清理候选并跨窗口合并更新。
 - `media_catalog.py` / `management.js` / `library_details.js` / `library_browse.js` / `duplicate_review.js`：照片墙、来源状态、扫描比较、影片详情、评分备注、影片组合筛选与排序和精确重复分组核对。
+- `library_index.py` / `workspace_data.py` / `workspace_controller.py` / `library_backup.py`：长期清单、目录合集、定时只读更新与校验备份恢复。
+- `local_movie_metadata.py`：离线 NFO 与本地剧照预览。
+- `desktop_entry.py` / `desktop_backend.py` / `build_desktop.py` / `packaging/`：同一后台的原生窗口、安装包与生成样例验证。
 - `test_*.py`：使用临时样例验证扫描、报告历史、本机接口、整理进度和安全边界。
 - `PROJECT_STATUS.md`：后续项目对话的交接记录。
 
@@ -225,4 +258,4 @@ Windows 在安装依赖后运行 `.\.venv\Scripts\python.exe -X utf8 -m unittest
 macOS 无共用媒体依赖时，Pillow / FFmpeg 专门测试会明确跳过；原生后端和其余业务测试仍运行。完整验证使用 `.venv` 并安装 `requirements.txt`。CI 两平台都安装同一套共用依赖，检查相同 PNG 样例的 dHash 参考值、MP4/MKV/AVI 封面生成、启动参数与缺依赖时的只读扫描；Mac 另测试保留的原生降级组件，不依赖本机跳过结果。
 未启用 Windows 符号链接权限时，相关符号链接测试明确跳过，目录联接测试仍运行。
 GitHub Actions 配置在 macOS/Windows 与 Python 3.9、3.12、3.14 上运行同一套测试；macOS 会先编译原生图片与视频组件。
-后续改动须遵守 [双平台开发规则](AGENTS.md) 和 [贡献说明](CONTRIBUTING.md)，通过 `Dual-platform compatibility` 汇总检查。原文件夹筛选和空间分析跳转使用后端提供的本机目录路径，支持 Windows 的反斜杠与 macOS 的斜杠。
+后续改动须遵守 [双平台开发规则](AGENTS.md) 和 [贡献说明](CONTRIBUTING.md)，通过 `Dual-platform compatibility` 汇总检查；另在 Apple Silicon Mac、Intel Mac 与 Windows 上构建安装包，实际运行打包后台的生成媒体检查及原生窗口冒烟测试。任一测试或打包任务失败均阻止汇总通过。原文件夹筛选和空间分析跳转使用后端提供的本机目录路径，支持 Windows 的反斜杠与 macOS 的斜杠。

@@ -39,8 +39,9 @@ def choose_directory(prompt):
                 'path=filedialog.askdirectory(title=sys.argv[1],mustexist=True); '
                 'root.destroy(); print(path)')
         try:
-            result = subprocess.run([sys.executable, "-X", "utf8", "-c", code, prompt],
-                                    capture_output=True, text=True, encoding="utf-8", timeout=180)
+            command = [sys.executable, "--choose-directory", prompt] if getattr(sys, "frozen", False) else [sys.executable, "-X", "utf8", "-c", code, prompt]
+            result = subprocess.run(command,
+                                    capture_output=True, text=True, encoding="utf-8", timeout=180, **hidden_process_options())
         except (OSError, subprocess.TimeoutExpired) as error:
             raise ValueError("无法选择文件夹，请使用含 Tcl/Tk 的 Python 安装") from error
         if result.returncode:
@@ -101,3 +102,18 @@ def recycle_file(path, expected):
         raise ValueError("无法放入回收站，原文件保留：" + str(error)) from error
     finally:
         pythoncom.CoUninitialize()
+
+
+def application_data_directory():
+    """Installed applications write into each user's data directory."""
+    if sys.platform == 'win32':
+        base = Path(os.environ.get('LOCALAPPDATA') or Path.home() / 'AppData' / 'Local')
+    elif sys.platform == 'darwin':
+        base = Path.home() / 'Library' / 'Application Support'
+    else:
+        raise ValueError('独立应用支持 macOS 和 Windows')
+    return base / 'MediaOrganizer' / 'reports'
+
+
+def hidden_process_options():
+    return {'creationflags': subprocess.CREATE_NO_WINDOW} if sys.platform == 'win32' else {}

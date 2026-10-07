@@ -1,0 +1,11 @@
+-r requirements.txt
+# The native shell is optional for source Python 3.14: pythonnet currently
+# requires <3.14. Both distributed apps embed Python 3.12 and have the same UI.
+pywebview==6.2.1; python_version < "3.14"
+PyInstaller>=6.16,<7
+# PyObjC 12's old metadata incorrectly advertises Python 3.9 compatibility.
+pyobjc-core>=10.3,<12; sys_platform == "darwin" and python_version < "3.10"
+pyobjc-framework-Cocoa>=10.3,<12; sys_platform == "darwin" and python_version < "3.10"
+pyobjc-framework-Quartz>=10.3,<12; sys_platform == "darwin" and python_version < "3.10"
+pyobjc-framework-security>=10.3,<12; sys_platform == "darwin" and python_version < "3.10"
+pyobjc-framework-WebKit>=10.3,<12; sys_platform == "darwin" and python_version < "3.10"

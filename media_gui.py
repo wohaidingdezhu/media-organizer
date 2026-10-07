@@ -18,6 +18,7 @@ import webbrowser
 
 import media_scan as scan
 from library_server import create_library_server
+from workspace_controller import WorkspaceController
 
 
 BASE = Path(__file__).resolve().parent
@@ -167,7 +168,7 @@ def compile_helpers(log, image_analysis=True, video_covers=True):
             log(f"{description}组件不可用：{error}")
 
 
-class DashboardState:
+class DashboardState(WorkspaceController):
     def __init__(self, output=REPORTS):
         self.output = Path(output)
         self.lock = threading.RLock()
@@ -184,6 +185,8 @@ class DashboardState:
         self.report_servers = {}
         self.report_cache = {}
         self.dashboard_url = None
+        self.init_workspace(output)
+        self.cancel_file = self.output / (".scan-cancel-" + secrets.token_hex(12))
 
     def log(self, line):
         with self.lock:
@@ -226,7 +229,8 @@ class DashboardState:
             report = latest_library(self.output)
             return {"folders": list(self.folders), "running": self.running,
                     "status": self.status, "logs": list(self.logs),
-                    "latest_report": report.name if report else None}
+                    "latest_report": report.name if report else None, "monitor": dict(self.monitor),
+                    "workspace": self.output.name, "next_update_seconds": max(0, int(self.next_scan - __import__("time").monotonic())) if self.next_scan else None}
 
     def add_folders(self):
         choices = scan.choose_folders()
@@ -239,6 +243,7 @@ class DashboardState:
                     raise ValueError("请选择实际存在的普通文件夹，不要选择符号链接")
                 if str(path) not in self.folders:
                     self.folders.append(str(path))
+            self.save_settings()
         return self.snapshot()
 
     def remove_folder(self, index):
@@ -248,6 +253,10 @@ class DashboardState:
             if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < len(self.folders):
                 raise ValueError("文件夹序号无效")
             self.folders.pop(index)
+            if not self.folders:
+                self.monitor["enabled"] = False
+                self.next_scan = None
+            self.save_settings()
         return self.snapshot()
 
     def start_scan(self, options):
@@ -266,11 +275,13 @@ class DashboardState:
             args = scan_arguments(self.folders, output=self.output, image_analysis=image_analysis,
                                   video_covers=video_covers, video_headers=video_headers,
                                   video_rule=video_rule)
+            self.scan_options = dict(options)
             self.running = True
             self.cancel_requested.clear()
             self.logs.clear()
             self.status = "正在准备组件并扫描；原始媒体不会被修改。"
-        threading.Thread(target=self._run_scan, args=(args, image_analysis, video_covers), daemon=True).start()
+        self.scan_thread = threading.Thread(target=self._run_scan, args=(args, image_analysis, video_covers), daemon=True)
+        self.scan_thread.start()
         return self.snapshot()
 
     def _run_scan(self, args, image_analysis, video_covers):
@@ -282,9 +293,10 @@ class DashboardState:
                 environment = dict(os.environ, PYTHONUTF8="1")
                 if sys.platform == "win32":
                     environment["MEDIA_ORGANIZER_CANCEL_FILE"] = str(self.cancel_file.absolute())
-                process = subprocess.Popen([sys.executable, "-X", "utf8", "-u", *args], cwd=BASE,
+                command = [sys.executable, "--scan", *args[1:]] if getattr(sys, "frozen", False) else [sys.executable, "-X", "utf8", "-u", *args]
+                process = subprocess.Popen(command, cwd=BASE,
                                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                           text=True, encoding="utf-8", bufsize=1, env=environment)
+                                           text=True, encoding="utf-8", bufsize=1, env=environment, **__import__("system_integration").hidden_process_options())
                 with self.lock:
                     self.process = process
                     if self.cancel_requested.is_set():
@@ -366,7 +378,11 @@ class DashboardState:
         self.library_url = None
 
     def close(self):
+        self.monitor_stop.set()
         self.cancel_scan()
+        thread = getattr(self, "scan_thread", None)
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=60)
         with self.lock:
             self.close_library()
 
@@ -408,6 +424,18 @@ def create_dashboard_server(output=REPORTS):
                 self.respond(200, page, "text/html; charset=utf-8")
             elif route == "api/status":
                 self.respond(200, state.snapshot())
+            elif route == "api/backup":
+                try:
+                    body = state.backup()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/zip")
+                    self.send_header("Content-Disposition", 'attachment; filename="media-library-backup.zip"')
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(body)
+                except (OSError, ValueError) as error:
+                    self.respond(400, {"error": str(error)})
             elif route == "api/reports":
                 self.respond(200, state.report_history())
             else:
@@ -416,11 +444,21 @@ def create_dashboard_server(output=REPORTS):
         def do_POST(self):
             route = self.route()
             if route not in {"api/folders/add", "api/folders/remove", "api/scan/start",
-                             "api/scan/cancel", "api/library/open", "api/reports/open", "api/reports/view", "api/quit"}:
+                             "api/scan/cancel", "api/library/open", "api/reports/open", "api/reports/view", "api/quit", "api/catalog", "api/monitor", "api/restore/preview", "api/restore/confirm"}:
                 self.send_error(404)
                 return
             if self.headers.get("Origin") != f"http://127.0.0.1:{self.server.server_port}":
                 self.respond(403, {"error": "页面来源不匹配"})
+                return
+            if route == "api/restore/preview":
+                try:
+                    from library_backup import MAX_ARCHIVE
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if self.headers.get("Content-Type") != "application/zip" or not 0 < length <= MAX_ARCHIVE:
+                        raise ValueError("请选择不超过 64 MB 的 ZIP 备份")
+                    self.respond(200, state.preview_restore(self.rfile.read(length)))
+                except (OSError, ValueError, TypeError) as error:
+                    self.respond(400, {"error": str(error)})
                 return
             if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
                 self.respond(415, {"error": "需要 JSON 请求"})
@@ -432,7 +470,13 @@ def create_dashboard_server(output=REPORTS):
                 data = json.loads(self.rfile.read(length))
                 if not isinstance(data, dict):
                     raise ValueError("请求内容必须是 JSON 对象")
-                if route == "api/folders/add":
+                if route == "api/catalog":
+                    result = state.workspace_catalog(data)
+                elif route == "api/monitor":
+                    result = state.set_monitor(data)
+                elif route == "api/restore/confirm":
+                    result = state.confirm_restore(data.get("token"))
+                elif route == "api/folders/add":
                     result = state.add_folders()
                 elif route == "api/folders/remove":
                     result = state.remove_folder(data["index"])
@@ -462,6 +506,7 @@ def create_dashboard_server(output=REPORTS):
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     server.daemon_threads = True
+    state.start_monitor()
     state.dashboard_url = f"http://127.0.0.1:{server.server_port}/{token}/"
     return server, state, state.dashboard_url
 
