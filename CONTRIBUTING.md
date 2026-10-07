@@ -21,6 +21,7 @@
 4. 等待 GitHub Actions 的 macOS/Windows、Python 3.9/3.12/3.14 全部通过。汇总检查 `Dual-platform compatibility` 成功才允许合并。
 
 macOS 安装 `requirements.txt` 后运行 `./.venv/bin/python -m unittest -v`，验证共用媒体路径；原生降级测试另需编译 Mac 原生组件。应用启动脚本与资料库入口都必须使用同一项目 `.venv`。
+开发环境另需 Node.js 22+ 来测试页面实际使用的 JavaScript；仅测试需要，应用运行不依赖 Node.js。两平台 CI 都显式安装它，不通过跳过浏览行为测试来隐藏差异。
 Windows 先运行 `安装Windows依赖.bat`，再运行 `.\.venv\Scripts\python.exe -X utf8 -m unittest -v`。
 GitHub Actions 会在两端自动安装同一依赖并编译 Mac 降级后端。保持一套业务与页面代码；不得增加两份扫描或资料库实现来适配平台。缺少符号链接权限可以明确跳过符号链接样例，Windows 目录联接测试仍应运行。
 
