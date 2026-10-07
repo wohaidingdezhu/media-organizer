@@ -55,6 +55,22 @@ jobs:
       - name: Verify native window and shared dashboard on Windows
         if: runner.os == 'Windows'
         run: python -c "import subprocess; subprocess.run(['dist/desktop/MediaOrganizer/MediaOrganizer.exe', '--ui-smoke-test'], check=True, timeout=150)"
+      - name: Show native-window diagnostics
+        if: always()
+        shell: python
+        run: |
+          from pathlib import Path
+          log = Path('.test-output/native-window.log')
+          if log.exists():
+              print(log.read_text(encoding='utf-8'))
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: desktop-diagnostics-${{ matrix.os }}
+          path: |
+            .test-output/*.log
+            build/shell/warn-*.txt
+          if-no-files-found: warn
       - name: Create macOS installer
         if: runner.os == 'macOS'
         run: python packaging/macos_package.py

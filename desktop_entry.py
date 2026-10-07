@@ -55,6 +55,13 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.smoke_test:
         return subprocess.call([*backend_command(), '--smoke-test'], **hidden_process_options())
+    if args.ui_smoke_test:
+        diagnostic_dir = Path.cwd() / '.test-output'
+        diagnostic_dir.mkdir(exist_ok=True)
+        diagnostic_stream = (diagnostic_dir / 'native-window.log').open('w', encoding='utf-8', buffering=1)
+        sys.stdout = diagnostic_stream
+        sys.stderr = diagnostic_stream
+        print('Native window smoke: start', flush=True)
     import webview
     import tempfile
     import time
@@ -81,6 +88,8 @@ def main(argv=None):
         process.terminate()
         process.wait(timeout=15)
         raise RuntimeError('本机服务启动失败：' + '\n'.join(diagnostics[-10:]))
+    if args.ui_smoke_test:
+        print('Backend ready:', ready_url, flush=True)
     window = webview.create_window('媒体整理助手', url=ready_url, width=1280, height=900, min_size=(780, 600))
     url, allow_close, stopping = [ready_url], threading.Event(), threading.Event()
     def message(text):
@@ -135,6 +144,8 @@ def main(argv=None):
     window.events.closing += closing
     webview.settings['ALLOW_DOWNLOADS'] = True
     webview.settings['ALLOW_FILE_URLS'] = False
+    if args.ui_smoke_test:
+        print('Starting renderer', flush=True)
     webview.start(serve, private_mode=True, gui='edgechromium' if sys.platform == 'win32' else 'cocoa')
     if temporary:
         temporary.cleanup()
@@ -143,4 +154,11 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception:
+        if '--ui-smoke-test' in sys.argv:
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+        raise
