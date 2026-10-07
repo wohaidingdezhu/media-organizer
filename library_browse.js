@@ -70,7 +70,7 @@ function browseMovies(groups, options = {}) {
       case 'posters': if (!group.poster) return false; break;
       case 'missing-posters': if (group.poster) return false; break;
     }
-    return !query || [group.title, ...Object.values(group.metadata || {}).flat(), (group.personal || {}).note, ...tags,
+    return !query || [group.title, group.edition, ...Object.values(group.metadata || {}).flat(), (group.personal || {}).note, ...tags,
       ...files.flatMap(file => [file.path, file.suggested_path, ...(file.sidecars || [])])]
       .some(value => String(value || '').toLocaleLowerCase().includes(query));
   });

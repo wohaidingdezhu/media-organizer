@@ -155,12 +155,27 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
     library = document.get("video_library")
     library_page = None
 
+    def current_document():
+        from movie_grouping import load_assignments, apply_grouping
+        from media_scan import build_video_library
+        values = load_assignments(output_dir)
+        records = document.get('files', [])
+        if not records or not all(all(key in file for key in ('root', 'name', 'mtime', 'hash_status', 'suggested_path')) for file in records):
+            return document  # Browsing legacy report schemas remains available.
+        base = build_video_library(records, document.get('sidecars', []), document.get('duplicates', []),
+                                   document.get('issues', []), document.get('folder_groups', []), load_tags(tag_path))
+        grouped = apply_grouping(base, values, art_library=library)
+        tags = load_tags(tag_path)
+        for group in grouped['groups']:
+            group['tags'] = tags.get(group['tag_key'], [])
+        return {**document, 'video_library': grouped}
+
     def current_library_page():
         nonlocal library_page
-        if library_page is None and isinstance(library, dict):
+        if isinstance(library, dict):
             try:
                 from media_scan import render_video_library
-                library_page = render_video_library(document).encode("utf-8")
+                library_page = render_video_library(current_document()).encode("utf-8")
             except (KeyError, TypeError, ValueError):
                 return None
         return library_page
@@ -171,7 +186,11 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     and re.fullmatch(r"[0-9a-f]{64}", group["tag_key"])} if isinstance(groups, list) else set()
     tag_path = output_dir / "library-tags.json"
     note_path = output_dir / "library-notes.json"
-    operations = FileOperations(report_dir, media, get_organization)
+    operations = FileOperations(report_dir, media, get_organization, document=current_document)
+    def current_keys():
+        return {group['tag_key'] for group in current_document().get('video_library', {}).get('groups', [])
+                if isinstance(group, dict) and isinstance(group.get('tag_key'), str)
+                and re.fullmatch(r'[0-9a-f]{64}', group['tag_key'])}
     basket = None
     def get_basket():
         nonlocal basket
@@ -256,7 +275,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     elif route == "api/notes":
                         with self.server.tag_lock, data_lock(output_dir):
                             notes = load_notes(note_path)
-                        result = {"groups": {key: notes.get(key, {"rating": 0, "note": ""}) for key in allowed_keys}}
+                        result = {"groups": {key: notes.get(key, {"rating": 0, "note": ""}) for key in current_keys()}}
                     elif route == "api/operations":
                         result = operations.history()
                     elif route.endswith("/remaining"):
@@ -283,12 +302,13 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 return
             if route == "api/tags":
                 try:
-                    tags = load_tags(tag_path) if allowed_keys else {}
+                    keys = current_keys()
+                    tags = load_tags(tag_path) if keys else {}
                 except (OSError, ValueError) as error:
                     self.send_json(500, {"error": str(error)})
                     return
-                self.send_json(200, {"groups": {key: tags.get(key, []) for key in allowed_keys},
-                                     "editable": bool(allowed_keys)})
+                self.send_json(200, {"groups": {key: tags.get(key, []) for key in keys},
+                                     "editable": bool(keys)})
                 return
             if route == "":
                 route = "library.html"
@@ -343,13 +363,13 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
 
         def do_POST(self):
             route = self.route()
-            if route not in {"api/tags", "api/tags/toggle", "api/organization", "api/media/action", "api/notes", "api/basket",
+            if route not in {"api/tags", "api/tags/toggle", "api/organization", "api/media/action", "api/notes", "api/basket", "api/grouping",
                              "api/operations/preview", "api/operations/start", "api/operations/stop", "api/operations/destination"}:
                 self.send_error(404)
                 return
             origin = self.headers.get("Origin")
             if ((origin and origin != f"http://127.0.0.1:{self.server.server_port}")
-                    or (route in {"api/media/action", "api/basket"} or route.startswith("api/operations/")) and origin != f"http://127.0.0.1:{self.server.server_port}"):
+                    or (route in {"api/media/action", "api/basket", "api/grouping"} or route.startswith("api/operations/")) and origin != f"http://127.0.0.1:{self.server.server_port}"):
                 self.send_json(403, {"error": "页面来源不匹配"})
                 return
             if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
@@ -370,7 +390,12 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     self.send_json(200, media.perform(payload["id"], payload["action"]))
                     return
                 if route == "api/operations/preview":
-                    self.send_json(200, operations.preview(payload["mode"], payload["ids"], payload.get("destination")))
+                    self.send_json(200, operations.preview(payload["mode"], payload["ids"], payload.get("destination"), payload.get('bundle', False)))
+                    return
+                if route == 'api/grouping':
+                    from movie_grouping import update_assignments
+                    operations.update_plan(lambda: update_assignments(output_dir, current_document(), payload['edits']))
+                    self.send_json(200, {'saved': True, 'message': '分组修正已保存，重新扫描后继续使用；原文件不变。'})
                     return
                 if route == "api/operations/start":
                     self.send_json(200, operations.start(payload["token"]))
@@ -397,7 +422,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     return
                 if route == "api/notes":
                     key = payload["key"]
-                    if key not in allowed_keys:
+                    if key not in current_keys():
                         raise ValueError("影片标识无效")
                     value = clean_note(payload)
                     with self.server.tag_lock, data_lock(output_dir):
@@ -417,7 +442,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     self.send_json(200, result)
                     return
                 key = payload["key"]
-                if key not in allowed_keys:
+                if key not in current_keys():
                     raise ValueError("影片标识无效")
                 with self.server.tag_lock, data_lock(output_dir):
                     groups = load_tags(tag_path)

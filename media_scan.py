@@ -128,7 +128,8 @@ def discover(roots, output, include_hidden, issues, folders=None, sidecars=None)
                         issue(issues, path, "云端占位文件，未下载或读取")
                         continue
                     if is_sidecar:
-                        sidecars.append({"path": str(path), "extension": ext, "bytes": st.st_size, "_signature": signature(st)})
+                        sidecars.append({"path": str(path), "extension": ext, "bytes": st.st_size, "_signature": signature(st),
+                                         "source_signature": list(signature(st))})
                         continue
                     identity = (st.st_dev, st.st_ino)
                     record = {
@@ -377,7 +378,7 @@ class ImageProbeWorker:
             return result
 
 
-def inspect_images(records, helper, issues, enabled):
+def inspect_images(records, helper, issues, enabled, cache=None):
     available = helper_available(helper)
     if not enabled or not available:
         return {"available": available, "enabled": enabled, "inspected": 0,
@@ -391,6 +392,9 @@ def inspect_images(records, helper, issues, enabled):
             before = os.stat(record["path"], follow_symlinks=False)
             if signature(before) != record["_signature"]:
                 raise ValueError("文件已变化，未读取照片信息")
+            cached = cache.metadata(record) if cache else None
+            if cached is not None:
+                return cached, ""
             metadata = worker.request(record["path"])
             if signature(os.stat(record["path"], follow_symlinks=False)) != record["_signature"]:
                 raise ValueError("读取照片信息时文件发生变化")
@@ -836,7 +840,7 @@ def write_csv(path, fields, rows):
             writer.writerow([csv_cell(row.get(key, "")) for key, _ in fields])
 
 
-def export_previews(directory, records, similarity, helper, issues, displayed_pairs=300, photo_limit=500):
+def export_previews(directory, records, similarity, helper, issues, displayed_pairs=300, photo_limit=500, cache=None):
     """Create report-local previews only for images shown in the HTML report."""
     paths = dict.fromkeys(path for pair in similarity["pairs"][:displayed_pairs]
                           for path in (pair["left"], pair["right"]))
@@ -857,7 +861,8 @@ def export_previews(directory, records, similarity, helper, issues, displayed_pa
             before = os.stat(path, follow_symlinks=False)
             if not stat.S_ISREG(before.st_mode) or signature(before) != record["_signature"]:
                 raise ValueError("图片已变化，未生成预览")
-            workers[(index - 1) % 2].request(path, thumbnail=str(destination))
+            if not cache or not cache.thumbnail(record, destination):
+                workers[(index - 1) % 2].request(path, thumbnail=str(destination))
             after = os.stat(path, follow_symlinks=False)
             if signature(after) != record["_signature"] or not destination.is_file():
                 raise ValueError("图片在生成预览时发生变化")
@@ -920,7 +925,7 @@ def local_cover_candidates(groups, records):
     return result
 
 
-def export_local_covers(directory, groups, records, helper, issues, enabled=True):
+def export_local_covers(directory, groups, records, helper, issues, enabled=True, cache=None):
     for group in groups:
         group["poster"] = ""
         group["poster_source"] = ""
@@ -939,7 +944,8 @@ def export_local_covers(directory, groups, records, helper, issues, enabled=True
                 before = os.stat(record["path"], follow_symlinks=False)
                 if not stat.S_ISREG(before.st_mode) or signature(before) != record["_signature"]:
                     raise ValueError("封面图片自扫描后发生变化")
-                workers[index % 2].request(record["path"], thumbnail=str(destination))
+                if not cache or not cache.thumbnail(record, destination):
+                    workers[index % 2].request(record["path"], thumbnail=str(destination))
                 after = os.stat(record["path"], follow_symlinks=False)
                 if signature(after) != record["_signature"] or not destination.is_file():
                     raise ValueError("封面图片导出时发生变化")
@@ -966,7 +972,7 @@ def export_local_covers(directory, groups, records, helper, issues, enabled=True
     return count
 
 
-def export_video_frame_covers(directory, groups, records, helper, issues, limit=500, enabled=True):
+def export_video_frame_covers(directory, groups, records, helper, issues, limit=500, enabled=True, cache=None):
     """Attempt the same video extensions on both platforms, bounded by group count."""
     if not enabled or not helper_available(helper):
         return 0
@@ -996,7 +1002,8 @@ def export_video_frame_covers(directory, groups, records, helper, issues, limit=
                 before = os.stat(record["path"], follow_symlinks=False)
                 if not stat.S_ISREG(before.st_mode) or signature(before) != record["_signature"]:
                     raise ValueError("视频自扫描后发生变化")
-                workers[index % 2].request(record["path"], thumbnail=str(destination), timeout=25)
+                if not cache or not cache.thumbnail(record, destination, 'video'):
+                    workers[index % 2].request(record["path"], thumbnail=str(destination), timeout=25)
                 after = os.stat(record["path"], follow_symlinks=False)
                 if signature(after) != record["_signature"] or not destination.is_file():
                     raise ValueError("视频截帧时发生变化")
@@ -1095,7 +1102,7 @@ def render_report(data):
     <section id="duplicates"><h2>内容完全重复</h2><p>先按大小筛选，再读取整个文件计算 SHA-256。名称相同、编号相同或同一视频的不同编码不会据此算重复。页面最多展示 300 组，全部结果见 <a href="duplicates.csv">重复明细 CSV</a>。</p>{duplicates}</section>
     <section id="similar"><h2>图片相似候选</h2><p>64 位 dHash 距离阈值：{data['options']['distance']}，同时限制宽高比差异。视觉相似只供对照，不能作为删除依据；裁剪、旋转、连拍和纯色图片可能漏检或误报。</p><p class="muted">{e(data['image_inspection']['note'])} 可比较图片 {data['similar']['eligible']} 张；硬链接 {s['hardlinks']} 项未重复计算。</p>{'<p class="notice">候选达到数量上限，结果可能不完整。可以缩小扫描目录或提高 --max-similar。</p>' if data['similar']['truncated'] else ''}{similarity}<p><a href="similar.csv">全部已生成候选 CSV</a> · 页面最多展示 300 对</p></section>
     <section id="video-groups"><h2>相关视频候选</h2><p>根据同一编号或清理分段、画质标记后的标题归组，方便检查同一作品的分段和不同版本。这些分组不表示内容重复；视频是否完全相同只看上方的 SHA-256 结果。可用 --check-video-headers 轻量识别部分容器文件头，但无法证明视频可播放。{e(video_check_note)}页面最多展示 300 组，全部见 <a href="video_groups.csv">视频关联 CSV</a>。</p>{video_groups}</section>
-    <section id="sidecars"><h2>附属文件关联</h2><p>同目录文件名关联 XMP、AAE 与字幕、NFO；仅记录名称和大小，不读取附属文件内容。多项候选及未关联项需要人工核对；不会移动或修改附属文件。页面最多展示 300 项，全部见 <a href="sidecars.csv">附属文件 CSV</a>。</p>{sidecars}</section>
+    <section id="sidecars"><h2>附属文件关联</h2><p>同目录文件名关联 XMP、AAE 与字幕、NFO，并记录文件身份；本地 NFO 可只读解析。多项候选及未关联项需要人工核对；整组复制须明确预览确认，不移动或修改原附件。页面最多展示 300 项，全部见 <a href="sidecars.csv">附属文件 CSV</a>。</p>{sidecars}</section>
     <section id="folder-groups"><h2>文件夹名称候选</h2><p>列出同名（大小写视为相同）或整理后名称可能冲突的文件夹，并统计其下媒体和附属文件项。仅在两处已扫描媒体均有完整 SHA-256、字节内容集合一致且文件夹互不包含时标记匹配；附属文件只计数，不比较内容。文件名、其他非媒体文件和跳过项也未比较，因此不代表整个文件夹完全相同。页面最多展示 300 组，全部见 <a href="folder_names.csv">文件夹名称 CSV</a>。</p>{folder_sections}</section>
     <section id="plan"><h2>分类建议 · 仅预览</h2><p>照片优先使用 EXIF 拍摄日期，其次文件名日期，最后修改时间。视频按编号、名称或原目录归组。目标重名会加路径标识。实况照片配对仅按同目录同名推测。</p><div class="controls"><input id="search" type="search" aria-label="筛选全部分类建议" placeholder="搜索全部文件名、目录或建议"><select id="kind-filter" aria-label="按媒体类型筛选"><option value="">全部类型</option><option value="照片">照片</option><option value="视频">视频</option></select></div>{plan}<div class="pager"><button id="previous" type="button">上一页</button><span id="plan-count"></span><button id="next" type="button">下一页</button></div><p class="muted">可筛选全部 {s['files']} 条建议，每页显示 100 条。完整建议见 classification.csv；本工具没有执行移动或删除的功能。</p></section>
     <section id="issues"><h2>跳过与错误</h2><p>读取问题 {len(data['issues'])} 条（页面最多展示 500 条，完整列表见 <a href="issues.csv">问题 CSV</a>）。目录不可读或文件变化会使结果不完整。</p><p class="muted">按规则跳过：{skipped}。隐藏项、符号链接、照片资料库包和可识别的云端占位项默认不读取。</p>{problems}</section><footer class="muted">离线生成 · 不上传媒体 · 不访问远程元数据 · 完整记录见同目录 CSV / JSON</footer></main><script id="classification-data" type="application/json">{browse_data}</script><script>{script}</script></body></html>'''
@@ -1110,7 +1117,7 @@ def render_video_library(data):
     *{box-sizing:border-box}body{margin:0;background:#f3f6f8;color:#1d2939;font:15px/1.65 -apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif}main{max-width:1180px;margin:32px auto;padding:0 24px}header{background:#14352f;color:white;padding:28px;border-radius:18px}h1{font-size:31px;margin:4px 0}header p{margin:4px 0;color:#d5e9e2}a{color:#126653}header a{color:#b9f0d8}.stats{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0}.stat{background:white;border:1px solid #dce5e5;border-radius:12px;padding:13px 20px;min-width:170px}.stat strong{display:block;font-size:25px}.controls{display:flex;gap:10px;flex-wrap:wrap;margin:20px 0}input,select,button{font:inherit;border:1px solid #a8babc;border-radius:8px;padding:9px;background:white}input{flex:1;min-width:220px}section{background:white;border:1px solid #dce5e5;border-radius:12px;padding:18px;margin:12px 0}.wall{display:grid;grid-template-columns:repeat(auto-fill,minmax(205px,1fr));gap:16px;align-items:start}.card{background:#fff;border:1px solid #dce5e5;border-radius:12px;overflow:hidden;overflow-wrap:anywhere;box-shadow:0 3px 12px #1d29390d}.poster{display:block;width:100%;aspect-ratio:2/3;object-fit:cover;background:#e4eae8}.poster-placeholder{display:grid;place-items:center;background:linear-gradient(145deg,#194438,#537d69);color:#f2fff8;padding:18px;text-align:center;font-size:27px;font-weight:700}.card-body{padding:14px}.card h3{margin:0 0 4px;font-size:18px;line-height:1.4}.card details{border-top:1px solid #e3eaeb;margin-top:10px;padding-top:8px}.card summary{cursor:pointer;color:#126653}.meta{color:#627378;font-size:13px}.badge{display:inline-block;background:#e5f3ec;color:#205640;border-radius:999px;padding:2px 9px;margin:5px 6px 5px 0;font-size:12px}.alert{background:#fff0d7;color:#80520c}.file{border-top:1px solid #e3eaeb;padding:10px 0}.path{font-weight:600;overflow-wrap:anywhere}.minor{color:#607076;font-size:13px;overflow-wrap:anywhere}.issue{border-bottom:1px solid #e3eaeb;padding:10px 0}.pager{display:flex;align-items:center;gap:10px;margin:12px 0}.muted{color:#627378}.empty{padding:15px;color:#627378}.tag-editor{background:#f3f8f5;border:1px solid #c9ded3;border-radius:8px;padding:9px;margin:8px 0}.tag-editor input{display:block;width:100%;min-width:0;margin-bottom:8px}.tag-editor button{padding:5px 8px;margin-right:5px;font-size:12px}.tag-editor .minor{margin-top:5px}@media(max-width:650px){main{padding:0 12px}h1{font-size:25px}.wall{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.card-body{padding:10px}}
     </style></head><body><main><header><a href="report.html">← 返回扫描总报告</a><h1>影片资料库</h1><p>本次扫描快照 · @@CREATED@@</p><p>只读浏览和问题核对；重新扫描会生成新快照，不修改原片。</p></header>
     <div class="stats"><div class="stat">影片分组<strong id="group-total">0</strong></div><div class="stat">可用封面<strong>@@POSTER_TOTAL@@</strong></div><div class="stat">视频文件<strong>@@VIDEO_FILES@@</strong></div><div class="stat">精确重复涉及视频<strong>@@DUPLICATE_FILES@@</strong></div><div class="stat">待核对项目<strong>@@ISSUE_TOTAL@@</strong></div></div>
-    <section><h2>影片海报墙</h2><p class="muted">同编号跨目录归组；没有编号时，仅将同一原目录内的同名变体归组。封面优先使用同目录的同名或编号图片，其次尝试从视频截帧；无法生成时显示占位图。分组只靠文件名，不表示内容相同。每页 50 组。</p><p class="muted" id="tag-help">标签可筛选；通过“媒体整理助手.app”或“打开资料库.command”打开本地服务后可以编辑并跨扫描保留。</p><div class="controls"><input id="search" type="search" aria-label="搜索影片、路径、标签和附属文件" placeholder="搜索编号、影片名、路径、标签、字幕…"><select id="filter" aria-label="筛选影片"><option value="all">全部影片</option><option value="unwatched">未标记已观看</option><option value="watched">已观看</option><option value="favorite">收藏</option><option value="review">有视频问题或精确重复</option><option value="duplicates">精确重复涉及视频</option><option value="sidecars">有附属文件</option><option value="posters">有封面</option><option value="missing-posters">缺少封面</option></select><select id="tag-filter" aria-label="按标签筛选"><option value="">全部标签</option></select><select id="movie-folder" aria-label="按影片原文件夹筛选" style="max-width:min(480px,100%)"><option value="">全部原文件夹</option></select><select id="movie-rating" aria-label="按个人评分筛选"><option value="">全部评分</option><option value="unrated">未评分</option><option value="1">1 星及以上</option><option value="2">2 星及以上</option><option value="3">3 星及以上</option><option value="4">4 星及以上</option><option value="5">5 星</option></select><select id="movie-sort" aria-label="影片排序"><option value="title">名称顺序</option><option value="size">整组大小从大到小</option><option value="newest">文件修改时间从新到旧</option><option value="oldest">文件修改时间从旧到新</option><option value="rating">个人评分从高到低</option></select><button id="movie-reset" type="button">重置筛选</button></div><p class="muted">原文件夹匹配任一文件时仍展示完整影片分组。大小为整组视频逻辑总大小；时间取组内最新文件修改时间，不代表上映或入库时间。待核对清单仅按搜索词筛选。</p><div id="groups" class="wall"></div><div class="pager"><button id="previous" type="button">上一页</button><span id="page-label"></span><button id="next" type="button">下一页</button></div></section>
+    <section><h2>影片海报墙</h2><p class="muted">按作品和版本归组，分段按段号排列；没有编号时默认保留原目录区别。可用“修正作品、版本和分段”拆分或合并。封面优先使用同目录的同名或编号图片，其次尝试从视频截帧；无法生成时显示占位图。分组只靠文件名，不表示内容相同。每页 50 组。</p><p class="muted" id="tag-help">标签可筛选；通过“媒体整理助手.app”或“打开资料库.command”打开本地服务后可以编辑并跨扫描保留。</p><div class="controls"><input id="search" type="search" aria-label="搜索影片、路径、标签和附属文件" placeholder="搜索编号、影片名、路径、标签、字幕…"><select id="filter" aria-label="筛选影片"><option value="all">全部影片</option><option value="unwatched">未标记已观看</option><option value="watched">已观看</option><option value="favorite">收藏</option><option value="review">有视频问题或精确重复</option><option value="duplicates">精确重复涉及视频</option><option value="sidecars">有附属文件</option><option value="posters">有封面</option><option value="missing-posters">缺少封面</option></select><select id="tag-filter" aria-label="按标签筛选"><option value="">全部标签</option></select><select id="movie-folder" aria-label="按影片原文件夹筛选" style="max-width:min(480px,100%)"><option value="">全部原文件夹</option></select><select id="movie-rating" aria-label="按个人评分筛选"><option value="">全部评分</option><option value="unrated">未评分</option><option value="1">1 星及以上</option><option value="2">2 星及以上</option><option value="3">3 星及以上</option><option value="4">4 星及以上</option><option value="5">5 星</option></select><select id="movie-sort" aria-label="影片排序"><option value="title">名称顺序</option><option value="size">整组大小从大到小</option><option value="newest">文件修改时间从新到旧</option><option value="oldest">文件修改时间从旧到新</option><option value="rating">个人评分从高到低</option></select><button id="movie-reset" type="button">重置筛选</button></div><p class="muted">原文件夹匹配任一文件时仍展示完整影片分组。大小为整组视频逻辑总大小；时间取组内最新文件修改时间，不代表上映或入库时间。待核对清单仅按搜索词筛选。</p><div id="groups" class="wall"></div><div class="pager"><button id="previous" type="button">上一页</button><span id="page-label"></span><button id="next" type="button">下一页</button></div></section>
     <section><h2>待核对清单</h2><p class="muted">包含本次扫描发现的视频读取或文件头问题、精确重复、未唯一关联的字幕/NFO，以及同名文件夹候选。未启用文件头检查时，不会据此判断视频能否播放。下方显示与搜索词匹配的前 200 条；完整数据见 <a href="library_issues.csv">问题 CSV</a>。</p><div id="issues"></div></section>
     <p class="muted">播放使用系统默认播放器；分段或多个版本请展开文件列表选择。已观看与收藏需手动标记，播放不会自动标为已观看。本页面使用本次扫描结果。其他跳过项与照片问题请查看<a href="report.html#issues">总报告</a>；完整原始数据见 <a href="report.json">JSON</a>。</p></main>
     <script id="library-data" type="application/json">@@DATA@@</script><script>
@@ -1150,7 +1157,7 @@ def render_video_library(data):
           const response = await fetch(tagApi, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({key: group.tag_key, tags})});
           const result = await response.json();
           if (!response.ok) throw new Error(result.error || '标签保存失败');
-          group.tags = result.tags; updateTagChoices(); render();
+          for(const item of library.groups)if(item.tag_key===group.tag_key)item.tags=result.tags; updateTagChoices(); render();
         } catch (error) { message.textContent = `标签未保存：${error.message}`; save.disabled = false; }
       }
       save.addEventListener('click', submit);
@@ -1163,7 +1170,7 @@ def render_video_library(data):
       try {
         const response = await fetch(tagApi.replace(/tags$/, 'tags/toggle'), {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:group.tag_key,tag,enabled:!(group.tags || []).includes(tag)})});
         const result = await response.json(); if (!response.ok) throw new Error(result.error || '保存失败');
-        group.tags = result.tags; group.markSaving=false; updateTagChoices(); render();
+        for(const item of library.groups)if(item.tag_key===group.tag_key)item.tags=result.tags; group.markSaving=false; updateTagChoices(); render();
       } catch (error) {message.textContent=error.message;}finally{group.markSaving=false;controls.forEach(control=>control.disabled=false);}
     }
     async function openMedia(file, action, button, message) {
@@ -1198,10 +1205,13 @@ def render_video_library(data):
         } else card.append(make('div', 'poster poster-placeholder', group.title.slice(0, 12)));
         const body = make('div', 'card-body');
         body.append(make('h3', '', group.title), make('div', 'meta', `${group.type} · ${group.files.length} 个视频`));
+        body.append(make('div', 'meta', '版本：'+(group.edition||'未指定（文件名线索）')));
+        for(const warning of group.grouping_warnings||[])body.append(make('p','alert',warning));
         const facts = movieBrowseFacts(group);
         body.append(make('div', 'meta', `整组逻辑大小：${movieSizeLabel(facts.bytes)}`));
         if(group.personal&&group.personal.rating)body.append(make('div','meta',`个人评分：${group.personal.rating} 星`));
         const detail=make('button','','影片详情');detail.setAttribute('aria-label','影片详情 '+group.title);detail.onclick=()=>movieDetails(group);body.append(detail);
+        if(tagApi){const correction=make('button','','修正作品、版本和分段');correction.onclick=()=>editMovieGrouping(group);body.append(correction);}
         for (const tag of group.tags || []) body.append(make('span', 'badge', tag));
         if (tagApi && /^[0-9a-f]{64}$/.test(group.tag_key || '')) {
           const message=make('div','minor');message.setAttribute('role','status');
@@ -1337,6 +1347,7 @@ def main(argv=None):
     parser.add_argument("--no-image-metadata", action="store_true", help="跳过照片解析和封面生成，加快扫描；仍有精确文件查重")
     parser.add_argument("--check-video-headers", action="store_true", help="可选：读取少量视频文件头并提示常见容器是否可识别；不验证能否播放")
     parser.add_argument("--no-local-metadata", action="store_true", help="不读取本地 NFO 影片资料和剧照")
+    parser.add_argument("--refresh-media", action="store_true", help="重新解析全部媒体，不复用历史解析和小图；查重始终重新完整校验")
     parser.add_argument("--no-video-covers", action="store_true", help="不从视频截帧生成封面；仍使用本地图片封面")
     parser.add_argument("--max-video-covers", type=int, default=500, help="视频截帧封面数量上限，默认 500")
     parser.add_argument("--include-hidden", action="store_true", help="包含隐藏文件和目录（仍跳过资料库和系统目录）")
@@ -1377,9 +1388,12 @@ def main(argv=None):
         folders_seen = []
         found_sidecars = []
         records, skipped = discover(roots, output, args.include_hidden, issues, folders_seen, found_sidecars)
+        from scan_cache import ScanCache, analysis_fingerprint
+        fingerprint = analysis_fingerprint(media_backend.helper('image_probe'), media_backend.helper('video_cover'))
+        cache = ScanCache(output, roots, fingerprint, enabled=not args.refresh_media)
         duplicates = exact_duplicates(records, issues)
         video_inspection = inspect_video_headers(records, issues, args.check_video_headers)
-        image_inspection = inspect_images(records, media_backend.helper("image_probe"), issues, not args.no_image_metadata)
+        image_inspection = inspect_images(records, media_backend.helper("image_probe"), issues, not args.no_image_metadata, cache=cache)
         classify(records, args.video_rule)
         sidecars = associate_sidecars(found_sidecars, records)
         similarity = similar_images(records, args.distance, args.max_similar, not args.no_similar and not args.no_image_metadata and image_inspection["available"])
@@ -1392,6 +1406,11 @@ def main(argv=None):
             issue(issues, tag_path, f"标签文件未读取：{error}")
             saved_tags = {}
         video_library = build_video_library(records, sidecars, duplicates, issues, folder_groups, saved_tags)
+        from movie_grouping import load_assignments, apply_grouping
+        assignments = load_assignments(output) if output.exists() else {}
+        video_library = apply_grouping(video_library, assignments)
+        for group in video_library['groups']:
+            group['tags'] = saved_tags.get(group['tag_key'], [])
         from local_movie_metadata import enrich_library, export_stills
         metadata_issue_start = len(issues)
         if not args.no_local_metadata:
@@ -1400,15 +1419,15 @@ def main(argv=None):
         directory = output / dt.datetime.now().strftime("scan-%Y%m%d-%H%M%S-%f")
         directory.mkdir(parents=True, exist_ok=False, mode=0o700)
         previews = export_previews(directory, records, similarity, media_backend.helper("image_probe"), issues,
-                                   photo_limit=500 if not args.no_image_metadata and image_inspection["available"] else 0)
+                                   photo_limit=500 if not args.no_image_metadata and image_inspection["available"] else 0, cache=cache)
         cover_issue_start = len(issues)
         video_library["poster_count"] = export_local_covers(directory, video_library["groups"], records,
                                                              media_backend.helper("image_probe"), issues,
-                                                             enabled=not args.no_image_metadata)
+                                                             enabled=not args.no_image_metadata, cache=cache)
         video_library["frame_count"] = export_video_frame_covers(directory, video_library["groups"], records,
                                                                   media_backend.helper("video_cover"), issues,
                                                                   limit=args.max_video_covers,
-                                                                  enabled=not args.no_image_metadata and not args.no_video_covers)
+                                                                  enabled=not args.no_image_metadata and not args.no_video_covers, cache=cache)
         video_library["still_count"] = export_stills(directory, video_library["groups"], records, previews, media_backend.helper("image_probe"), issues, enabled=not args.no_image_metadata and not args.no_local_metadata)
         video_library["poster_count"] += video_library["frame_count"]
         video_library["issues"].extend({"path": item["path"], "reason": item["reason"], "type": "封面"}
@@ -1419,15 +1438,18 @@ def main(argv=None):
                 "summary": {"files": len(records), "duplicate_groups": len(duplicates), "hardlinks": sum(bool(r["hardlink_to"]) for r in records),
                             "redundant_logical_bytes": sum(g["redundant_logical_bytes"] for g in duplicates)},
                 "options": {"distance": args.distance, "video_rule": args.video_rule, "include_hidden": args.include_hidden,
+                            "analysis_fingerprint": fingerprint, "refresh_media": args.refresh_media,
                             "image_backend": media_backend.helper("image_probe").name,
                             "video_backend": media_backend.helper("video_cover").name,
                             "check_video_headers": args.check_video_headers, "max_video_covers": args.max_video_covers,
                             "video_covers_enabled": not args.no_video_covers and not args.no_image_metadata},
-                "image_inspection": image_inspection, "video_inspection": video_inspection,
+                "image_inspection": image_inspection, "video_inspection": video_inspection, "scan_reuse": cache.summary(),
                 "files": clean_records, "duplicates": duplicates,
                 "similar": similarity, "previews": previews, "video_groups": video_groups, "sidecars": [{key: value for key, value in item.items() if not key.startswith("_")} for item in sidecars],
                 "folder_groups": folder_groups, "video_library": video_library, "issues": issues, "skipped": skipped}
         write_reports(directory, data)
+        print('变化更新：复用照片信息 {} 项、小图 {} 项、视频封面 {} 项；精确查重已重新校验。'.format(
+            cache.reused_metadata, cache.reused_previews, cache.reused_covers), flush=True)
         try:
             from library_index import sync_index
             sync_index(output)

@@ -17,6 +17,11 @@ def run():
     from library_backup import export_backup, validate_backup, restore_backup
     from library_index import catalog
     from media_actions import MediaActions
+    from movie_grouping import update_assignments
+    from organization_plan import OrganizationPlan
+    from media_actions import media_id
+    from file_operations import FileOperations
+    import time
     with tempfile.TemporaryDirectory() as temporary:
         base = Path(temporary).resolve()
         source, output = base / '样例媒体', base / 'reports'
@@ -36,6 +41,29 @@ def run():
         group, = document['video_library']['groups']
         assert group['metadata']['title'] == '样例电影'
         assert group['poster'] and group['stills']
+        update_assignments(output, document, [{'id': media_id(str(video)), 'work_key': group['work_key'],
+            'title': group['title'], 'edition': '本机版本', 'part': 1}])
+        assert media_scan.main([str(source), '--output', str(output)]) == 0
+        report = max(output.glob('scan-*/report.json'))
+        document = json.loads(report.read_text(encoding='utf-8'))
+        assert document['scan_reuse']['image_metadata'] == 2
+        assert document['video_library']['groups'][0]['edition'] == '本机版本'
+        destination = base / '副本'
+        destination.mkdir()
+        plan = OrganizationPlan(report.parent, document)
+        plan.set_states([media_id(str(video))], 'include')
+        operations = FileOperations(report.parent, MediaActions(document), lambda: plan, document=document)
+        preview = operations.preview('copy', [media_id(str(video))], str(destination), bundle=True)
+        assert len(preview['items']) == 4
+        job = operations.start(preview['token'])
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            result = operations.snapshot(job['id'])
+            if result['status'] != 'running':
+                break
+            time.sleep(.02)
+        assert result['status'] == 'complete', result
+        assert all(Path(item['target']).read_bytes() == Path(item['path']).read_bytes() for item in preview['items'])
         assert len(catalog(output)['items']) == 3
         files, _ = validate_backup(export_backup(output))
         restored = restore_backup(output, files)
@@ -56,4 +84,4 @@ def run():
             server.server_close()
         after = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in source.rglob('*') if path.is_file()}
         assert before == after
-        print('PACKAGED_SMOKE_OK: scan, NFO, poster, still, catalog, backup, restore, HTTP, originals unchanged', flush=True)
+        print('PACKAGED_SMOKE_OK: scan, reuse, grouping, bundle copy, NFO, poster, still, catalog, backup, restore, HTTP, originals unchanged', flush=True)

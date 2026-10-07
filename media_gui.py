@@ -119,7 +119,7 @@ def latest_library(output=REPORTS):
 
 
 def scan_arguments(folders, *, output=REPORTS, image_analysis=True, video_covers=True,
-                   video_headers=False, video_rule="auto"):
+                   video_headers=False, video_rule="auto", refresh_media=False):
     if not folders:
         raise ValueError("请先添加至少一个照片或视频文件夹")
     if video_rule not in {"auto", "name", "folder"}:
@@ -132,6 +132,8 @@ def scan_arguments(folders, *, output=REPORTS, image_analysis=True, video_covers
         args.append("--no-video-covers")
     if video_headers:
         args.append("--check-video-headers")
+    if refresh_media:
+        args.append('--refresh-media')
     return args
 
 
@@ -262,7 +264,7 @@ class DashboardState(WorkspaceController):
     def start_scan(self, options):
         if not isinstance(options, dict):
             raise ValueError("扫描选项无效")
-        for key in ("image_analysis", "video_covers", "video_headers"):
+        for key in ("image_analysis", "video_covers", "video_headers", "refresh_media"):
             if key in options and not isinstance(options[key], bool):
                 raise ValueError("扫描选项无效")
         image_analysis = options.get("image_analysis", True)
@@ -273,7 +275,7 @@ class DashboardState(WorkspaceController):
             if self.running:
                 raise ValueError("已有扫描正在进行")
             args = scan_arguments(self.folders, output=self.output, image_analysis=image_analysis,
-                                  video_covers=video_covers, video_headers=video_headers,
+                                  video_covers=video_covers, video_headers=video_headers, refresh_media=options.get('refresh_media', False),
                                   video_rule=video_rule)
             self.scan_options = dict(options)
             self.running = True
