@@ -95,6 +95,7 @@ class OrganizationPlan:
             target = record.get("suggested_path", "")
             error = _target_error(target)
             item = {"id": identifier, "path": path, "name": Path(path).name,
+                    "source_folder": str(Path(path).parent),
                     "kind": str(record.get("kind", "")),
                     "bytes": record.get("bytes", 0),
                     "suggested_path": target if isinstance(target, str) else "",

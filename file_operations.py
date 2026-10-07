@@ -294,7 +294,7 @@ class FileOperations:
         directory.mkdir(mode=0o700, exist_ok=True)
         parent = open_directory(directory)
         try:
-            fd = os.open(".batch-lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=parent)
+            fd = os.open_lock(".batch-lock", parent)
         finally:
             os.close(parent)
         try:
@@ -406,7 +406,7 @@ class FileOperations:
                     raise ValueError("复制前请先核对并纳入分类计划")
                 check_target(destination, target)
             items.append({"id": identifier, "path": record["path"], "bytes": info.st_size,
-                          "target": str(Path(destination) / target) if mode == "copy" else "系统回收站 / 废纸篓 / 回收站",
+                          "target": str(Path(destination) / target) if mode == "copy" else "系统废纸篓 / 回收站",
                           "relative": target, "signature": file_signature(info)})
         total = sum(item["bytes"] for item in items)
         if mode == "copy" and available < total:

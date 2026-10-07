@@ -408,9 +408,9 @@ class MediaTests(unittest.TestCase):
             self.assertTrue(source.is_file())
 
     def test_photo_wall_previews_work_without_similar_candidates_and_respect_limit(self):
-        helper = scan.BASE/'native'/'image_probe'
+        helper = scan.media_backend.helper('image_probe')
         if not scan.helper_available(helper):
-            self.skipTest('native ImageIO component unavailable')
+            self.skipTest('Image backend unavailable; CI prepares the backend on both platforms')
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             report = root/'report';report.mkdir()
@@ -427,7 +427,7 @@ class MediaTests(unittest.TestCase):
             self.assertEqual(issues, [])
             self.assertEqual(before, {path: (Path(path).read_bytes(), Path(path).stat().st_mtime_ns) for path in before})
 
-    def test_native_image_helper_rejects_symlink_source_and_output(self):
+    def test_image_backend_rejects_symlink_source_and_output(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             source = base / "source.png"
@@ -436,10 +436,16 @@ class MediaTests(unittest.TestCase):
             linked_source, linked_output = base / "linked.png", base / "preview.png"
             make_symlink(linked_source, source)
             make_symlink(linked_output, source)
-            helper = scan.BASE / "native" / "image_probe"
+            helper = scan.media_backend.helper("image_probe")
             self.assertFalse(scan.helper_available(linked_source))
-            self.assertNotEqual(subprocess.run([str(helper), str(linked_source)], capture_output=True).returncode, 0)
-            self.assertNotEqual(subprocess.run([str(helper), "--thumbnail", str(source), str(linked_output)], capture_output=True).returncode, 0)
+            worker = scan.ImageProbeWorker(helper)
+            try:
+                with self.assertRaises((OSError, ValueError)):
+                    worker.request(str(linked_source))
+                with self.assertRaises((OSError, ValueError)):
+                    worker.request(str(source), str(linked_output))
+            finally:
+                worker.close()
             self.assertEqual(source.read_bytes(), original)
             self.assertTrue(linked_output.is_symlink())
 

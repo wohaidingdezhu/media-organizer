@@ -89,12 +89,18 @@ class BasketTests(unittest.TestCase):
 
     def test_separate_processes_preserve_both_manual_additions(self):
         code = "from cleanup_basket import CleanupBasket; import json,sys; CleanupBasket(sys.argv[1],json.loads(sys.argv[2])).update('add',[sys.argv[3]])"
-        processes = [subprocess.Popen([sys.executable, '-c', code, str(self.report), json.dumps(self.document), identifier],
-                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE) for identifier in self.ids[:2]]
-        for process in processes:
-            _, errors = process.communicate(timeout=10)
-            self.assertEqual(process.returncode, 0, errors.decode())
-        self.assertEqual(self.store.snapshot()['ids'], sorted(self.ids[:2]))
+        for attempt in range(5):
+            with self.subTest(attempt=attempt):
+                processes = [subprocess.Popen([sys.executable, '-c', code, str(self.report), json.dumps(self.document), identifier],
+                                             stdout=subprocess.PIPE, stderr=subprocess.PIPE) for identifier in self.ids[:2]]
+                # Always reap both children before assertions or fixture cleanup.
+                results = [process.communicate(timeout=10) for process in processes]
+                for process, (_, errors) in zip(processes, results):
+                    self.assertEqual(process.returncode, 0, errors.decode())
+                self.assertEqual(self.store.snapshot()['ids'], sorted(self.ids[:2]))
+                # Reproduce simultaneous first creation, only after both exit.
+                self.store.update('clear', [])
+                (self.report / '.cleanup-basket-lock').unlink()
 
     def test_symlink_lock_is_rejected_without_modifying_unrelated_file(self):
         victim = self.root/'generated-unrelated.txt'; victim.write_bytes(b'keep generated data')

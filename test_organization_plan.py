@@ -42,6 +42,20 @@ class OrganizationPlanTests(unittest.TestCase):
         self.assertEqual({i["path"]: i["id"] for i in snapshot["items"]},
                          {i["path"]: i["id"] for i in reverse["items"]})
 
+    def test_source_folders_match_host_paths_and_storage_navigation(self):
+        from media_catalog import storage_catalog
+        paths = [self.directory / '中文 来源' / 'nested' / 'sample.png',
+                 self.directory / 'backup' / 'sample.png']
+        document = {'files': [{'path': str(path), 'kind': '照片', 'bytes': 12,
+                              'suggested_path': f'照片/2024/01/{number}.png'}
+                             for number, path in enumerate(paths)]}
+        items = self.plan(document).snapshot()['items']
+        self.assertEqual([item['source_folder'] for item in items],
+                         [str(path.parent) for path in paths])
+        storage = storage_catalog(document)
+        self.assertEqual({item['source_folder'] for item in items},
+                         {item['name'] for item in storage['folders']})
+
     def test_decisions_persist_and_updates_are_private_atomic_and_resettable(self):
         plan = self.plan()
         identifiers = [item["id"] for item in plan.snapshot()["items"]]

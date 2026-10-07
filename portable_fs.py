@@ -14,6 +14,22 @@ def __getattr__(name):
     return getattr(_os, name)
 
 
+def open_lock(name, directory):
+    """Create once, then open the existing lock without truncating its header.
+
+    Separate exclusive creation from opening: concurrent O_CREAT opens can
+    transiently fail with ENOENT on macOS. Both paths reject links/reparse points.
+    """
+    if _os.name == "nt":
+        flags, opener = _os.O_RDWR | O_NOFOLLOW | O_NONBLOCK, open
+    else:
+        flags, opener = _os.O_RDWR | _os.O_NOFOLLOW | _os.O_NONBLOCK, _os.open
+    try:
+        return opener(name, flags | _os.O_CREAT | _os.O_EXCL, 0o600, dir_fd=directory)
+    except FileExistsError:
+        return opener(name, flags, dir_fd=directory)
+
+
 def publish(source, target, directory):
     if _os.name == "nt":
         _rename(source, target, directory, directory, False)
