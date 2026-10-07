@@ -82,7 +82,7 @@ class CleanupBasket:
         temporary = '.cleanup-basket-temp-' + secrets.token_hex(12)
         created = False
         try:
-            lock = os.open('.cleanup-basket-lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=directory)
+            lock = os.open_lock('.cleanup-basket-lock', directory)
             if not stat.S_ISREG(os.fstat(lock).st_mode):
                 raise ValueError('候选篮锁无效')
             fcntl.flock(lock, fcntl.LOCK_EX)

@@ -1,5 +1,6 @@
 """Cross-platform integration using only generated, temporary sample files."""
 import contextlib
+import importlib.util
 import io
 import json
 import os
@@ -35,6 +36,12 @@ class CrossPlatformTests(unittest.TestCase):
                         source.write_bytes(b'first copy')
                         fs.publish(source.name, name, directory)
                         self.assertEqual((root / name).read_bytes(), b'first copy')
+                        # POSIX publishes a hard link; Windows renames the file.
+                        # Match copy_one's cleanup before creating another copy.
+                        try:
+                            fs.unlink(source.name, dir_fd=directory)
+                        except FileNotFoundError:
+                            pass
                         source.write_bytes(b'second copy')
                         with self.assertRaises(FileExistsError):
                             fs.publish(source.name, name, directory)
@@ -80,6 +87,7 @@ class CrossPlatformTests(unittest.TestCase):
                 self.assertIn('200 OK', headers, endpoint)
             self.assertEqual(before, {path.name: (path.read_bytes(), path.stat().st_mtime_ns) for path in source.iterdir()})
 
+    @unittest.skipUnless(importlib.util.find_spec('PIL'), 'Optional Pillow backend not installed; CI installs media dependencies on both platforms')
     def test_pillow_orientation_exif_and_source_protection(self):
         from PIL import Image
         from portable_image_probe import probe
@@ -100,6 +108,7 @@ class CrossPlatformTests(unittest.TestCase):
                 probe(str(path), str(path))
             self.assertEqual(path.read_bytes(), before)
 
+    @unittest.skipUnless(importlib.util.find_spec('imageio_ffmpeg'), 'Optional FFmpeg backend not installed; CI installs media dependencies on both platforms')
     def test_ffmpeg_extracts_only_report_preview(self):
         import imageio_ffmpeg
         with tempfile.TemporaryDirectory() as temporary:
@@ -107,7 +116,8 @@ class CrossPlatformTests(unittest.TestCase):
             subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-nostdin', '-loglevel', 'error', '-f', 'lavfi',
                             '-i', 'color=c=blue:s=80x60:d=1', '-c:v', 'libx264', str(video)], check=True, timeout=15)
             before = video.read_bytes()
-            worker = media_scan.ImageProbeWorker(media_backend.helper('video_cover'))
+            # Exercise the portable FFmpeg backend even on a native Mac host.
+            worker = media_scan.ImageProbeWorker(media_scan.BASE / 'portable_video_cover.py')
             try:
                 worker.request(str(video), str(preview))
             finally:
