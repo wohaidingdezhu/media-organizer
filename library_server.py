@@ -156,19 +156,21 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
     library_page = None
 
     def current_document():
-        from movie_grouping import load_assignments, apply_grouping
+        from movie_grouping import load_assignments, apply_grouping, assignments_revision
+        from movie_attachments import attach_summaries
         from media_scan import build_video_library
         values = load_assignments(output_dir)
         records = document.get('files', [])
         if not records or not all(all(key in file for key in ('root', 'name', 'mtime', 'hash_status', 'suggested_path')) for file in records):
-            return document  # Browsing legacy report schemas remains available.
+            return {**document, 'video_library': {**(library or {}), 'grouping_revision': assignments_revision(values)}}
         base = build_video_library(records, document.get('sidecars', []), document.get('duplicates', []),
                                    document.get('issues', []), document.get('folder_groups', []), load_tags(tag_path))
         grouped = apply_grouping(base, values, art_library=library)
         tags = load_tags(tag_path)
         for group in grouped['groups']:
             group['tags'] = tags.get(group['tag_key'], [])
-        return {**document, 'video_library': grouped}
+        grouped['grouping_revision'] = assignments_revision(values)
+        return attach_summaries({**document, 'video_library': grouped})
 
     def current_library_page():
         nonlocal library_page
@@ -394,7 +396,10 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     return
                 if route == 'api/grouping':
                     from movie_grouping import update_assignments
-                    operations.update_plan(lambda: update_assignments(output_dir, current_document(), payload['edits']))
+                    revision = payload.get('revision')
+                    if not isinstance(revision, str) or not re.fullmatch(r'[0-9a-f]{64}', revision):
+                        raise ValueError('页面缺少有效分组版本，请刷新页面后重新修正')
+                    operations.update_plan(lambda: update_assignments(output_dir, current_document(), payload['edits'], revision))
                     self.send_json(200, {'saved': True, 'message': '分组修正已保存，重新扫描后继续使用；原文件不变。'})
                     return
                 if route == "api/operations/start":

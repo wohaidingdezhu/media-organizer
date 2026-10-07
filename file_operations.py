@@ -405,12 +405,19 @@ class FileOperations:
         current = {item["id"]: item for item in self.plan().snapshot()["items"]}
         selected_ids = list(ids)
         operation_media, targets, companion_ids, skipped = self.media, {}, set(), []
+        bundles, roles = [], {}
         if bundle:
             from movie_bundle import bundle_selection
             document = self.document() if callable(self.document) else self.document
             if not isinstance(document, dict):
                 raise ValueError('整组复制需要完整扫描报告')
             operation_media, targets, companion_ids, skipped = bundle_selection(document, ids, current, self.media)
+            from movie_attachments import attachment_manifests
+            selected_paths = {self.media.records[key]['path'] for key in selected_ids}
+            for group, summary in zip(document['video_library']['groups'], attachment_manifests(document)):
+                if selected_paths & {file['path'] for file in group['files']}:
+                    bundles.append(summary)
+                    roles.update({item['path']: item['label'] for item in summary['items']})
             ids = list(targets)
         if mode == "copy":
             if not isinstance(destination, str) or not destination or "\x00" in destination:
@@ -449,14 +456,14 @@ class FileOperations:
             items.append({"id": identifier, "path": record["path"], "bytes": info.st_size,
                           "target": str(Path(destination) / target) if mode == "copy" else "系统废纸篓 / 回收站",
                           "relative": target, "signature": file_signature(info),
-                          "role": '影片附件' if identifier in companion_ids else '媒体'})
+                          "role": roles.get(record["path"], '影片' if bundle else '媒体')})
         total = sum(item["bytes"] for item in items)
         if mode == "copy" and available < total:
             raise ValueError("目标磁盘可用空间不足")
         preview = {"token": secrets.token_urlsafe(24), "mode": mode, "items": items,
                    "bytes": total, "destination": destination, "dest_identity": dest_identity,
                    "available_bytes": available, "expires": time.monotonic() + 600}
-        preview.update(bundle=bundle, skipped=skipped, selected_ids=selected_ids, _media=operation_media)
+        preview.update(bundle=bundle, bundles=bundles, skipped=skipped, selected_ids=selected_ids, _media=operation_media)
         with self.lock:
             self.previews = {key: value for key, value in self.previews.items() if value["expires"] > time.monotonic()}
             self.previews[preview["token"]] = preview
@@ -523,7 +530,8 @@ class FileOperations:
                 raise ValueError("有文件操作正在执行，请等待完成")
             job = {"id": secrets.token_hex(12), "mode": preview["mode"], "status": "running",
                    "created_at": time.strftime("%Y-%m-%d %H:%M:%S"), "items": [], "total": len(preview["items"]),
-                   "planned_items": [{key: item[key] for key in ("path", "target", "bytes")} for item in preview["items"]]}
+                   "bundle": preview.get("bundle", False),
+                   "planned_items": [{key: item[key] for key in ("path", "target", "bytes", "role")} for item in preview["items"]]}
             descriptor = None
             try:
                 try:
@@ -562,7 +570,7 @@ class FileOperations:
             for item in preview["items"]:
                 if cancelled():
                     break
-                result = {"path": item["path"], "target": item["target"], "status": "processing", "bytes": item["bytes"]}
+                result = {"path": item["path"], "target": item["target"], "status": "processing", "bytes": item["bytes"], "role": item["role"]}
                 with self.lock:
                     job["items"].append(result)
                     self._save_job(job)
@@ -637,6 +645,7 @@ class FileOperations:
         finally:
             os.close(descriptor)
         if (not isinstance(job, dict) or job.get("id") != identifier
+                or 'bundle' in job and (type(job['bundle']) is not bool or job['bundle'] and job.get('mode') != 'copy')
                 or job.get("mode") not in {"copy", "trash"}
                 or job.get("status") not in {"running", "complete", "stopped", "cancelled"}
                 or type(job.get("total")) is not int or not 1 <= job["total"] <= 200
@@ -650,6 +659,9 @@ class FileOperations:
                 or any(not isinstance(item, dict) or not isinstance(item.get("path"), str)
                        or not isinstance(item.get("target"), str) for item in planned)):
             raise ValueError("批次文件清单无效")
+        if any('role' in item and (not isinstance(item['role'], str) or item['role'] not in {'媒体', '影片', '字幕', 'NFO', '封面', '剧照'})
+               for item in job['items'] + (planned or [])):
+            raise ValueError('操作记录文件类型无效')
         started = {item["path"]: item["target"] for item in job["items"]}
         if len(started) != len(job["items"]):
             raise ValueError("操作记录包含重复文件")
@@ -723,6 +735,8 @@ class FileOperations:
         job = self.snapshot(identifier)
         if job["status"] not in {"cancelled", "stopped"} or job.get("error") or not job.get("planned_items"):
             raise ValueError("此批次不能直接继续核对；请先检查逐项记录、原文件与目标位置")
+        if job.get("bundle"):
+            raise ValueError("整组复制须按逐项记录核对影片和附件，再重新选择整组预览；不会自动勾选或重试")
         history = self._history()
         if history["warnings"] or any(entry["status"] in {"running", "external_running"} for entry in history["jobs"]):
             raise ValueError("请等待正在执行的批次完成，或先核对无法读取的操作记录")

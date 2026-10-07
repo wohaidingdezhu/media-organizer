@@ -77,7 +77,7 @@ class MovieUpgradeTests(unittest.TestCase):
         originals = {str(path): (path.read_bytes(), path.stat().st_mtime_ns) for path in self.source.rglob('*') if path.is_file()}
         preview = ops.preview('copy', [media_id(str(movies[0]))], str(self.destination), bundle=True)
         self.assertEqual(len(preview['items']), 6)
-        self.assertEqual(sum(item['role'] == '影片附件' for item in preview['items']), 4)
+        self.assertEqual(sum(item['role'] in {'字幕', 'NFO', '封面', '剧照'} for item in preview['items']), 4)
         self.assertEqual([Path(item['path']).name for item in preview['skipped']], ['orphan.srt'])
         self.assertFalse(list(self.destination.iterdir()), 'preview must not create directories')
         result = self.wait_job(ops, ops.start(preview['token']))
@@ -216,14 +216,14 @@ class MovieUpgradeTests(unittest.TestCase):
 
     def test_http_grouping_requires_origin_and_changes_actual_served_page(self):
         movie = self.generated('ABC-123.mp4')
-        report, _ = self.run_scan()
+        report, document = self.run_scan()
         with mock.patch.object(library_server, 'ThreadingHTTPServer', MemoryServer):
             server, url = library_server.create_library_server(report, self.output)
         prefix = urlsplit(url).path.removesuffix('library.html')
         edit = {'id': media_id(str(movie)), 'work_key': 'new', 'title': '人工修正作品', 'edition': '导演剪辑', 'part': 1}
         headers, _ = request(server, prefix + 'api/grouping', 'POST', {'edits': [edit]}, origin='http://outside.invalid')
         self.assertIn('403', headers)
-        headers, _ = request(server, prefix + 'api/grouping', 'POST', {'edits': [edit]})
+        headers, _ = request(server, prefix + 'api/grouping', 'POST', {'edits': [edit], 'revision': document['video_library']['grouping_revision']})
         self.assertIn('200', headers)
         headers, page = request(server, prefix + 'library.html')
         self.assertIn('200', headers)
@@ -316,3 +316,219 @@ class MovieUpgradeTests(unittest.TestCase):
         code = "const b=require(process.argv[1]);const g={title:'影片',edition:'导演剪辑',files:[]};if(b.browseMovies([g],{query:'导演'}).length!==1)process.exit(1);"
         result = subprocess.run([node, '-e', code, str(Path(__file__).parent / 'library_browse.js')], capture_output=True, text=True, encoding='utf-8', timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_attachment_audit_matches_copy_preview_and_does_not_flag_other_work(self):
+        movies, _, report, document, _, _ = self.bundle_sample()
+        self.generated('OTHER-456.mp4', b'another movie')
+        other = self.generated('OTHER-456.en.srt', b'other subtitle')
+        report, document = self.run_scan()
+        group = next(item for item in document['video_library']['groups'] if item['title'] == 'ABC-123')
+        summary = group['attachment_summary']
+        self.assertEqual(summary['counts'], {'subtitle': 1, 'nfo': 1, 'cover': 0, 'still': 0})
+        self.assertEqual(summary['missing'], ['封面', '剧照'])
+        self.assertNotIn(str(other), [item['path'] for item in summary['skipped']])
+        ops, _ = self.operations(document, report)
+        preview = ops.preview('copy', [media_id(str(movies[0]))], str(self.destination), bundle=True)
+        self.assertEqual(preview['bundles'], [summary])
+        self.assertEqual({item['path'] for item in preview['items'] if item['role'] != '影片'}, {item['path'] for item in summary['items']})
+        self.assertFalse(list(self.destination.iterdir()))
+
+    def test_attachment_audit_windows_unc_and_posix_paths_use_same_rules(self):
+        from movie_attachments import attachment_manifests
+        for folder in ('C:\\电影', '\\\\server\\share\\电影', '/电影'):
+            path = grouping.source_path(folder)
+            video, cover, subtitle = [str(path / name) for name in ('ABC-123.mp4', 'ABC-123-poster.png', 'ABC-123.en.srt')]
+            document = {'files': [{'path': cover, 'kind': '照片', 'extension': 'png', 'bytes': 1}],
+                'video_library': {'groups': [{'title': 'ABC-123', 'type': '编号', 'tag_key': 'a'*64, 'files': [{'path': video}]}]},
+                'sidecars': [{'path': subtitle, 'extension': 'srt', 'status': '已关联', 'media_paths': [video], 'bytes': 1}]}
+            summary, = attachment_manifests(document)
+            self.assertEqual(summary['counts'], {'subtitle': 1, 'nfo': 0, 'cover': 1, 'still': 0})
+            self.assertEqual(summary['identity_missing'], 2)
+            self.assertEqual({item['relative'] for item in summary['items']}, {'ABC-123.en.srt', 'ABC-123-poster.png'})
+
+    def test_grouping_stale_windows_and_missing_revision_never_overwrite_saved_data(self):
+        movie = self.generated('ABC-123.mp4')
+        report, document = self.run_scan()
+        with mock.patch.object(library_server, 'ThreadingHTTPServer', MemoryServer):
+            first, url = library_server.create_library_server(report, self.output)
+            second, second_url = library_server.create_library_server(report, self.output)
+        prefix = urlsplit(url).path.removesuffix('library.html')
+        second_prefix = urlsplit(second_url).path.removesuffix('library.html')
+        edit = {'id': media_id(str(movie)), 'work_key': 'new', 'title': '第一窗口作品', 'edition': '1080p', 'part': 1}
+        body = {'edits': [edit], 'revision': document['video_library']['grouping_revision']}
+        headers, _ = request(first, prefix + 'api/grouping', 'POST', body)
+        self.assertIn('200', headers)
+        before = (self.output / grouping.NAME).read_bytes()
+        body['edits'] = [dict(edit, title='旧窗口作品')]
+        headers, error = request(second, second_prefix + 'api/grouping', 'POST', body)
+        self.assertIn('400', headers)
+        self.assertIn('另一窗口', json.loads(error)['error'])
+        headers, _ = request(second, second_prefix + 'api/grouping', 'POST', {'edits': body['edits']})
+        self.assertIn('400', headers)
+        self.assertEqual((self.output / grouping.NAME).read_bytes(), before)
+        headers, page = request(second, second_prefix + 'library.html')
+        self.assertIn(grouping.assignments_revision(grouping.load_assignments(self.output)).encode(), page)
+        self.assertIn('第一窗口作品'.encode(), page)
+
+    def test_grouping_revision_is_checked_under_lock_and_reset_changes_revision(self):
+        movie = self.generated('ABC-123.mp4')
+        _, document = self.run_scan()
+        revision = document['video_library']['grouping_revision']
+        edit = {'id': media_id(str(movie)), 'work_key': 'new', 'title': '新作品', 'edition': '', 'part': 0}
+        values = grouping.update_assignments(self.output, document, [edit], revision)
+        with self.assertRaisesRegex(ValueError, '另一窗口'):
+            grouping.update_assignments(self.output, document, [{'id': edit['id'], 'reset': True}], revision)
+        self.assertEqual(grouping.load_assignments(self.output), values)
+        reset = grouping.update_assignments(self.output, document, [{'id': edit['id'], 'reset': True}], grouping.assignments_revision(values))
+        self.assertEqual(reset, {})
+        self.assertEqual(grouping.assignments_revision(reset), revision)
+
+    def test_bundle_stop_during_subtitle_keeps_finished_movies_and_records_pending_roles(self):
+        import file_operations as operations
+        movies, _, report, document, ops, plan = self.bundle_sample()
+        originals = {str(path): path.read_bytes() for path in self.source.rglob('*') if path.is_file()}
+        preview = ops.preview('copy', [media_id(str(movies[0]))], str(self.destination), bundle=True)
+        original_copy = operations.copy_one
+        def stop_subtitle(media, identifier, destination, relative, signature, identity, progress, cancelled):
+            def on_progress(amount, phase):
+                progress(amount, phase)
+                if relative.endswith('.srt') and amount and phase == 'copying':
+                    ops.request_stop(next(iter(ops.jobs)))
+            return original_copy(media, identifier, destination, relative, signature, identity, on_progress, cancelled)
+        with mock.patch.object(operations, 'copy_one', side_effect=stop_subtitle):
+            result = self.wait_job(ops, ops.start(preview['token']))
+        self.assertEqual(result['status'], 'cancelled', result)
+        self.assertEqual([item['status'] for item in result['items']], ['success', 'success', 'cancelled'])
+        self.assertEqual([item['role'] for item in result['planned_items']], ['影片', '影片', '字幕', 'NFO', '封面', '剧照'])
+        self.assertEqual(result['items'][-1]['role'], '字幕')
+        reopened = FileOperations(report, MediaActions(document), lambda: plan, document=document)
+        self.assertEqual(reopened.snapshot(result['id']), result)
+        with self.assertRaisesRegex(ValueError, '整组复制'):
+            reopened.remaining(result['id'])
+        self.assertEqual(len([path for path in self.destination.rglob('*') if path.is_file()]), 2)
+        self.assertFalse(list(self.destination.rglob('.media-copy-*')))
+        self.assertEqual(originals, {path: Path(path).read_bytes() for path in originals})
+        ops.update_plan(lambda: plan.set_states([media_id(str(movies[0]))], 'hold'))
+
+    def test_bundle_failure_keeps_verified_copies_and_never_overwrites_existing_target(self):
+        import file_operations as operations
+        movies, _, _, _, ops, _ = self.bundle_sample()
+        originals = {str(path): path.read_bytes() for path in self.source.rglob('*') if path.is_file()}
+        preview = ops.preview('copy', [media_id(str(movies[0]))], str(self.destination), bundle=True)
+        original_copy = operations.copy_one
+        def fail_nfo(*args):
+            if args[3].endswith('.nfo'):
+                raise OSError('generated disk failure')
+            return original_copy(*args)
+        with mock.patch.object(operations, 'copy_one', side_effect=fail_nfo):
+            result = self.wait_job(ops, ops.start(preview['token']))
+        self.assertEqual(result['status'], 'stopped')
+        self.assertEqual([item['status'] for item in result['items']], ['success']*3+['failed'])
+        self.assertEqual(result['items'][-1]['role'], 'NFO')
+        self.assertEqual(len([path for path in self.destination.rglob('*') if path.is_file()]), 3)
+        with self.assertRaisesRegex(ValueError, '不会覆盖'):
+            ops.preview('copy', [media_id(str(movies[0]))], str(self.destination), bundle=True)
+        self.assertEqual(originals, {path: Path(path).read_bytes() for path in originals})
+
+    def test_png_signature_alone_never_reuses_corrupt_or_truncated_cache(self):
+        self.make_pngs()
+        for corrupt in (lambda body: body[:-12], lambda body: body[:40]+bytes([body[40]^1])+body[41:], lambda body: body+b'junk'):
+            old, _ = self.run_scan(True, '--no-video-covers', '--refresh-media')
+            for path in (old/'previews').glob('*.png'):
+                path.write_bytes(corrupt(path.read_bytes()))
+            original = scan.ImageProbeWorker.request
+            with mock.patch.object(scan.ImageProbeWorker, 'request', autospec=True, side_effect=original) as worker:
+                _, document = self.run_scan(True, '--no-video-covers')
+            self.assertEqual(document['scan_reuse']['image_metadata'], 2)
+            self.assertEqual(document['scan_reuse']['image_previews'], 0)
+            self.assertEqual(worker.call_count, 2)
+
+    def test_cache_source_changes_during_copy_cleanup_and_existing_file_is_preserved(self):
+        self.make_pngs()
+        _, document = self.run_scan(True, '--no-video-covers')
+        from scan_cache import ScanCache
+        cache = ScanCache(self.output, [self.source], document['options']['analysis_fingerprint'])
+        record = document['files'][0]
+        record['_signature'] = tuple(record['source_signature'])
+        target = self.destination/'preview.png'
+        with mock.patch.object(cache, 'unchanged', side_effect=[True, False]):
+            self.assertFalse(cache.thumbnail(record, target))
+        self.assertFalse(target.exists())
+        target.write_bytes(b'keep existing generated file')
+        self.assertFalse(cache.thumbnail(record, target))
+        self.assertEqual(target.read_bytes(), b'keep existing generated file')
+        self.assertEqual(cache.reused_previews, 0)
+
+    def test_attachment_and_stopped_bundle_interface_display_actual_summary_and_roles(self):
+        node = shutil.which('node')
+        code = r"""
+const fs=require('fs'),vm=require('vm');
+class Element{constructor(tag,text=''){this.tag=tag;this.textContent=text;this.children=[];}append(...children){this.children.push(...children);}setAttribute(){} }
+function make(tag,cls,text){return new Element(tag,text||'');}
+function text(node){return [node.textContent,...node.children.map(text)].join(' ');}
+const scope={make,operating:false,saving:false,fileSize:n=>String(n)};vm.createContext(scope);
+vm.runInContext(fs.readFileSync(process.argv[1],'utf8'),scope);
+const summary={videos:2,counts:{subtitle:1,nfo:0,cover:1,still:0},missing:['NFO','剧照'],identity_missing:0,items:[{label:'字幕',path:'C:\\sample\\film.srt'}],skipped:[{path:'orphan.srt',reason:'未唯一关联'}]};
+const shown=text(scope.attachmentSummary(summary));
+if(!shown.includes('字幕 1')||!shown.includes('缺少不表示影片损坏')||!shown.includes('人工核对'))throw Error(shown);
+const management=fs.readFileSync(process.argv[2],'utf8');vm.runInContext(management.slice(management.indexOf('function activeOperation'),management.indexOf('async function reviewRemaining')),scope);
+const card=scope.operationCard({mode:'copy',bundle:true,status:'cancelled',items:[{path:'film.mp4',target:'out/film.mp4',status:'success',role:'影片'}],total:2,planned_items:[{path:'film.mp4',target:'out/film.mp4',role:'影片'},{path:'film.srt',target:'out/film.srt',role:'字幕'}]});
+const rendered=text(card);if(!rendered.includes('[字幕]')||!rendered.includes('整组未全部完成')||rendered.includes('核对此批次未处理项'))throw Error(rendered);
+"""
+        result = subprocess.run([node, '-e', code, str(Path(__file__).parent/'library_details.js'), str(Path(__file__).parent/'management.js')], capture_output=True, text=True, encoding='utf-8', timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_simultaneous_grouping_saves_allow_one_writer_and_preserve_the_winner(self):
+        import threading
+        movie = self.generated('ABC-123.mp4')
+        _, document = self.run_scan()
+        barrier = threading.Barrier(2)
+        saved, errors = [], []
+        def save(title):
+            edit = {'id': media_id(str(movie)), 'work_key': 'new', 'title': title, 'edition': '', 'part': 0}
+            barrier.wait(timeout=5)
+            try:
+                saved.append(grouping.update_assignments(self.output, document, [edit], document['video_library']['grouping_revision']))
+            except ValueError as error:
+                errors.append(str(error))
+        threads = [threading.Thread(target=save, args=(title,)) for title in ('第一窗口', '第二窗口')]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=8)
+            self.assertFalse(thread.is_alive())
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(len(errors), 1)
+        self.assertIn('另一窗口', errors[0])
+        self.assertEqual(grouping.load_assignments(self.output), saved[0])
+
+    def test_bundle_journal_rejects_invalid_type_markers_and_keeps_legacy_readable(self):
+        import file_operations as operations
+        movies, _, report, document, ops, plan = self.bundle_sample()
+        preview = ops.preview('copy', [media_id(str(movies[0]))], str(self.destination), bundle=True)
+        queued = []
+        with mock.patch.object(operations.threading.Thread, 'start', autospec=True, side_effect=queued.append):
+            job = ops.start(preview['token'])
+        try:
+            ops.request_stop(job['id'])
+        finally:
+            queued[0].run()
+        valid = ops.snapshot(job['id'])
+        journal = report/'operations'/(job['id']+'.json')
+        reopened = FileOperations(report, MediaActions(document), lambda: plan, document=document)
+        for change in ('role', 'bundle'):
+            malformed = json.loads(json.dumps(valid))
+            if change == 'role':
+                malformed['planned_items'][0]['role'] = ['invalid role']
+            else:
+                malformed['bundle'] = 'true'
+            journal.write_text(json.dumps(malformed), encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, '操作记录'):
+                reopened.snapshot(job['id'])
+        legacy = json.loads(json.dumps(valid))
+        legacy.pop('bundle')
+        for item in legacy['planned_items']:
+            item.pop('role')
+        journal.write_text(json.dumps(legacy), encoding='utf-8')
+        self.assertEqual(reopened.snapshot(job['id']), legacy)
+        self.assertFalse(list(self.destination.iterdir()))

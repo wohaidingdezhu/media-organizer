@@ -889,40 +889,9 @@ def export_previews(directory, records, similarity, helper, issues, displayed_pa
 
 
 def local_cover_candidates(groups, records):
-    """Prefer exact or identifier images; only use generic folder art for one work."""
-    photos = collections.defaultdict(list)
-    for record in records:
-        if record["kind"] == "照片":
-            path = Path(record["path"])
-            photos[(str(path.parent), unicodedata.normalize("NFC", path.stem).casefold())].append(record)
-    extension_order = {name: index for index, name in enumerate(("jpg", "jpeg", "png", "webp", "heic", "heif", "tif", "tiff"))}
-    folder_groups = collections.defaultdict(set)
-    for index, group in enumerate(groups):
-        for file in group["files"]:
-            folder_groups[str(Path(file["path"]).parent)].add(index)
-    result = []
-    for index, group in enumerate(groups):
-        candidates, seen = [], set()
-        folders = list(dict.fromkeys(str(Path(file["path"]).parent) for file in group["files"]))
-        stems = [group["title"]] if group["type"] == "编号" else []
-        stems += [Path(file["path"]).stem for file in group["files"]]
-        stems += [stem + suffix for stem in list(stems) for suffix in ("-poster", "-cover")]
-        for folder in folders:
-            for stem in stems:
-                for photo in sorted(photos.get((folder, unicodedata.normalize("NFC", stem).casefold()), []),
-                                    key=lambda item: (extension_order.get(item["extension"], 99), item["path"])):
-                    if photo["path"] not in seen:
-                        candidates.append(photo)
-                        seen.add(photo["path"])
-            if len(folder_groups[folder]) == 1:
-                for stem in ("poster", "folder", "cover", "封面"):
-                    for photo in sorted(photos.get((folder, stem.casefold()), []),
-                                        key=lambda item: (extension_order.get(item["extension"], 99), item["path"])):
-                        if photo["path"] not in seen:
-                            candidates.append(photo)
-                            seen.add(photo["path"])
-        result.append(candidates)
-    return result
+    """Shared read-only recipe for the poster wall and attachment inventory."""
+    from movie_attachments import cover_candidates
+    return cover_candidates(groups, records)
 
 
 def export_local_covers(directory, groups, records, helper, issues, enabled=True, cache=None):
@@ -1406,9 +1375,10 @@ def main(argv=None):
             issue(issues, tag_path, f"标签文件未读取：{error}")
             saved_tags = {}
         video_library = build_video_library(records, sidecars, duplicates, issues, folder_groups, saved_tags)
-        from movie_grouping import load_assignments, apply_grouping
+        from movie_grouping import load_assignments, apply_grouping, assignments_revision
         assignments = load_assignments(output) if output.exists() else {}
         video_library = apply_grouping(video_library, assignments)
+        video_library["grouping_revision"] = assignments_revision(assignments)
         for group in video_library['groups']:
             group['tags'] = saved_tags.get(group['tag_key'], [])
         from local_movie_metadata import enrich_library, export_stills
@@ -1447,6 +1417,8 @@ def main(argv=None):
                 "files": clean_records, "duplicates": duplicates,
                 "similar": similarity, "previews": previews, "video_groups": video_groups, "sidecars": [{key: value for key, value in item.items() if not key.startswith("_")} for item in sidecars],
                 "folder_groups": folder_groups, "video_library": video_library, "issues": issues, "skipped": skipped}
+        from movie_attachments import attach_summaries
+        attach_summaries(data)
         write_reports(directory, data)
         print('变化更新：复用照片信息 {} 项、小图 {} 项、视频封面 {} 项；精确查重已重新校验。'.format(
             cache.reused_metadata, cache.reused_previews, cache.reused_covers), flush=True)
