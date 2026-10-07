@@ -96,7 +96,7 @@ class CrossPlatformTests(unittest.TestCase):
         result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8',
                                 input='\n', timeout=15, env=dict(os.environ, PYTHONUTF8='1'))
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('--video-rule', result.stdout)
+        self.assertIn('--video-rule', result.stdout, result.stderr)
 
     def test_lock_reopen_keeps_header_with_a_substituted_desktop_platform(self):
         from file_operations import open_directory

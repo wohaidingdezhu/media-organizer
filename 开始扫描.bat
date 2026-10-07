@@ -1,21 +1,14 @@
 @echo off
 setlocal
-cd /d "%~dp0"
+cd /d "%~dp0" || exit /b 1
 set PYTHONUTF8=1
-if not "%~1"=="" goto scan
-if exist ".venv\Scripts\python.exe" (
-  ".venv\Scripts\python.exe" media_gui.py
-  if errorlevel 1 pause
-  exit /b
+set "media_python=python"
+if exist ".venv\Scripts\python.exe" set "media_python=.venv\Scripts\python.exe"
+if "%~1"=="" (
+  "%media_python%" -X utf8 media_gui.py
+) else (
+  "%media_python%" -X utf8 media_scan.py --edit-tags %*
 )
-python media_gui.py
-if errorlevel 1 pause
-exit /b
-:scan
-if exist ".venv\Scripts\python.exe" (
-  ".venv\Scripts\python.exe" media_scan.py --edit-tags %*
-  if errorlevel 1 pause
-  exit /b
-)
-python media_scan.py --edit-tags %*
-if errorlevel 1 pause
+set "media_status=%errorlevel%"
+if not "%media_status%"=="0" pause
+exit /b %media_status%
