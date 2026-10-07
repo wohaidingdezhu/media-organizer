@@ -273,11 +273,12 @@ def trash_one(media, identifier, expected):
 
 
 class FileOperations:
-    def __init__(self, report_dir, media, plan):
+    def __init__(self, report_dir, media, plan, document=None):
         self.report_dir, self.media, self.plan = Path(report_dir), media, plan
         self.lock = _STATE_LOCK
         self.report_key = os.path.abspath(self.report_dir)
         self.previews, self.jobs = {}, {}
+        self.document = document
 
     def _stop_requested(self, identifier):
         parent = open_directory(self.report_dir / "operations")
@@ -394,12 +395,23 @@ class FileOperations:
             if not available:
                 raise ValueError("计划保留的精确重复文件已变化或不可访问，请先重新扫描并核对")
 
-    def preview(self, mode, ids, destination=None):
+    def preview(self, mode, ids, destination=None, bundle=False):
+        if type(bundle) is not bool or bundle and mode != 'copy':
+            raise ValueError('影片整组只支持复制，不支持整组清理')
         if mode not in {"copy", "trash"} or not isinstance(ids, list) or not 1 <= len(ids) <= 200:
             raise ValueError("请选择 1–200 个文件并指定复制或废纸篓 / 回收站操作")
         if any(not isinstance(item, str) for item in ids) or len(set(ids)) != len(ids):
             raise ValueError("文件选择无效")
         current = {item["id"]: item for item in self.plan().snapshot()["items"]}
+        selected_ids = list(ids)
+        operation_media, targets, companion_ids, skipped = self.media, {}, set(), []
+        if bundle:
+            from movie_bundle import bundle_selection
+            document = self.document() if callable(self.document) else self.document
+            if not isinstance(document, dict):
+                raise ValueError('整组复制需要完整扫描报告')
+            operation_media, targets, companion_ids, skipped = bundle_selection(document, ids, current, self.media)
+            ids = list(targets)
         if mode == "copy":
             if not isinstance(destination, str) or not destination or "\x00" in destination:
                 raise ValueError("请先选择分类目标文件夹")
@@ -423,30 +435,48 @@ class FileOperations:
             self._check_kept_duplicates(ids, current)
         items = []
         for identifier in ids:
-            record, info = self.media.validate(identifier)
+            record, info = operation_media.validate(identifier)
             if mode == "trash" and record.get("source_signature") is None:
                 raise ValueError("这份旧报告缺少文件身份记录，请重新扫描后再使用废纸篓 / 回收站清理")
             item = current.get(identifier)
-            if item is None:
+            if item is None and identifier not in companion_ids:
                 raise ValueError("文件不属于整理清单")
-            target = item["suggested_path"]
+            target = targets[identifier] if bundle else item["suggested_path"]
             if mode == "copy":
-                if item["state"] != "include" or not item["selectable"]:
+                if identifier not in companion_ids and (item["state"] != "include" or not item["selectable"]):
                     raise ValueError("复制前请先核对并纳入分类计划")
                 check_target(destination, target)
             items.append({"id": identifier, "path": record["path"], "bytes": info.st_size,
                           "target": str(Path(destination) / target) if mode == "copy" else "系统废纸篓 / 回收站",
-                          "relative": target, "signature": file_signature(info)})
+                          "relative": target, "signature": file_signature(info),
+                          "role": '影片附件' if identifier in companion_ids else '媒体'})
         total = sum(item["bytes"] for item in items)
         if mode == "copy" and available < total:
             raise ValueError("目标磁盘可用空间不足")
         preview = {"token": secrets.token_urlsafe(24), "mode": mode, "items": items,
                    "bytes": total, "destination": destination, "dest_identity": dest_identity,
                    "available_bytes": available, "expires": time.monotonic() + 600}
+        preview.update(bundle=bundle, skipped=skipped, selected_ids=selected_ids, _media=operation_media)
         with self.lock:
             self.previews = {key: value for key, value in self.previews.items() if value["expires"] > time.monotonic()}
             self.previews[preview["token"]] = preview
-        return {key: value for key, value in preview.items() if key not in {"expires", "dest_identity"}}
+        return {key: value for key, value in preview.items() if key not in {"expires", "dest_identity", "_media", "selected_ids"}}
+
+    def _validate_copy_plan(self, preview):
+        current = {item['id']: item for item in self.plan().snapshot()['items']}
+        if preview.get('bundle'):
+            from movie_bundle import bundle_selection
+            document = self.document() if callable(self.document) else self.document
+            _, targets, _, skipped = bundle_selection(document, preview['selected_ids'], current, self.media)
+            if targets != {item['id']: item['relative'] for item in preview['items']} or skipped != preview['skipped']:
+                raise ValueError('影片分组、附件或分类计划已变化，请重新预览')
+        else:
+            for item in preview['items']:
+                now = current[item['id']]
+                if now['state'] != 'include' or not now['selectable'] or now['suggested_path'] != item['relative']:
+                    raise ValueError('分类计划已变化，请重新预览')
+        for item in preview['items']:
+            check_target(preview['destination'], item['relative'])
 
     def _save_job(self, job):
         directory = self.report_dir / "operations"
@@ -478,7 +508,7 @@ class FileOperations:
             if not preview or preview["expires"] < time.monotonic():
                 raise ValueError("预览已过期，请重新预览")
             for item in preview["items"]:
-                _, info = self.media.validate(item["id"])
+                _, info = preview['_media'].validate(item["id"])
                 if file_signature(info) != item["signature"]:
                     raise ValueError("预览后文件发生变化")
             if preview["mode"] == "copy":
@@ -488,12 +518,7 @@ class FileOperations:
                         raise ValueError("目标文件夹自预览后发生变化")
                 finally:
                     os.close(descriptor)
-                current = {item["id"]: item for item in self.plan().snapshot()["items"]}
-                for item in preview["items"]:
-                    now = current[item["id"]]
-                    if now["state"] != "include" or not now["selectable"] or now["suggested_path"] != item["relative"]:
-                        raise ValueError("分类计划已变化，请重新预览")
-                    check_target(preview["destination"], item["relative"])
+                self._validate_copy_plan(preview)
             if not _BATCH_LOCK.acquire(blocking=False):
                 raise ValueError("有文件操作正在执行，请等待完成")
             job = {"id": secrets.token_hex(12), "mode": preview["mode"], "status": "running",
@@ -507,11 +532,7 @@ class FileOperations:
                     raise ValueError("另一服务正在执行本次报告的文件操作，请等待完成") from error
                 # A second service could edit the plan before we acquired its lock.
                 if preview["mode"] == "copy":
-                    current = {item["id"]: item for item in self.plan().snapshot()["items"]}
-                    for item in preview["items"]:
-                        now = current[item["id"]]
-                        if now["state"] != "include" or not now["selectable"] or now["suggested_path"] != item["relative"]:
-                            raise ValueError("分类计划已变化，请重新预览")
+                    self._validate_copy_plan(preview)
                 os.ftruncate(descriptor, 0)
                 os.write(descriptor, job["id"].encode("ascii"))
                 os.fsync(descriptor)
@@ -557,7 +578,7 @@ class FileOperations:
                             with self.lock:
                                 result.update(processed_bytes=amount, phase=phase)
                                 self._save_job(job)
-                        answer = copy_one(self.media, item["id"], preview["destination"], item["relative"], item["signature"], preview["dest_identity"], progress, cancelled)
+                        answer = copy_one(preview['_media'], item["id"], preview["destination"], item["relative"], item["signature"], preview["dest_identity"], progress, cancelled)
                     else:
                         current = {record["id"]: record for record in self.plan().snapshot()["items"]}
                         self._check_kept_duplicates([entry["id"] for entry in preview["items"]], current)

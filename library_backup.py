@@ -16,7 +16,7 @@ from file_operations import maintenance_when_idle, open_directory
 MAX_ARCHIVE = 64 * 1024 * 1024
 MAX_TOTAL = 512 * 1024 * 1024
 MAX_FILES = 10000
-ROOT_FILES = {'library-tags.json', 'library-notes.json', 'library-index.json', 'workspace-settings.json'}
+ROOT_FILES = {'library-tags.json', 'library-notes.json', 'library-index.json', 'workspace-settings.json', 'library-grouping.json'}
 REPORT_FILES = {'report.json', 'report.html', 'library.html', 'inventory.csv', 'duplicates.csv', 'similar.csv',
                 'video_groups.csv', 'sidecars.csv', 'folder_names.csv', 'classification.csv', 'issues.csv',
                 'library_issues.csv', 'organization-plan.json', 'cleanup-basket.json'}
@@ -138,9 +138,12 @@ def validate_backup(body):
         except (ValueError, KeyError, TypeError, AttributeError) as error:
             raise ValueError(f'{report} 无法安全恢复，请核对备份版本') from error
     files.pop('library-index.json', None)
-    for name, limit in [('library-tags.json', 1024 * 1024), ('library-notes.json', 4 * 1024 * 1024), ('workspace-settings.json', 65536)]:
+    for name, limit in [('library-tags.json', 1024 * 1024), ('library-notes.json', 4 * 1024 * 1024), ('workspace-settings.json', 65536), ('library-grouping.json', 16 * 1024 * 1024)]:
         if name in files and len(files[name]) > limit:
             raise ValueError(name + ' 超过应用资料大小上限')
+    if 'library-grouping.json' in files:
+        from movie_grouping import validate_assignments
+        validate_assignments(json.loads(files['library-grouping.json']))
     if 'library-tags.json' in files:
         from library_server import clean_tags
         values = json.loads(files['library-tags.json'])

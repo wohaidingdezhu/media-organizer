@@ -53,6 +53,7 @@
       <label class="option"><input id="images" type="checkbox" checked><span>解析照片日期与相似候选<small>同时生成本地图片封面；完整 SHA-256 查重始终开启。</small></span></label>
       <label class="option"><input id="covers" type="checkbox" checked><span>无本地封面时截取视频画面<small>封面只保存在报告目录。</small></span></label>
       <label class="option"><input id="headers" type="checkbox"><span>检查常见视频文件头<small>只提示容器类型，不保证能播放。</small></span></label>
+      <label class="option"><input id="refresh-media" type="checkbox"><span>重新解析全部媒体<small>默认复用身份未变化的照片信息和小图，加快再次扫描；精确查重每次仍完整校验。</small></span></label>
       <label class="field">视频分类建议<select id="rule"><option value="auto">自动识别</option><option value="name">按名称</option><option value="folder">保留原目录</option></select></label>
     </section>
     <section class="panel wide"><h2>3. 开始扫描</h2><div class="actions"><button id="scan" class="primary" disabled>开始只读扫描</button><button id="cancel" class="danger" disabled>取消扫描</button></div><div id="status" class="status"><span class="dot"></span><span id="status-text">准备就绪。</span></div><div id="bar" class="bar" hidden><span></span></div><details id="scan-details" style="margin-top:16px"><summary>查看扫描记录</summary><pre id="log" class="log" aria-label="扫描记录">扫描记录会显示在这里。</pre></details></section>
@@ -115,7 +116,7 @@ async function act(path,body={}){notice();try{const data=await request(path,body
 $('nav-scan').onclick=$('first-scan').onclick=()=>showPane('scan');$('nav-results').onclick=()=>showPane('results');
 $('history').onchange=()=>{selectedReport=$('history').value;renderSummary();openView(selectedView);};for(const button of document.querySelectorAll('[data-view]'))button.onclick=()=>openView(button.dataset.view);
 $('add-folder').onclick=async()=>{$('add-folder').disabled=true;try{await act('folders/add');}finally{if(!stopped)$('add-folder').disabled=previousRunning;}};
-$('scan').onclick=async()=>{const data=await act('scan/start',{image_analysis:$('images').checked,video_covers:$('covers').checked,video_headers:$('headers').checked,video_rule:$('rule').value});if(data){previousRunning=data.running;$('scan-details').open=true;}};
+$('scan').onclick=async()=>{const data=await act('scan/start',{image_analysis:$('images').checked,video_covers:$('covers').checked,video_headers:$('headers').checked,video_rule:$('rule').value,refresh_media:$('refresh-media').checked});if(data){previousRunning=data.running;$('scan-details').open=true;}};
 $('cancel').onclick=()=>act('scan/cancel');$('reports').onclick=()=>act('reports/open');
 $('quit').onclick=async()=>{if(await act('quit')){stopped=true;clearTimeout(pollTimer);document.body.innerHTML='<main><h1>媒体整理助手已退出</h1><p>重新打开应用即可继续使用。</p></main>';}};
 let catalogFolder='', catalogPage=0, catalogPages=1, restoreToken='', monitorEditing=false;
