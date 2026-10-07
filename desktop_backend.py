@@ -4,6 +4,9 @@ import sys
 
 
 def main(argv=None):
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8')
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == '--scan':
         import media_scan

@@ -150,6 +150,17 @@ class WorkspaceTests(unittest.TestCase):
             state.confirm_restore(preview['token'])
         state.close()
 
+    def test_backup_skips_cancelled_exports_and_rejects_empty_library(self):
+        fs.ensure_private_directory(self.output)
+        with self.assertRaises(ValueError): library_backup.export_backup(self.output)
+        report = self.scan()
+        partial = self.output / 'scan-interrupted'
+        partial.mkdir()
+        (partial / 'library.html').write_bytes(b'incomplete')
+        files, _ = library_backup.validate_backup(library_backup.export_backup(self.output))
+        self.assertFalse(any(name.startswith('scan-interrupted/') for name in files))
+        self.assertIn(report.name + '/report.json', files)
+
     def test_backup_excludes_originals_and_rewrites_imported_html(self):
         report = self.scan()
         (report / 'report.html').write_text('<script>bad()</script>')
@@ -238,6 +249,16 @@ class WorkspaceTests(unittest.TestCase):
         for url in ('http://evil.example/a/', 'http://127.0.0.1:80/../', 'file:///x', 'http://127.0.0.1:80/'+ 'a'*24 + '/bad'):
             with self.assertRaises(ValueError): desktop_entry.local_url(url)
         self.assertEqual(desktop_entry.local_url('http://127.0.0.1:12345/'+'a'*24+'/'),'http://127.0.0.1:12345/'+'a'*24+'/')
+
+    def test_native_script_values_do_not_require_unsafe_eval(self):
+        window = mock.Mock()
+        for raw in (True, 'true', '"true"'):
+            window.run_js.return_value = raw
+            self.assertIs(desktop_entry.native_value(window, 'true'), True)
+        for raw in (False, 'false', '"false"'):
+            window.run_js.return_value = raw
+            self.assertIs(desktop_entry.native_value(window, 'false'), False)
+        window.evaluate_js.assert_not_called()
 
     def test_dashboard_script_syntax_and_metadata_search_in_actual_js(self):
         import shutil

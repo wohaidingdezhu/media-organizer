@@ -4,6 +4,7 @@ on:
   pull_request:
 jobs:
   test:
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -30,6 +31,7 @@ jobs:
       - name: Test with generated sample files
         run: python -X utf8 -m unittest -v
   package:
+    timeout-minutes: 25
     name: Desktop package (${{ matrix.os }})
     strategy:
       fail-fast: false

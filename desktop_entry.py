@@ -33,6 +33,19 @@ def request_shutdown(url):
         return json.load(response)
 
 
+def native_value(window, expression):
+    # run_js executes directly; evaluate_js uses eval and violates our CSP.
+    value = window.run_js('JSON.stringify(' + expression + ')')
+    for _ in range(3):
+        if not isinstance(value, str):
+            break
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            break
+    return value
+
+
 def main(argv=None):
     import argparse
     parser = argparse.ArgumentParser()
@@ -58,6 +71,7 @@ def main(argv=None):
                 readiness.put(line[6:].strip())
             else:
                 diagnostics.append(line.rstrip())
+                del diagnostics[:-100]
         readiness.put(None)
     threading.Thread(target=read_output, daemon=True).start()
     try:
@@ -70,7 +84,7 @@ def main(argv=None):
     window = webview.create_window('媒体整理助手', url=ready_url, width=1280, height=900, min_size=(780, 600))
     url, allow_close, stopping = [ready_url], threading.Event(), threading.Event()
     def message(text):
-        window.evaluate_js("document.getElementById('notice').textContent=" + json.dumps(text))
+        window.run_js("document.getElementById('notice').textContent=" + json.dumps(text))
     def serve():
         process.wait()
         allow_close.set()
@@ -97,19 +111,23 @@ def main(argv=None):
             deadline = time.monotonic() + 90
             while time.monotonic() < deadline:
                 time.sleep(.5)
-                if url[0] and window.get_current_url() == url[0]:
+                current = window.get_current_url()
+                if current and str(current).startswith(url[0]):
                     try:
-                        present = window.evaluate_js("!!document.getElementById('nav-catalog') && !!document.getElementById('restore-file') && !!document.getElementById('monitor-save')")
+                        present = native_value(window, "!!document.getElementById('nav-catalog') && !!document.getElementById('restore-file') && !!document.getElementById('monitor-save')")
                         if not present:
+                            print('UI not ready:', current, flush=True)
                             continue
-                        window.evaluate_js("document.getElementById('nav-catalog').click()")
+                        window.run_js("document.getElementById('nav-catalog').click()")
                         time.sleep(1)
-                        ui_result[0] = bool(window.evaluate_js("!document.getElementById('catalog-pane').hidden && document.getElementById('catalog-summary').textContent.includes('长期清单')"))
+                        ui_result[0] = native_value(window, "!document.getElementById('catalog-pane').hidden && document.getElementById('catalog-summary').textContent.includes('长期清单')") is True
+                        print('UI verification:', ui_result[0], native_value(window, "document.getElementById('catalog-summary').textContent + ' | ' + document.getElementById('notice').textContent"), flush=True)
                         request_shutdown(url[0])
                         return
-                    except Exception:
-                        pass
+                    except Exception as error:
+                        print('UI verification error:', repr(error), flush=True)
             # The smoke backend has no source folders and cannot perform file jobs.
+            print('UI verification timed out:', window.get_current_url(), flush=True)
             process.terminate()
             allow_close.set()
             window.destroy()

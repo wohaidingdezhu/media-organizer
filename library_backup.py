@@ -50,6 +50,8 @@ def export_backup(root):
                 members = fs.listdir(descriptor)
             finally:
                 fs.close(descriptor)
+            if not {'report.json', 'report.html'}.issubset(members):
+                continue  # An interrupted export is not a restorable snapshot.
             for name in sorted(members):
                 if name in REPORT_FILES:
                     names.append(report + '/' + name)
@@ -60,6 +62,8 @@ def export_backup(root):
                                      if allowed(report + '/' + name + '/' + member))
                     finally:
                         fs.close(child)
+        if not any(name.endswith('/report.json') for name in names):
+            raise ValueError('尚无完整扫描报告，请先完成一次扫描再备份')
         if len(names) > MAX_FILES:
             raise ValueError('备份文件数量超过 10000，请分开保存资料库')
         output, manifest, total = io.BytesIO(), {}, 0
@@ -122,12 +126,21 @@ def validate_backup(body):
             if not isinstance(document, dict) or not isinstance(document.get('files'), list):
                 raise ValueError('扫描报告无效')
             document['restored_snapshot'] = True
+            document.setdefault('video_library', {'groups': [], 'issues': [], 'video_files': 0, 'duplicate_files': 0, 'poster_count': 0})
+            for group in document['video_library'].get('groups', []):
+                poster = group.get('poster', '')
+                group['poster'] = poster if isinstance(poster, str) and re.fullmatch(r'covers/[A-Za-z0-9_-]+\.png', poster) else ''
+                group['stills'] = [name for name in group.get('stills', []) if isinstance(name, str) and re.fullmatch(r'(stills|previews)/[A-Za-z0-9_-]+\.png', name)]
+            document['previews'] = {path: name for path, name in document.get('previews', {}).items() if isinstance(name, str) and re.fullmatch(r'previews/[A-Za-z0-9_-]+\.png', name)}
             files[report + '/report.json'] = json.dumps(document, ensure_ascii=False, allow_nan=False).encode('utf-8')
             files[report + '/report.html'] = render_report(document).encode('utf-8')
             files[report + '/library.html'] = render_video_library(document).encode('utf-8')
         except (ValueError, KeyError, TypeError, AttributeError) as error:
             raise ValueError(f'{report} 无法安全恢复，请核对备份版本') from error
     files.pop('library-index.json', None)
+    for name, limit in [('library-tags.json', 1024 * 1024), ('library-notes.json', 4 * 1024 * 1024), ('workspace-settings.json', 65536)]:
+        if name in files and len(files[name]) > limit:
+            raise ValueError(name + ' 超过应用资料大小上限')
     if 'library-tags.json' in files:
         from library_server import clean_tags
         values = json.loads(files['library-tags.json'])
