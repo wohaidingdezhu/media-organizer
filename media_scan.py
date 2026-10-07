@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# coding: utf-8
 """只读媒体清点、SHA-256 精确查重、图片相似候选与分类预览。Python 3.9+。"""
 import argparse
 import collections
@@ -965,17 +966,16 @@ def export_local_covers(directory, groups, records, helper, issues, enabled=True
 
 
 def export_video_frame_covers(directory, groups, records, helper, issues, limit=500, enabled=True):
-    """Use macOS AVFoundation for missing posters, bounded by group count."""
+    """Attempt the same video extensions on both platforms, bounded by group count."""
     if not enabled or not helper_available(helper):
         return 0
     by_path = {record["path"]: record for record in records if record["kind"] == "视频"}
-    supported = VIDEO_EXT if helper.suffix == ".py" else {"mp4", "mov", "m4v", "3gp", "mpg", "mpeg"}
     pending = []
     for index, group in enumerate(groups):
         if group["poster"]:
             continue
         options = [by_path[file["path"]] for file in group["files"]
-                   if file["extension"] in supported and not by_path[file["path"]]["hardlink_to"]]
+                   if file["extension"] in VIDEO_EXT and not by_path[file["path"]]["hardlink_to"]]
         if options:
             if len(pending) >= limit:
                 group["poster_status"] = "超过本次视频截帧数量上限"
@@ -1400,6 +1400,8 @@ def main(argv=None):
                 "summary": {"files": len(records), "duplicate_groups": len(duplicates), "hardlinks": sum(bool(r["hardlink_to"]) for r in records),
                             "redundant_logical_bytes": sum(g["redundant_logical_bytes"] for g in duplicates)},
                 "options": {"distance": args.distance, "video_rule": args.video_rule, "include_hidden": args.include_hidden,
+                            "image_backend": media_backend.helper("image_probe").name,
+                            "video_backend": media_backend.helper("video_cover").name,
                             "check_video_headers": args.check_video_headers, "max_video_covers": args.max_video_covers,
                             "video_covers_enabled": not args.no_video_covers and not args.no_image_metadata},
                 "image_inspection": image_inspection, "video_inspection": video_inspection,

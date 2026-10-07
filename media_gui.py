@@ -1,3 +1,4 @@
+# coding: utf-8
 """Local browser dashboard for the read-only media scanner."""
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -134,17 +135,20 @@ def scan_arguments(folders, *, output=REPORTS, image_analysis=True, video_covers
 
 
 def compile_helpers(log, image_analysis=True, video_covers=True):
-    if sys.platform == "win32":
-        import media_backend
-        for name, enabled in (("image_probe", image_analysis), ("video_cover", image_analysis and video_covers)):
-            if enabled and not scan.helper_available(media_backend.helper(name)):
-                log("缺少图片或视频依赖；请运行 python -m pip install -r requirements-windows.txt。精确查重仍可继续。")
-        return
-    compiler = shutil.which("swiftc")
+    import media_backend
+    compiler = shutil.which("swiftc") if sys.platform == "darwin" else None
     wanted = [("image_probe", "照片解析")] if image_analysis else []
     if image_analysis and video_covers:
         wanted.append(("video_cover", "视频封面"))
     for name, description in wanted:
+        selected = media_backend.helper(name)
+        if selected.suffix == '.py' and scan.helper_available(selected):
+            log(f"{description}使用双平台共用组件。")
+            continue
+        if sys.platform != 'darwin':
+            log(f"{description}依赖缺失；请运行“安装Windows依赖.bat”。只读清点与精确查重仍可继续。")
+            continue
+        log(f"{description}使用 Mac 原生降级组件；双端一致模式请先运行“安装媒体依赖.command”。")
         source, target = BASE / "native" / f"{name}.swift", BASE / "native" / name
         if target.is_file() and os.access(target, os.X_OK) and target.stat().st_mtime_ns >= source.stat().st_mtime_ns:
             continue

@@ -316,7 +316,7 @@ class MediaTests(unittest.TestCase):
 
     def test_image_worker_reuses_process_after_unreadable_sample(self):
         with tempfile.TemporaryDirectory() as temporary:
-            base = Path(temporary)
+            base = Path(temporary).resolve()
             first, second, broken = base / "first.png", base / ("中文 照片.png" if os.name == "nt" else "中文\n照片.png"), base / "broken.png"
             sample_png(first, "A")
             sample_png(second, "B")
@@ -334,7 +334,7 @@ class MediaTests(unittest.TestCase):
 
     def test_image_worker_repeated_descriptor_reads_keep_all_previews(self):
         with tempfile.TemporaryDirectory() as temporary:
-            base = Path(temporary)
+            base = Path(temporary).resolve()
             worker = scan.ImageProbeWorker(scan.media_backend.helper("image_probe"))
             try:
                 process_id = None
@@ -429,7 +429,7 @@ class MediaTests(unittest.TestCase):
 
     def test_image_backend_rejects_symlink_source_and_output(self):
         with tempfile.TemporaryDirectory() as temporary:
-            base = Path(temporary)
+            base = Path(temporary).resolve()
             source = base / "source.png"
             sample_png(source, "A")
             original = source.read_bytes()

@@ -4,7 +4,7 @@
 
 ## 开始使用
 
-1. **macOS：**在 Finder 打开本文件夹，双击 **`媒体整理助手.app`**。它会通过终端启动本机服务，并在默认浏览器打开图形控制台；终端窗口需要保持打开。也可以直接双击 `开始扫描.command`，效果相同。
+1. **macOS：**首次使用先双击 **`安装媒体依赖.command`**，再双击 **`媒体整理助手.app`**。它会通过终端启动本机服务，并在默认浏览器打开图形控制台；终端窗口需要保持打开。也可以直接双击 `开始扫描.command`，效果相同。
    **Windows：**首次使用先按下方步骤安装依赖，然后双击 **`开始扫描.bat`**。
 2. 点击“添加文件夹…”，选择照片或视频目录；需要多个目录可继续添加。首次使用建议先选一个较小目录。
 3. 点击“开始只读扫描”。完成后自动进入“整理工作台”，直接查看文件管理、照片墙、精确重复、相似图片、影片海报墙、文件夹重名和读取问题；无需逐个寻找报告文件。
@@ -14,7 +14,9 @@
 
 使用工作台或编辑标签时请保持启动的终端窗口运行；在控制台点击“退出本机服务”会停止页面访问，已保存标签和核对进度不会消失。以后再次双击应用即可继续查看历史扫描，无需重新扫描；选择“影片海报墙”可以编辑标签，`打开资料库.command` 也可单独打开最近一次资料库。
 
-支持 **macOS 和 Windows 10/11**，需要 Python 3.9 或更新版本。macOS 沿用原生组件，Windows 使用下方说明中的独立 Python 环境。图形控制台由 Python 标准库在本机 `127.0.0.1` 提供，无须第三方网页服务；Windows 文件夹选择器需要 Python 安装器默认包含的 Tcl/Tk。macOS 的封面和图片组件使用系统 ImageIO、AVFoundation，不需要额外下载 Python 库；首次扫描时会尝试用本机 `swiftc` 编译，缺少 Swift 编译器时仍可进行 SHA-256 精确查重。若 Mac 应用打不开，可在项目目录运行 `python3 media_gui.py`；命令行扫描仍可用 `python3 media_scan.py --edit-tags`。扫描过程中可点击“取消扫描”，不会改动原文件；导出阶段取消可能留下未完成报告。
+支持 **macOS 和 Windows 10/11**，需要 Python 3.9 或更新版本。**一套 Python 业务代码、同一网页界面、同一套默认图片/视频后端**，系统差异集中在平台适配层。两端安装脚本都在项目内创建 `.venv`，启动入口优先使用该环境；默认共用 Pillow / HEIF 图片解析与 FFmpeg 视频截帧，依赖统一定义在 `requirements.txt`。图形控制台由 Python 标准库在本机 `127.0.0.1` 提供，无须第三方网页服务；Windows 文件夹选择器需要 Python 安装器默认包含的 Tcl/Tk。若 Mac 应用打不开，可运行 `./.venv/bin/python media_gui.py`；命令行扫描仍可用 `./.venv/bin/python media_scan.py --edit-tags`。扫描过程中可点击“取消扫描”，不会改动原文件；导出阶段取消可能留下未完成报告。
+
+未安装共用媒体依赖时仍可只读清点和精确查重。Mac 保留 ImageIO / AVFoundation 原生降级组件，图形界面会明确提示降级并按需尝试本机 `swiftc` 编译；其解码范围、相似判断和截图尺寸可能不同，不属于完整双端一致模式。安装媒体依赖后即优先使用共用组件，无须 Swift 编译器。原生组件源码继续保留。
 
 macOS 终端的绝对路径必须从开头的 `/` 写起，例如 `open "/Users/你的用户名/项目目录/媒体整理助手.app"`；Windows 使用带盘符的绝对路径，例如 `D:\照片`。
 
@@ -35,9 +37,19 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -X utf8 media_scan.py "D:\照片" "E:\视频" --open
 ```
 
-Windows 使用 Pillow 读取照片日期、生成缩略图与 dHash，pillow-heif 补充 HEIC/HEIF 支持，imageio-ffmpeg 提供随包附带的 FFmpeg 用于视频截帧，不需要单独安装 FFmpeg。部分 RAW 或系统不支持的媒体仍可能无法解码，会保留文件清单与精确查重结果；解码失败不能证明文件损坏。未安装这些媒体依赖时，仍可通过命令行执行 `--no-image-metadata` 的只读扫描。
+两平台使用 Pillow 读取照片日期、生成缩略图与 dHash，pillow-heif 补充 HEIC/HEIF 支持，imageio-ffmpeg 提供随包附带的 FFmpeg 用于视频截帧，不需要单独安装 FFmpeg。共用代码统一 EXIF 方向、相似指纹计算、缩略图尺寸、视频候选格式和截帧策略。部分 RAW 或特殊编码仍可能无法解码，会保留文件清单与精确查重结果；解码失败不能证明文件损坏。平台、解码器版本或编码差异仍可能影响特殊格式，不能保证所有预览逐字节相同。未安装媒体依赖时，仍可执行 `--no-image-metadata` 的只读扫描。
 
-Windows 打开原文件使用默认程序，定位使用资源管理器；清理使用现代 Windows Shell 回收站接口，需要 `Send2Trash[win32]`（安装脚本已包含）。不能确认可回收的文件会拒绝清理，不退回永久删除。macOS 继续使用原生 ImageIO、AVFoundation、Finder 与废纸篓，不需要安装 Windows 依赖。
+Mac 也可在项目目录的终端中手动安装并运行：
+
+```sh
+python3 -m venv .venv
+./.venv/bin/python -m pip install -r requirements.txt
+./.venv/bin/python media_gui.py
+```
+
+`requirements-windows.txt` 保留为旧入口，转引同一份 `requirements.txt`；Windows 回收站依赖通过平台标记安装，Mac 不会安装 Windows COM 包。扫描不会自动联网安装依赖。
+
+Windows 打开原文件使用默认程序，定位使用资源管理器；清理使用现代 Windows Shell 回收站接口，需要 `Send2Trash[win32]`（安装脚本已包含）。不能确认可回收的文件会拒绝清理，不退回永久删除。macOS 打开原文件使用默认程序，定位使用 Finder，清理使用系统废纸篓；对应同样的打开、定位、预览确认和可恢复清理流程。
 
 Windows 跳过符号链接、目录联接及云端重解析占位项；请先将需要扫描的云端文件下载到普通本地目录。分类建议在两平台都使用 `/` 分隔，屏蔽 Windows 保留名、非法字符及尾部空格/句点，实际复制时转换为本机路径。报告与媒体路径属于产生它的电脑，复制报告到另一台电脑可查看静态清单，操作原媒体前应在新电脑重新扫描。
 
@@ -62,7 +74,7 @@ Windows 文件身份结合设备/文件编号、大小、修改时间和创建�
 
 “影片详情”集中列出分段或版本文件、大小、修改时间、字幕等已关联附属文件、精确重复与读取问题，并提供播放和 Finder 定位。可以设置 1–5 星个人评分（0 为未评分）及最多 2000 字观看备注，保存于 `reports/library-notes.json`，从本机服务重新打开或新扫描后保留，也可搜索备注。同编号影片共用评分与备注；无编号影片按原目录与名称保存，改名或搬动后需重新设置。不抓取在线演员、简介或评分。
 
-封面优先使用同目录与影片或编号同名的图片，也识别 `-poster`、`-cover` 后缀；仅当一个目录属于同一影片分组时，才使用 `poster`、`folder`、`cover` 等通用名称。没有本地封面时，默认尝试用 macOS AVFoundation 截取视频约 10% 位置的一帧，单次最多处理 500 个影片分组；不支持、无法解码或超过上限时显示占位图。海报小图只生成在报告目录 `covers/` 中，不改动原图或视频。截帧不代表真正的官方海报，也不能证明视频完整或可播放。可用 `--no-video-covers` 关闭视频截帧，或用 `--max-video-covers` 调整上限；`--no-image-metadata` 会连同封面解码一起关闭。
+封面优先使用同目录与影片或编号同名的图片，也识别 `-poster`、`-cover` 后缀；仅当一个目录属于同一影片分组时，才使用 `poster`、`folder`、`cover` 等通用名称。没有本地封面时，两端默认用共用 FFmpeg 后端截取视频约 10% 位置的一帧，无法获取时长时尝试开头，缩放至最大 512×512 并保持比例。两端都对支持清点的视频扩展名尝试截帧，包括 MP4、MOV、MKV、AVI、WebM；单次最多处理 500 个影片分组。不支持、无法解码或超过上限时显示占位图。海报小图只生成在报告目录 `covers/` 中，不改动原图或视频。截帧不代表真正的官方海报，也不能证明视频完整或可播放。可用 `--no-video-covers` 关闭视频截帧，或用 `--max-video-covers` 调整上限；`--no-image-metadata` 会连同封面解码一起关闭。`report.json` 的 `options.image_backend` / `video_backend` 记录该次选择的组件，便于区分共用模式与原生降级路径。
 
 在图形界面打开的本机资料库页面中，点击影片卡片上的“编辑标签”，用逗号分隔多个标签；清空输入可删除标签。标签立即保存到 `reports/library-tags.json`，新一次扫描会继续读取。同编号影片共用标签；无编号影片按原目录与名称保存标签，改名或搬动后需重新设置。直接双击旧报告的 `library.html` 仍可查看扫描时的标签，但编辑需要从图形窗口或 `.command` 入口打开本机服务。
 
@@ -183,10 +195,12 @@ swiftc native/video_cover.swift -o native/video_cover
 - `native/image_probe.swift` / `native/image_probe`：图片解析组件源码和本机程序。
 - `native/video_cover.swift` / `native/video_cover`：视频截帧组件源码和本机程序。
 - `开始扫描.command`：兼容的 Mac 双击入口，打开同一图形界面。
+- `安装媒体依赖.command` / `安装Windows依赖.bat` / `requirements.txt`：两端项目独立环境与同一份媒体依赖；`requirements-windows.txt` 为兼容入口。
+- `media_backend.py` / `portable_image_probe.py` / `portable_video_cover.py`：两端默认共用的媒体解析、图片相似指纹与视频封面后端。
 - `打开资料库.command`：不重新扫描，打开最近一次海报墙与标签编辑。
 - `library_server.py`：仅在本机提供报告、标签编辑与整理计划保存服务。
-- `media_actions.py`：校验扫描文件状态，并交给 macOS 默认程序打开或在 Finder 定位。
-- `file_operations.py` / `native/trash_media.swift`：文件操作预览、确认后的复制分类与 macOS 废纸篓、逐项记录与失败停止。
+- `media_actions.py` / `system_integration.py`：校验扫描文件状态，交给两平台默认程序打开、文件管理器定位或系统回收接口处理。
+- `file_operations.py` / `portable_fs.py` / `portable_lock.py` / `native/trash_media.swift`：共用操作预览、确认后的复制分类与可恢复清理，平台句柄、锁、逐项记录与安全停止。
 - `cleanup_basket.py` / `storage_cleanup.js`：按扫描报告汇总媒体逻辑大小，保存手动清理候选并跨窗口合并更新。
 - `media_catalog.py` / `management.js` / `library_details.js` / `duplicate_review.js`：照片墙、来源状态、扫描比较、影片详情、评分备注和精确重复分组核对。
 - `test_*.py`：使用临时样例验证扫描、报告历史、本机接口、整理进度和安全边界。
@@ -197,14 +211,14 @@ swiftc native/video_cover.swift -o native/video_cover
 ## 本地测试与跨平台验证
 
 ```sh
-python3 -m unittest -v
+./.venv/bin/python -m unittest -v
 ```
 
 测试只生成临时样例图片和模拟视频字节，不访问个人媒体。复制测试只写临时目标目录；自动测试中的废纸篓与系统打开调用用替身记录参数。开发时另用生成的临时样例验证过真实 macOS 废纸篓并恢复，不枚举个人废纸篓。播放器兼容性不在此验证范围内。文件头检查能排除一部分误命名文件，例如把 HEIC 图片改名为 MP4，但不能验证视频完整性或可播放性。
 
 Windows 在安装依赖后运行 `.\.venv\Scripts\python.exe -X utf8 -m unittest -v`。
 测试只使用生成的临时数据，系统打开与回收站使用替身；新测试覆盖 Windows 目录联接、原生句柄身份、跨进程锁、取消扫描、Pillow 图片解析与 FFmpeg 截帧。
-macOS 无可移植媒体依赖时，Pillow / FFmpeg 专门测试会明确跳过；原生后端和其余业务测试仍运行。验证完整媒体测试时，可在独立虚拟环境安装 `requirements-windows.txt` 中适用于 macOS 的包。CI 两平台都安装这些测试依赖，分别验证原生及可移植后端，不依赖本机跳过结果。
+macOS 无共用媒体依赖时，Pillow / FFmpeg 专门测试会明确跳过；原生后端和其余业务测试仍运行。完整验证使用 `.venv` 并安装 `requirements.txt`。CI 两平台都安装同一套共用依赖，检查相同 PNG 样例的 dHash 参考值、MP4/MKV/AVI 封面生成、启动参数与缺依赖时的只读扫描；Mac 另测试保留的原生降级组件，不依赖本机跳过结果。
 未启用 Windows 符号链接权限时，相关符号链接测试明确跳过，目录联接测试仍运行。
 GitHub Actions 配置在 macOS/Windows 与 Python 3.9、3.12、3.14 上运行同一套测试；macOS 会先编译原生图片与视频组件。
 后续改动须遵守 [双平台开发规则](AGENTS.md) 和 [贡献说明](CONTRIBUTING.md)，通过 `Dual-platform compatibility` 汇总检查。原文件夹筛选和空间分析跳转使用后端提供的本机目录路径，支持 Windows 的反斜杠与 macOS 的斜杠。
