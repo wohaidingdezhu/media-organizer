@@ -1,4 +1,4 @@
-"""Choose native macOS helpers or portable Python workers."""
+"""Shared media workers on both desktops; native Mac fallback without packages."""
 import importlib.util
 from pathlib import Path
 import sys
@@ -7,10 +7,15 @@ BASE = Path(__file__).resolve().parent
 
 
 def helper(name):
+    if name not in {"image_probe", "video_cover"}:
+        raise ValueError("未知媒体组件")
+    portable = BASE / ("portable_image_probe.py" if name == "image_probe" else "portable_video_cover.py")
+    if portable_available(portable):
+        return portable
     native = BASE / "native" / name
     if sys.platform == "darwin" and native.is_file() and not native.is_symlink():
         return native
-    return BASE / ("portable_image_probe.py" if name == "image_probe" else "portable_video_cover.py")
+    return portable
 
 
 def portable_available(path):

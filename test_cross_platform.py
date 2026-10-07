@@ -24,6 +24,80 @@ import library_server
 
 
 class CrossPlatformTests(unittest.TestCase):
+    def test_both_platforms_choose_shared_workers_when_installed(self):
+        for platform in ('darwin', 'win32'):
+            with self.subTest(platform=platform), mock.patch.object(sys, 'platform', platform), \
+                 mock.patch.object(media_backend, 'portable_available', return_value=True):
+                for name, filename in (('image_probe', 'portable_image_probe.py'),
+                                       ('video_cover', 'portable_video_cover.py')):
+                    helper = media_backend.helper(name)
+                    self.assertEqual(helper.name, filename)
+                    self.assertEqual(media_backend.command(helper)[:3], [sys.executable, '-X', 'utf8'])
+                log = mock.Mock()
+                with mock.patch.object(media_gui.subprocess, 'run') as launch:
+                    media_gui.compile_helpers(log)
+                launch.assert_not_called()
+                self.assertEqual(log.call_count, 2)
+
+    def test_unavailable_shared_dependencies_keep_readonly_scanning(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            source = root / 'source'; source.mkdir()
+            sample_png(source / 'one.png', 'readonly')
+            (source / 'one.mp4').write_bytes(b'generated')
+            before = {path.name: (path.read_bytes(), path.stat().st_mtime_ns) for path in source.iterdir()}
+            with mock.patch.object(media_scan, 'helper_available', return_value=False), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(media_scan.main([str(source), '--output', str(root / 'reports')]), 0)
+            report = next((root / 'reports').glob('scan-*'))
+            document = json.loads((report / 'report.json').read_text(encoding='utf-8'))
+            self.assertEqual(document['summary']['files'], 2)
+            self.assertEqual(document['previews'], {})
+            self.assertEqual(before, {path.name: (path.read_bytes(), path.stat().st_mtime_ns) for path in source.iterdir()})
+
+    @unittest.skipUnless(importlib.util.find_spec('PIL'), 'Shared image dependencies not installed; CI installs them')
+    def test_shared_image_fingerprint_matches_reference_on_each_platform(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary).resolve() / 'reference.png'
+            sample_png(path, 'parity')
+            worker = media_scan.ImageProbeWorker(media_backend.helper('image_probe'))
+            try:
+                result = worker.request(str(path))
+            finally:
+                worker.close()
+            self.assertEqual((result['width'], result['height']), (32, 32))
+            self.assertEqual(result['dhash'], '54b5ad6a54b5a94a')
+            self.assertFalse(result['low_detail'])
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'Mac native fallback; Windows uses shared workers')
+    def test_native_image_fallback_still_decodes_generated_photos(self):
+        native = media_scan.BASE / 'native' / 'image_probe'
+        if not media_scan.helper_available(native):
+            self.skipTest('Native fallback not compiled; macOS CI compiles it')
+        with mock.patch.object(media_backend, 'portable_available', return_value=False):
+            self.assertEqual(media_backend.helper('image_probe'), native)
+        with tempfile.TemporaryDirectory() as temporary:
+            worker = media_scan.ImageProbeWorker(native)
+            try:
+                for number in range(20):
+                    source = Path(temporary).resolve() / f'{number}.png'
+                    sample_png(source, str(number))
+                    self.assertEqual(worker.request(str(source))['width'], 32)
+            finally:
+                worker.close()
+
+    def test_scan_launcher_forwards_cli_options_without_accessing_media(self):
+        if sys.platform == 'win32':
+            command = ['cmd.exe', '/d', '/c', str(media_scan.BASE / '开始扫描.bat'), '--help']
+        elif sys.platform == 'darwin':
+            command = ['/bin/zsh', str(media_scan.BASE / '开始扫描.command'), '--help']
+        else:
+            self.skipTest('Desktop launchers target macOS and Windows')
+        result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8',
+                                input='\n', timeout=15, env=dict(os.environ, PYTHONUTF8='1'))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('--video-rule', result.stdout)
+
     def test_lock_reopen_keeps_header_with_a_substituted_desktop_platform(self):
         from file_operations import open_directory
         with tempfile.TemporaryDirectory() as temporary:
@@ -132,18 +206,23 @@ class CrossPlatformTests(unittest.TestCase):
     def test_ffmpeg_extracts_only_report_preview(self):
         import imageio_ffmpeg
         with tempfile.TemporaryDirectory() as temporary:
-            video, preview = Path(temporary).resolve() / 'generated.mp4', Path(temporary).resolve() / 'preview.png'
-            subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-nostdin', '-loglevel', 'error', '-f', 'lavfi',
-                            '-i', 'color=c=blue:s=80x60:d=1', '-c:v', 'libx264', str(video)], check=True, timeout=15)
-            before = video.read_bytes()
-            # Exercise the portable FFmpeg backend even on a native Mac host.
-            worker = media_scan.ImageProbeWorker(media_scan.BASE / 'portable_video_cover.py')
-            try:
-                worker.request(str(video), str(preview))
-            finally:
-                worker.close()
-            self.assertTrue(preview.read_bytes().startswith(b'\x89PNG'))
-            self.assertEqual(video.read_bytes(), before)
+            for extension in ('mp4', 'mkv', 'avi'):
+                with self.subTest(extension=extension):
+                    video = Path(temporary).resolve() / ('generated.' + extension)
+                    subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-nostdin', '-loglevel', 'error', '-f', 'lavfi',
+                                    '-i', 'color=c=blue:s=80x60:d=1', '-c:v', 'libx264', str(video)], check=True, timeout=15)
+                    before = (video.read_bytes(), video.stat().st_mtime_ns)
+                    records, _ = media_scan.discover([video.parent], video.parent / 'report', False, [])
+                    record = next(item for item in records if item['path'] == str(video))
+                    report = video.parent / ('report-' + extension); report.mkdir()
+                    groups = [{'poster': '', 'files': [{'path': str(video), 'extension': extension}]}]
+                    helper = media_backend.helper('video_cover')
+                    self.assertEqual(helper.name, 'portable_video_cover.py')
+                    issues = []
+                    count = media_scan.export_video_frame_covers(report, groups, [record], helper, issues)
+                    self.assertEqual(count, 1, issues)
+                    self.assertTrue((report / groups[0]['poster']).read_bytes().startswith(b'\x89PNG'))
+                    self.assertEqual(before, (video.read_bytes(), video.stat().st_mtime_ns))
 
     def test_windows_reserved_names_cannot_enter_plans(self):
         for name in ('CON', 'NUL.jpg', 'COM1.png', 'aux.txt', 'a:b.png', 'trailing.', 'space ', 'LPT¹.mov'):

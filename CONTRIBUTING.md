@@ -9,7 +9,7 @@
 | 文件句柄、目录遍历、原子发布和可用空间 | `portable_fs.py` | POSIX 保持原有实现，Windows 使用相对目录句柄；保留不跟随链接、不覆盖目标 |
 | 跨进程文件锁 | `portable_lock.py` | POSIX 使用 flock，Windows 使用 LockFileEx；关闭句柄自动释放 |
 | 选目录、默认打开、定位、回收站 | `system_integration.py` | 两平台用户行为一致；回收失败保留原件 |
-| 图片/视频后端选择与启动 | `media_backend.py` | macOS 优先原生后端；Windows 使用声明的 Python/FFmpeg 后端 |
+| 图片/视频后端选择与启动 | `media_backend.py` | 两端默认共用 Pillow/FFmpeg 后端与 requirements.txt；Mac 原生组件仅为明确降级路径 |
 | 扫描、分类、标签、计划、候选篮 | 共用 Python 业务模块 | 不直接增加平台专用依赖；路径与序列化分开处理 |
 | 页面交互 | 共用 HTML/JS | 使用通用文件管理器与清理术语，支持两平台路径显示 |
 
@@ -20,9 +20,9 @@
 3. 本机运行测试，更新 README 的依赖与使用方式，并在 PR 中说明实际验证的平台。
 4. 等待 GitHub Actions 的 macOS/Windows、Python 3.9/3.12/3.14 全部通过。汇总检查 `Dual-platform compatibility` 成功才允许合并。
 
-macOS 本机可运行 `python3 -m unittest -v`，先编译原生图片与视频组件；测试可移植媒体后端时另安装 `requirements-windows.txt` 中适用的平台依赖。
+macOS 安装 `requirements.txt` 后运行 `./.venv/bin/python -m unittest -v`，验证共用媒体路径；原生降级测试另需编译 Mac 原生组件。应用启动脚本与资料库入口都必须使用同一项目 `.venv`。
 Windows 先运行 `安装Windows依赖.bat`，再运行 `.\.venv\Scripts\python.exe -X utf8 -m unittest -v`。
-GitHub Actions 会自动安装媒体测试依赖并编译 Mac 后端。缺少符号链接权限可以明确跳过符号链接样例，Windows 目录联接测试仍应运行。
+GitHub Actions 会在两端自动安装同一依赖并编译 Mac 降级后端。保持一套业务与页面代码；不得增加两份扫描或资料库实现来适配平台。缺少符号链接权限可以明确跳过符号链接样例，Windows 目录联接测试仍应运行。
 
 ## 将兼容检查设为 GitHub 合并硬性条件
 

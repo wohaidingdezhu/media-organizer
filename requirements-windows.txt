@@ -1,5 +1,2 @@
-# macOS keeps its native ImageIO/AVFoundation backends; these power Windows.
-Pillow>=10.4,<13
-pillow-heif>=0.20,<2
-imageio-ffmpeg>=0.5,<1
-Send2Trash[win32]>=1.8.3,<2; sys_platform == "win32"
+# Compatibility entry point; both desktops use the same dependency definition.
+-r requirements.txt
