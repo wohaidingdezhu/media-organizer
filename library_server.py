@@ -337,6 +337,9 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     if b"@@MANAGEMENT@@" in body:
                         with _open_report_file(Path(__file__).resolve().parent, ("management.js",)) as script:
                             body = body.replace(b"@@MANAGEMENT@@", script.read())
+                    if b"@@MANAGEMENT_BROWSE@@" in body:
+                        with _open_report_file(Path(__file__).resolve().parent, ('management_browse.js',)) as script:
+                            body = body.replace(b"@@MANAGEMENT_BROWSE@@", script.read())
                     if b"@@DUPLICATE_REVIEW@@" in body:
                         with _open_report_file(Path(__file__).resolve().parent, ("duplicate_review.js",)) as script:
                             body = body.replace(b"@@DUPLICATE_REVIEW@@", script.read())
@@ -442,6 +445,10 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                         result = operations.update_plan(lambda: get_organization().set_target(payload["id"], payload["target"]))
                     elif action == "state":
                         result = operations.update_plan(lambda: get_organization().set_states(payload["ids"], payload["state"]))
+                    elif action == 'folder-preview':
+                        result = operations.update_plan(lambda: get_organization().preview_folder(payload['ids'], payload['folder']))
+                    elif action == 'folder-apply':
+                        result = operations.update_plan(lambda: get_organization().apply_folder(payload['ids'], payload['folder'], payload['revision']))
                     else:
                         raise ValueError("整理操作无效")
                     self.send_json(200, result)

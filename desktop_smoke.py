@@ -51,6 +51,10 @@ def run():
         destination = base / '副本'
         destination.mkdir()
         plan = OrganizationPlan(report.parent, document)
+        classification = plan.preview_folder([media_id(str(video))], '视频/本机样例')
+        assert classification['changed_count'] == 1
+        adjusted = plan.apply_folder([media_id(str(video))], classification['folder'], classification['revision'])
+        assert next(item for item in adjusted['items'] if item['path'] == str(video))['state'] == 'pending'
         plan.set_states([media_id(str(video))], 'include')
         operations = FileOperations(report.parent, MediaActions(document), lambda: plan, document=document)
         preview = operations.preview('copy', [media_id(str(video))], str(destination), bundle=True)
@@ -66,6 +70,17 @@ def run():
         assert all(Path(item['target']).read_bytes() == Path(item['path']).read_bytes() for item in preview['items'])
         assert preview['bundles'][0]['counts'] == {'subtitle': 0, 'nfo': 1, 'cover': 1, 'still': 1}
         assert result['bundle'] and {item['role'] for item in result['planned_items']} == {'影片', 'NFO', '封面', '剧照'}
+        from library_server import create_library_server
+        viewer, library_url = create_library_server(report.parent, output)
+        threading.Thread(target=viewer.serve_forever, daemon=True).start()
+        try:
+            with urlopen(library_url.rsplit('/', 1)[0] + '/photos.html', timeout=10) as response:
+                page = response.read()
+                assert b'function sortManagementItems' in page and b'@@MANAGEMENT' not in page
+                assert '批量调整分类目录'.encode('utf-8') in page
+        finally:
+            viewer.shutdown()
+            viewer.server_close()
         # A second generated library has no local poster, exercising actual FFmpeg
         # extraction and its cached PNG inside the frozen application as well.
         frame_source, frame_output = base / '截帧样例', base / 'frame-reports'
@@ -100,4 +115,4 @@ def run():
             server.server_close()
         after = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in source.rglob('*') if path.is_file()}
         assert before == after
-        print('PACKAGED_SMOKE_OK: scan, reuse, FFmpeg frame cache, grouping, attachment audit, bundle copy, NFO, poster, still, catalog, backup, restore, HTTP, originals unchanged', flush=True)
+        print('PACKAGED_SMOKE_OK: scan, reuse, FFmpeg frame cache, grouping, attachment audit, batch classification, shared photo interface, bundle copy, NFO, poster, still, catalog, backup, restore, HTTP, originals unchanged', flush=True)
