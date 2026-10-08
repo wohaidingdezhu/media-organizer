@@ -8,6 +8,7 @@ import csv
 import hashlib
 import io
 import json
+import math
 import portable_fs as os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import secrets
@@ -94,8 +95,14 @@ class OrganizationPlan:
                 raise ValueError("扫描报告含重复原路径")
             target = record.get("suggested_path", "")
             error = _target_error(target)
-            item = {"id": identifier, "path": path, "name": Path(path).name,
-                    "source_folder": str(Path(path).parent),
+            pure = PureWindowsPath(path) if PureWindowsPath(path).is_absolute() else PurePosixPath(path)
+            mtime = record.get('mtime')
+            try:
+                valid_time = type(mtime) in {int, float} and math.isfinite(mtime) and abs(mtime) <= 8640000000000
+            except OverflowError:
+                valid_time = False
+            item = {"id": identifier, "path": path, "name": pure.name,
+                    "source_folder": str(pure.parent), "mtime": mtime if valid_time else None,
                     "kind": str(record.get("kind", "")),
                     "bytes": record.get("bytes", 0),
                     "suggested_path": target if isinstance(target, str) else "",
@@ -223,10 +230,76 @@ class OrganizationPlan:
             group["bytes"] += item["bytes"]
             group[item["state"]] += 1
         return {"items": items, "counts": counts, "folder_count": len(folders),
+                "revision": self._revision(states, overrides),
                 "review": {"blocked": sum(not item["selectable"] for item in items),
                            "duplicates": sum(bool(item["duplicate_group"]) for item in items),
                            "edited": sum(item["target_edited"] for item in items)},
                 "folders": sorted(folders.values(), key=lambda group: group["path"].casefold())}
+
+    def _revision(self, states, overrides):
+        body = json.dumps([self._report_id, states, overrides], sort_keys=True, ensure_ascii=False)
+        return hashlib.sha256(body.encode('utf-8')).hexdigest()
+
+    def _folder_changes(self, ids, folder, states, overrides):
+        if (not isinstance(ids, list) or not 1 <= len(ids) <= 200
+                or any(not isinstance(key, str) or key not in self._by_id for key in ids)
+                or len(set(ids)) != len(ids)):
+            raise ValueError('批量调整每次请选择 1–200 个不同的当前报告文件')
+        error = _target_error(folder)
+        if error:
+            raise ValueError('分类目录无效：' + error)
+        next_states, next_targets, changes = dict(states), dict(overrides), []
+        for key in ids:
+            old = overrides.get(key, self._by_id[key]['suggested_path'])
+            if _target_error(old):
+                raise ValueError('原建议路径无效，请先逐项修正：' + self._by_id[key]['name'])
+            target = str(PurePosixPath(folder) / PurePosixPath(old).name)
+            error = _target_error(target)
+            if error:
+                raise ValueError(error + '：' + self._by_id[key]['name'])
+            if target == self._by_id[key]['suggested_path']:
+                next_targets.pop(key, None)
+            else:
+                next_targets[key] = target
+            changed = old != target
+            if changed:
+                next_states.pop(key, None)
+            changes.append({'id': key, 'path': self._by_id[key]['path'], 'before': old,
+                            'after': target, 'state': states.get(key, 'pending'), 'changed': changed})
+        items = self._effective_items(next_targets)
+        selected = set(ids)
+        blocked = next((item for item in items if item['id'] in selected and not item['selectable']), None)
+        if blocked:
+            raise ValueError(blocked['blocked_reason'] + '：' + blocked['suggested_path'] + '；整批未保存')
+        self._validate_included(next_states, items)
+        return next_states, next_targets, changes
+
+    def preview_folder(self, ids, folder):
+        """Read-only preview of proposed targets; never read source media."""
+        with self._lock:
+            directory = self._open_directory()
+            try:
+                states, overrides = self._load(directory)
+                _, _, changes = self._folder_changes(ids, folder, states, overrides)
+                return {'revision': self._revision(states, overrides), 'folder': folder, 'items': changes,
+                        'changed_count': sum(item['changed'] for item in changes),
+                        'reset_count': sum(item['changed'] and item['state'] != 'pending' for item in changes)}
+            finally:
+                os.close(directory)
+
+    def apply_folder(self, ids, folder, revision):
+        """Atomic proposal update after preview; changed targets need review again."""
+        with self._lock:
+            directory = self._open_directory()
+            try:
+                states, overrides = self._load(directory)
+                if not isinstance(revision, str) or revision != self._revision(states, overrides):
+                    raise ValueError('整理计划已变化，请读取最新进度后重新预览；整批未保存')
+                states, overrides, _ = self._folder_changes(ids, folder, states, overrides)
+                self._save(directory, states, overrides)
+                return self._snapshot(states, overrides)
+            finally:
+                os.close(directory)
 
     def snapshot(self):
         with self._lock:
