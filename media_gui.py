@@ -30,7 +30,7 @@ REPORT_VIEWS = {
     "overview": "report.html", "duplicates": "report.html#duplicates",
     "similar": "report.html#similar", "library": "library.html",
     "issues": "report.html#issues", "folders": "report.html#folder-groups",
-    "organize": "organize.html", "photos": "photos.html",
+    "organize": "organize.html", "photos": "photos.html", "users": "users.html",
 }
 
 

@@ -15,7 +15,7 @@
 <style>.storage-row{display:flex;gap:16px;justify-content:space-between;align-items:center;border-top:1px solid #dce5df;padding:14px 0}.storage-row>div:first-child{flex:1;min-width:0;overflow-wrap:anywhere}.storage-row progress{width:min(400px,100%);height:12px;accent-color:#216b4c}.storage-row .target-actions{flex-shrink:0}@media(max-width:600px){.storage-row{align-items:flex-start;flex-direction:column}}</style>
 </head>
 <body><main>
-<header><h1>文件管理与整理</h1><p>打开照片或影片查看，在 文件管理器 定位原文件，再核对分类位置、选择纳入计划或暂缓。</p><div class="steps">看图或观看　→　勾选核对　→　预览复制分类或废纸篓 / 回收站清理</div></header>
+<header><h1>文件管理与整理</h1><p>打开照片或影片查看，在 文件管理器 定位原文件，再核对分类位置、选择纳入计划或暂缓。</p><p><a href="users.html">用户名管理与分类 →</a></p><div class="steps">看图或观看　→　勾选核对　→　预览复制分类或废纸篓 / 回收站清理</div></header>
 <div id="error" class="error" role="alert" hidden></div>
 <button id="retry" class="retry" hidden>重新读取计划</button>
 <div id="loading" class="empty">正在读取整理计划…</div>
@@ -57,6 +57,7 @@ const $=id=>document.getElementById(id), names={pending:'待核对',include:'已
 const filters=['search','kind','state','risk','folder','photo-month','source-folder','sort'];
 let data=null,page=0,visible=[],pageItems=[],selected=new Set(),saving=false,editingId=null,mediaIds={},mediaAvailable=false,photos=new Map(),executionPreview=null,operationTimer=null,operating=true,monitorRevision=0,monitorFailures=0,handledTrash=new Set(),handledCopy=new Set();
 let pictureSequence=[],pictureIndex=0,pictureCompare=false,folderPreview=null,folderIds=[];
+let incomingUserPlan=location.hash.startsWith('#user-plan=')?location.hash.slice(11).split(','):[];
 const make=(tag,cls,text)=>{const el=document.createElement(tag);if(cls)el.className=cls;if(text!==undefined)el.textContent=text;return el;};
 const folderOf=item=>{if(!item.selectable)return '需核对的分类位置';const pos=item.suggested_path.lastIndexOf('/');return pos>=0?item.suggested_path.slice(0,pos):'根目录';};
 function error(message){$('error').textContent=message||'';$('error').hidden=!message;}
@@ -102,7 +103,7 @@ function buildFolders(){const current=$('folder').value,counts=new Map();for(con
 async function save(state){if(saving||operating||!selected.size)return;const ids=[...selected];saving=true;error();$('notice').textContent='正在保存核对进度…';render();try{data=await request({ids,state});if($('risk').value!=='selected')selected.clear();$('notice').textContent=`已将 ${ids.length} 项设为“${names[state]}”。`;}catch(err){error(err.message);$('notice').textContent='保存失败，勾选项仍保留。';}finally{saving=false;render();}}
 function openEditor(item){if(saving||operating)return;editingId=item.id;editorError();$('editor-source').textContent='原文件：'+item.path;$('editor-target').value=item.suggested_path;$('editor-original').textContent='扫描原建议：'+(item.original_suggested_path||'无');$('target-editor').showModal();$('editor-target').focus();}
 async function changeTarget(id,target){if(saving||operating)return;saving=true;error();editorError();render();try{data=await request({action:'target',id,target});selected.clear();buildFolders();$('notice').textContent=target===null?'已恢复扫描建议；位置有变化的文件需重新核对。':'分类位置已保存；位置有变化的文件需重新核对。';if($('target-editor').open)$('target-editor').close();editingId=null;}catch(err){if($('target-editor').open)editorError(err.message);else error(err.message);}finally{saving=false;render();}}
-async function load(){if(saving)return;saving=true;error();$('retry').hidden=true;render();try{data=await request();selected.clear();buildFolders();$('workspace').hidden=false;render();}catch(err){error('无法读取整理计划：'+err.message);$('retry').hidden=false;}finally{saving=false;$('loading').hidden=true;render();}}
+async function load(){if(saving)return;saving=true;error();$('retry').hidden=true;render();try{data=await request();selected.clear();buildFolders();if(incomingUserPlan.length&&incomingUserPlan.length<=200&&incomingUserPlan.every(id=>/^[0-9a-f]{64}$/.test(id))){selected=new Set(incomingUserPlan.filter(id=>data.items.some(item=>item.id===id)));$('state').value='';$('risk').value='selected';$('notice').textContent='已展示本批用户名分类计划，请核对并纳入，再预览确认复制。';}incomingUserPlan=[];$('workspace').hidden=false;render();}catch(err){error('无法读取整理计划：'+err.message);$('retry').hidden=false;}finally{saving=false;$('loading').hidden=true;render();}}
 for(const id of filters)$(id).addEventListener(id==='search'?'input':'change',()=>{page=0;if(id==='kind'&&$('kind').value==='视频'){$('view-mode').value='list';$('photo-month').value='';}if(id==='risk'&&['copied','trashed','selected','basket'].includes($('risk').value))$('state').value='';if(!(id==='risk'&&$('risk').value==='selected')&&!(id==='sort'&&['selected','basket'].includes($('risk').value)))selected.clear();render();});
 $('select-page').onchange=()=>{for(const item of pageItems.filter(item=>!handledTrash.has(item.path))){if($('select-page').checked)selected.add(item.id);else selected.delete(item.id);}render();};$('clear').onclick=()=>{selected.clear();render();};
 $('include').onclick=()=>save('include');$('hold').onclick=()=>save('hold');$('pending-action').onclick=()=>save('pending');
