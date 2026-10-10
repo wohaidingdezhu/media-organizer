@@ -248,12 +248,21 @@ class OrganizationPlan:
         error = _target_error(folder)
         if error:
             raise ValueError('分类目录无效：' + error)
-        next_states, next_targets, changes = dict(states), dict(overrides), []
+        targets = {}
         for key in ids:
             old = overrides.get(key, self._by_id[key]['suggested_path'])
             if _target_error(old):
                 raise ValueError('原建议路径无效，请先逐项修正：' + self._by_id[key]['name'])
-            target = str(PurePosixPath(folder) / PurePosixPath(old).name)
+            targets[key] = str(PurePosixPath(folder) / PurePosixPath(old).name)
+        return self._target_changes(targets, states, overrides)
+
+    def _target_changes(self, targets, states, overrides):
+        if (not isinstance(targets, dict) or not 1 <= len(targets) <= 200
+                or any(key not in self._by_id for key in targets)):
+            raise ValueError('每批分类计划须包含 1–200 个当前报告文件')
+        next_states, next_targets, changes = dict(states), dict(overrides), []
+        for key, target in targets.items():
+            old = overrides.get(key, self._by_id[key]['suggested_path'])
             error = _target_error(target)
             if error:
                 raise ValueError(error + '：' + self._by_id[key]['name'])
@@ -267,12 +276,30 @@ class OrganizationPlan:
             changes.append({'id': key, 'path': self._by_id[key]['path'], 'before': old,
                             'after': target, 'state': states.get(key, 'pending'), 'changed': changed})
         items = self._effective_items(next_targets)
-        selected = set(ids)
+        selected = set(targets)
         blocked = next((item for item in items if item['id'] in selected and not item['selectable']), None)
         if blocked:
             raise ValueError(blocked['blocked_reason'] + '：' + blocked['suggested_path'] + '；整批未保存')
         self._validate_included(next_states, items)
         return next_states, next_targets, changes
+
+    def update_targets(self, targets, revision=None, *, apply=False):
+        """Preview or atomically save generated targets under the report operation lock."""
+        with self._lock:
+            directory = self._open_directory()
+            try:
+                states, overrides = self._load(directory)
+                current = self._revision(states, overrides)
+                if apply and (not isinstance(revision, str) or revision != current):
+                    raise ValueError('整理计划已变化，请重新预览；整批未保存')
+                states, overrides, changes = self._target_changes(targets, states, overrides)
+                if apply:
+                    self._save(directory, states, overrides)
+                return {'revision': current, 'items': changes,
+                        'ids': list(targets), 'changed_count': sum(item['changed'] for item in changes),
+                        'saved': apply}
+            finally:
+                os.close(directory)
 
     def preview_folder(self, ids, folder):
         """Read-only preview of proposed targets; never read source media."""

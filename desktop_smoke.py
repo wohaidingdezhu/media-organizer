@@ -51,6 +51,16 @@ def run():
         destination = base / '副本'
         destination.mkdir()
         plan = OrganizationPlan(report.parent, document)
+        from media_users import UserCatalog
+        users = UserCatalog(output, lambda: document)
+        username = users.update({'action': 'create', 'name': '样例用户', 'revision': users.snapshot()['revision']})
+        movie = next(item for item in username['items'] if item['kind'] == '电影')
+        username = users.update({'action': 'assign', 'user_id': username['users'][0]['id'],
+                                'ids': [movie['id']], 'revision': username['revision']})
+        proposal = {'ids': [movie['id']], 'revision': username['revision']}
+        user_plan = users.plan(plan, proposal)
+        users.plan(plan, {**proposal, 'plan_revision': user_plan['revision']}, apply=True)
+        assert user_plan['items'][0]['after'].startswith('用户/样例用户/电影/')
         classification = plan.preview_folder([media_id(str(video))], '视频/本机样例')
         assert classification['changed_count'] == 1
         adjusted = plan.apply_folder([media_id(str(video))], classification['folder'], classification['revision'])
@@ -78,6 +88,9 @@ def run():
                 page = response.read()
                 assert b'function sortManagementItems' in page and b'@@MANAGEMENT' not in page
                 assert '批量调整分类目录'.encode('utf-8') in page
+            with urlopen(library_url.rsplit('/', 1)[0] + '/users.html', timeout=10) as response:
+                page = response.read()
+                assert b'function filteredUserItems' in page and b'@@MEDIA_USERS@@' not in page
         finally:
             viewer.shutdown()
             viewer.server_close()

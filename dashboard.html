@@ -38,7 +38,7 @@
       <div id="metrics" class="metrics"></div>
       <details class="sources"><summary id="source-summary">扫描来源</summary><ul id="source-list"></ul></details>
       <div class="result-toolbar">
-        <nav class="view-tabs" aria-label="结果分类"><button data-view="organize" aria-pressed="true">文件管理与整理</button><button data-view="duplicates" aria-pressed="false">精确重复</button><button data-view="photos" aria-pressed="false">照片缩略图墙</button><button data-view="similar" aria-pressed="false">相似图片</button><button data-view="library" aria-pressed="false">影片海报墙</button><button data-view="folders" aria-pressed="false">文件夹重名</button><button data-view="issues" aria-pressed="false">读取问题</button><button data-view="overview" aria-pressed="false">完整报告</button></nav>
+        <nav class="view-tabs" aria-label="结果分类"><button data-view="organize" aria-pressed="true">文件管理与整理</button><button data-view="duplicates" aria-pressed="false">精确重复</button><button data-view="users" aria-pressed="false">用户名分类</button><button data-view="photos" aria-pressed="false">照片缩略图墙</button><button data-view="similar" aria-pressed="false">相似图片</button><button data-view="library" aria-pressed="false">影片海报墙</button><button data-view="folders" aria-pressed="false">文件夹重名</button><button data-view="issues" aria-pressed="false">读取问题</button><button data-view="overview" aria-pressed="false">完整报告</button></nav>
         <div class="row"><a id="standalone" class="button ghost small" target="_blank" rel="noopener">单独打开</a><details class="export-menu"><summary class="button ghost small">导出清单 ▾</summary><div class="export-links"><a data-export="inventory.csv" download>全部媒体 CSV</a><a data-export="duplicates.csv" download>精确重复 CSV</a><a data-export="similar.csv" download>相似候选 CSV</a><a data-export="issues.csv" download>读取问题 CSV</a></div></details></div>
       </div>
       <p id="view-description" class="view-description"></p>
@@ -69,7 +69,7 @@
 </main>
 <script>
 const $ = id => document.getElementById(id);
-const descriptions = {photos:'按年月和原文件夹浏览照片、并排比较，勾选后可核对分类计划或预览废纸篓 / 回收站清理。',organize:'打开照片或播放影片，在 文件管理器 定位原文件；核对分类位置与重复项，保存整理进度。',overview:'本次扫描的完整汇总。选择上方分类，可直接定位需要核对的结果。',duplicates:'完整 SHA-256 确认的内容重复。硬链接单独标记；大小估算不等于实际可释放空间。',similar:'图片相似候选供并排核对，可能包含连拍或视觉相近的不同图片，不能视为精确重复。',library:'浏览影片封面、播放影片，编辑标签、评分和观看备注；可筛选已观看与收藏。',folders:'同名或整理后名称冲突的文件夹候选；请结合来源路径核对。',issues:'本次扫描遇到的读取问题与跳过项。没有问题不表示所有视频都已验证可播放。'};
+const descriptions = {users:'管理用户名，给照片和整部电影分配归属，预览对应用户目录的分类计划。',photos:'按年月和原文件夹浏览照片、并排比较，勾选后可核对分类计划或预览废纸篓 / 回收站清理。',organize:'打开照片或播放影片，在 文件管理器 定位原文件；核对分类位置与重复项，保存整理进度。',overview:'本次扫描的完整汇总。选择上方分类，可直接定位需要核对的结果。',duplicates:'完整 SHA-256 确认的内容重复。硬链接单独标记；大小估算不等于实际可释放空间。',similar:'图片相似候选供并排核对，可能包含连拍或视觉相近的不同图片，不能视为精确重复。',library:'浏览影片封面、播放影片，编辑标签、评分和观看备注；可筛选已观看与收藏。',folders:'同名或整理后名称冲突的文件夹候选；请结合来源路径核对。',issues:'本次扫描遇到的读取问题与跳过项。没有问题不表示所有视频都已验证可播放。'};
 let reports=[], selectedReport='', selectedView='organize', lastLog='', lastFolders='', previousRunning=false, knownLatest;
 let pollTimer=null, stopped=false, historyLoading=false, viewRequest=0;
 try { const saved=JSON.parse(sessionStorage.getItem('media-result-selection') || '{}'); selectedReport=saved.report || ''; if(descriptions[saved.view])selectedView=saved.view; } catch (_) {}
