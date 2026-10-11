@@ -27,9 +27,10 @@
   <div class="manage-controls"><select id="sort" aria-label="文件排序"><option value="">扫描清单顺序</option><option value="size">文件大小从大到小</option><option value="name">文件名称顺序</option><option value="newest">修改时间从新到旧</option><option value="oldest">修改时间从旧到新</option></select><select id="view-mode" aria-label="浏览方式"><option value="list">文件列表</option><option value="wall">照片缩略图墙</option></select><select id="photo-month" aria-label="按照片年月筛选"><option value="">全部照片年月</option></select><select id="source-folder" aria-label="按原文件夹筛选"><option value="">全部原文件夹</option></select><button id="compare" disabled>并排比较两张照片</button><button id="reset-filters">重置筛选</button></div>
   <p class="preview-hint">照片墙使用报告内小预览；新扫描默认为前 500 张照片及相似候选生成预览，其余可打开原图查看。日期可能由文件名或修改时间推测。</p>
   <button id="duplicate-open">按组核对精确重复</button>
-  <div class="manage-controls"><input id="destination" aria-label="分类目标文件夹" placeholder="复制分类的目标文件夹（独立于来源目录）"><button id="choose-destination">选择分类目标…</button><button id="copy-files" disabled>预览复制分类</button><button id="copy-bundles" disabled>预览影片和附件整组复制</button><button id="trash-files" class="danger" disabled>预览移到废纸篓 / 回收站</button></div>
+  <div class="manage-controls"><input id="destination" aria-label="分类目标文件夹" placeholder="复制分类的目标文件夹（独立于来源目录）"><button id="choose-destination">选择分类目标…</button><button id="copy-files" disabled>预览复制分类</button><button id="copy-photo-bundles" disabled>预览照片和配套文件整组复制</button><button id="copy-bundles" disabled>预览影片和附件整组复制</button><button id="trash-files" class="danger" disabled>预览移到废纸篓 / 回收站</button></div>
   <p>整组复制：只勾选视频，会展开该作品版本的全部视频及明确关联的字幕、NFO、封面和剧照。组内视频须先纳入同一分类目录；附件和未加入的疑似附件会在确认页列出。原件保留。</p>
-  <p>复制前先将勾选文件纳入计划；保留原件，不覆盖目标。普通复制和清理只处理勾选媒体；影片附件须使用整组复制并核对预览。XMP、AAE 不自动处理。相似图片不自动清理。</p>
+  <p>照片整组复制：只勾选已纳入计划的照片，展开同目录唯一 RAW＋JPEG 配对、XMP、AAE 和同名 MOV/MP4/M4V 视频候选，复制到勾选照片的分类目录并保留原文件名。视频只按文件名推测，需人工核对，不能证明是 Live Photo。关联不明确的文件会列出未加入原因。配套媒体若已暂缓或另有已核对 / 调整的分类位置，须先统一计划。</p>
+  <p>复制前先将勾选文件纳入计划；保留原件，不覆盖目标。普通复制和清理只处理勾选媒体；配套文件须使用相应整组复制并核对预览。相似图片不自动清理。</p>
   <section class="section"><strong>清理候选篮</strong><p>手动加入待核对的照片或视频，跨筛选和刷新保留；加入或移出只修改候选记录。最多 200 项，执行仍须逐次预览确认，精确重复至少保留一份。</p><p id="basket-summary" role="status">正在读取候选篮…</p><div class="manage-controls"><button id="basket-add" disabled>将勾选项加入候选篮</button><button id="basket-view" disabled>查看候选篮</button><button id="basket-select" disabled>勾选候选篮可处理项</button><button id="basket-remove" disabled>将勾选项移出候选篮</button><button id="basket-clear" disabled>清空候选篮</button><button id="basket-refresh">刷新候选篮</button></div></section>
   <p id="folder-note" class="folder-note"></p>
   <div class="toolbar"><span id="selection" class="muted">已勾选 0 项</span><button id="select-all-current">全选当前页</button><button id="include" class="primary" disabled>纳入计划</button><button id="batch-folder" disabled>批量调整分类目录</button><button id="hold" disabled>暂缓</button><button id="pending-action" disabled>恢复待核对</button><span class="spacer"></span><button id="clear" disabled>清空勾选</button></div>
@@ -71,6 +72,7 @@ async function openMedia(item,action,button){button.disabled=true;error();$('not
 function updateSelection(){const count=selected.size,chosen=data.items.filter(item=>selected.has(item.id));$('selection').textContent=`已勾选 ${count} 项 · ${fileSize(chosen.reduce((total,item)=>total+item.bytes,0))}`;
   wallUsers.update();
   $('copy-bundles').disabled=saving||operating||!count||chosen.some(item=>item.kind!=='视频'||!mediaIds[item.path]);
+  $('copy-photo-bundles').disabled=saving||operating||!count||chosen.some(item=>item.kind!=='照片'||item.state!=='include'||!item.selectable||!mediaIds[item.path]);
   $('copy-files').disabled=saving||operating||!count||chosen.some(item=>item.state!=='include'||!item.selectable||!mediaIds[item.path]);$('trash-files').disabled=saving||operating||!count||!mediaAvailable||chosen.some(item=>!mediaIds[item.path]);$('compare').disabled=count!==2||chosen.some(item=>item.kind!=='照片')||saving;
   for(const id of ['include','hold','pending-action','clear','batch-folder'])$(id).disabled=saving||operating||!count;
   $('batch-folder').disabled=saving||operating||!count||count>200;

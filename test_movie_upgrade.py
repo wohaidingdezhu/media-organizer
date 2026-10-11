@@ -527,6 +527,7 @@ const rendered=text(card);if(!rendered.includes('[字幕]')||!rendered.includes(
                 reopened.snapshot(job['id'])
         legacy = json.loads(json.dumps(valid))
         legacy.pop('bundle')
+        legacy.pop('bundle_kind')
         for item in legacy['planned_items']:
             item.pop('role')
         journal.write_text(json.dumps(legacy), encoding='utf-8')

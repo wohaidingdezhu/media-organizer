@@ -116,6 +116,40 @@ def run():
             assert frame_document['video_library']['frame_count'] == 1
             assert frame_document['scan_reuse']['video_covers'] == number
         assert hashlib.sha256(frame_video.read_bytes()).hexdigest() == frame_before
+        # A separate generated photo album exercises the identical frozen Mac /
+        # Windows bundle engine, including actual Pillow and FFmpeg media.
+        photo_source, photo_output, photo_destination = [base / name for name in ('照片配对样例', 'photo-reports', '照片副本')]
+        photo_source.mkdir()
+        photo_destination.mkdir()
+        Image.new('RGB', (48, 32), '#289571').save(photo_source / 'IMG.JPG')
+        (photo_source / 'IMG.MOV').write_bytes(video.read_bytes())
+        # Synthetic RAW bytes verify preservation without requiring a RAW decoder.
+        (photo_source / 'IMG.DNG').write_bytes(b'generated RAW preservation sample')
+        (photo_source / 'IMG.xmp').write_text('<xmp>generated edits</xmp>', encoding='utf-8')
+        (photo_source / 'IMG.AAE').write_text('<plist>generated edits</plist>', encoding='utf-8')
+        photo_before = {str(path): (hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_mtime_ns)
+                        for path in photo_source.iterdir()}
+        assert media_scan.main([str(photo_source), '--output', str(photo_output)]) == 0
+        photo_report = next(photo_output.glob('scan-*/report.json'))
+        photo_document = json.loads(photo_report.read_text(encoding='utf-8'))
+        photo_plan = OrganizationPlan(photo_report.parent, photo_document)
+        photo_key = media_id(str(photo_source / 'IMG.JPG'))
+        photo_plan.set_states([photo_key], 'include')
+        photo_ops = FileOperations(photo_report.parent, MediaActions(photo_document), lambda: photo_plan, document=photo_document)
+        photo_preview = photo_ops.preview('copy', [photo_key], str(photo_destination), photo_bundle=True)
+        assert len(photo_preview['items']) == 5 and photo_preview['bundle_kind'] == 'photo'
+        photo_job = photo_ops.start(photo_preview['token'])
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            photo_result = photo_ops.snapshot(photo_job['id'])
+            if photo_result['status'] != 'running':
+                break
+            time.sleep(.02)
+        assert photo_result['status'] == 'complete', photo_result
+        assert all(hashlib.sha256(Path(item['target']).read_bytes()).hexdigest() == photo_before[item['path']][0]
+                   for item in photo_preview['items'])
+        assert photo_before == {str(path): (hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_mtime_ns)
+                                for path in photo_source.iterdir()}
         assert len(catalog(output)['items']) == 3
         files, _ = validate_backup(export_backup(output))
         restored = restore_backup(output, files)
@@ -136,4 +170,4 @@ def run():
             server.server_close()
         after = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in source.rglob('*') if path.is_file()}
         assert before == after
-        print('PACKAGED_SMOKE_OK: scan, reuse, FFmpeg frame cache, grouping, attachment audit, batch classification, shared photo interface, bundle copy, NFO, poster, still, catalog, backup, restore, HTTP, originals unchanged', flush=True)
+        print('PACKAGED_SMOKE_OK: scan, reuse, FFmpeg frame cache, grouping, attachment audit, batch classification, shared photo interface, film and photo bundle copies, NFO, poster, still, catalog, backup, restore, HTTP, originals unchanged', flush=True)
