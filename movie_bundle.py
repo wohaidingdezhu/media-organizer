@@ -8,7 +8,7 @@ SIDECARS = set('srt ass ssa sub idx vtt nfo'.split())
 
 
 class BundleActions:
-    def __init__(self, media, document):
+    def __init__(self, media, document, sidecars=SIDECARS, label='影片附件'):
         self.media = media
         self.records = dict(media.records)
         self.roots = media.roots
@@ -17,11 +17,11 @@ class BundleActions:
         for item in document.get('sidecars', []):
             path = Path(item['path'])
             expected = item.get('source_signature')
-            if (item.get('extension') in SIDECARS and path.is_absolute() and '..' not in path.parts
+            if (item.get('extension') in sidecars and path.is_absolute() and '..' not in path.parts
                     and any(root in path.parents for root in self.roots)
                     and isinstance(expected, list) and len(expected) == 5 and all(type(value) is int for value in expected)
                     and type(item.get('bytes')) is int and item['bytes'] >= 0):
-                self.records[media_id(str(path))] = {**item, 'kind': '影片附件'}
+                self.records[media_id(str(path))] = {**item, 'kind': label}
 
     def validate(self, identifier):
         if identifier in self.media.records:
@@ -31,7 +31,7 @@ class BundleActions:
             raise ValueError('附件缺少本次扫描的身份记录，请重新扫描')
         info = checked_stat(record['path'])
         if file_signature(info) != record['source_signature']:
-            raise ValueError('影片附件自扫描后变化，请重新扫描')
+            raise ValueError(record['kind'] + '自扫描后变化，请重新扫描')
         return record, info
 
 

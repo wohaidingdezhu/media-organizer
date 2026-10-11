@@ -414,7 +414,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     self.send_json(200, media.perform(payload["id"], payload["action"]))
                     return
                 if route == "api/operations/preview":
-                    self.send_json(200, operations.preview(payload["mode"], payload["ids"], payload.get("destination"), payload.get('bundle', False)))
+                    self.send_json(200, operations.preview(payload["mode"], payload["ids"], payload.get("destination"), payload.get('bundle', False), payload.get('photo_bundle', False)))
                     return
                 if route == 'api/grouping':
                     from movie_grouping import update_assignments
