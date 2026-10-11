@@ -342,6 +342,9 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                         body = body.replace(b'@@MEDIA_USERS@@', script.read())
                 if route in {"organize.html", "photos.html"}:
                     body = stream.read()
+                    if b'@@WALL_USERS@@' in body:
+                        with _open_report_file(Path(__file__).resolve().parent, ('wall_users.js',)) as script:
+                            body = body.replace(b'@@WALL_USERS@@', script.read())
                     if b"@@MANAGEMENT@@" in body:
                         with _open_report_file(Path(__file__).resolve().parent, ("management.js",)) as script:
                             body = body.replace(b"@@MANAGEMENT@@", script.read())

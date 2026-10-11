@@ -209,6 +209,170 @@ class MediaUserTests(unittest.TestCase):
         for value in ({'version':True,'users':{},'assignments':{}}, {'version':1,'users':{},'assignments':{'a'*64:'missing'}}):
             with self.assertRaises(ValueError): validate_users(value)
 
+    def test_date_templates_use_scan_date_not_current_plan_and_show_unknown_date(self):
+        self.document['files'][0].update(suggested_path='照片/2024/02/photo.png', date_source='EXIF 拍摄日期')
+        plan = OrganizationPlan(self.report, self.document)
+        plan.set_target(media_id(self.document['files'][0]['path']), '手动/自选名字.png')
+        owner = self.create()
+        ids = [item['id'] for item in self.catalog.snapshot()['items'] if item['kind'] == '照片']
+        self.update('assign', user_id=owner, ids=ids)
+        before = (self.report/STATE_FILE).read_bytes()
+        for layout, expected in (('month', '2024/02'), ('year', '2024'), ('flat', '')):
+            result = self.catalog.plan(plan, {'ids':ids, 'revision':self.catalog.snapshot()['revision'], 'photo_layout':layout})
+            first, second = result['items']
+            self.assertEqual(first['after'], '/'.join(part for part in ('用户/张三/照片', expected, '自选名字.png') if part))
+            self.assertEqual(first['date_source'], 'EXIF 拍摄日期')
+            self.assertEqual('日期未知' in second['after'], layout != 'flat')
+            self.assertEqual((self.report/STATE_FILE).read_bytes(), before)
+        self.unchanged()
+
+    def test_unknown_or_invalid_scan_dates_do_not_invent_capture_months(self):
+        record = self.document['files'][0]
+        for suggestion in (None, True, '', '照片/0000/01/a.png', '照片/2024/13/a.png', '照片/２０２４/01/a.png'):
+            record['suggested_path'] = suggestion
+            photo = next(item for item in self.catalog.snapshot()['items'] if item['id'] == self.photo)
+            self.assertEqual(photo['month'], '')
+            self.assertEqual(photo['date_source'], '日期未提供')
+
+    def test_collision_suggestions_are_deterministic_unicode_safe_and_keep_exact_duplicate_status(self):
+        self.document['files'][0]['suggested_path'] = '照片/2024/02/café.png'
+        self.document['files'][1]['suggested_path'] = '照片/2024/03/CAFE\u0301.PNG'
+        self.document['duplicates'] = [{'paths':[file['path'] for file in self.document['files'][:2]]}]
+        plan = OrganizationPlan(self.report, self.document)
+        owner = self.create()
+        ids = [item['id'] for item in self.catalog.snapshot()['items'] if item['kind'] == '照片']
+        self.update('assign', user_id=owner, ids=ids)
+        payload = {'ids':ids, 'revision':self.catalog.snapshot()['revision'], 'photo_layout':'flat', 'resolve_names':True}
+        result = self.catalog.plan(plan, payload)
+        self.assertEqual(result['name_conflict_count'], 2)
+        self.assertTrue(all(item['name_conflict'] for item in result['items']))
+        self.assertEqual({item['id']:item['after'] for item in result['items']},
+                         {item['id']:item['after'] for item in self.catalog.plan(plan, {**payload,'ids':list(reversed(ids))})['items']})
+        self.assertFalse((self.report/STATE_FILE).exists())
+        self.catalog.plan(plan, {**payload, 'targets_digest':result['targets_digest'], 'plan_revision':result['revision']}, apply=True)
+        saved = plan.snapshot()['items'][:2]
+        self.assertTrue(all(item['selectable'] and item['duplicate_group'] == 1 for item in saved))
+        self.assertTrue(all(item['state'] == 'pending' for item in saved))
+        self.unchanged()
+
+    def test_new_template_confirmation_rejects_missing_digest_changed_options_or_date(self):
+        self.document['files'][0]['suggested_path'] = '照片/2024/02/photo.png'
+        plan = OrganizationPlan(self.report, self.document)
+        owner = self.create()
+        self.update('assign', user_id=owner, ids=[self.photo])
+        payload = {'ids':[self.photo], 'revision':self.catalog.snapshot()['revision'], 'photo_layout':'month', 'resolve_names':True}
+        preview = self.catalog.plan(plan, payload)
+        with self.assertRaisesRegex(ValueError, '先预览'):
+            self.catalog.plan(plan, {**payload,'plan_revision':preview['revision']}, apply=True)
+        confirmation = {**payload,'plan_revision':preview['revision'],'targets_digest':preview['targets_digest']}
+        with self.assertRaisesRegex(ValueError, '模板或同名建议已变化'):
+            self.catalog.plan(plan, {**confirmation,'photo_layout':'year'}, apply=True)
+        self.document['files'][0]['suggested_path'] = '照片/2023/01/photo.png'
+        with self.assertRaisesRegex(ValueError, '已变化'):
+            self.catalog.plan(plan, confirmation, apply=True)
+        self.assertFalse((self.report/STATE_FILE).exists())
+        self.unchanged()
+
+    def test_suffix_avoids_unselected_target_and_file_directory_conflict_still_rejected(self):
+        owner = self.create()
+        self.update('assign', user_id=owner, ids=[self.photo])
+        self.plan.set_target(media_id(self.document['files'][1]['path']), '用户/张三/照片/photo.png')
+        payload = {'ids':[self.photo], 'revision':self.catalog.snapshot()['revision'], 'resolve_names':True}
+        preview = self.catalog.plan(self.plan, payload)
+        self.assertEqual(preview['name_conflict_count'], 1)
+        first_id = media_id(self.document['files'][0]['path'])
+        self.assertEqual(preview['items'][0]['after'], f'用户/张三/照片/photo-{first_id[:8]}.png')
+        self.plan.set_target(media_id(self.document['files'][1]['path']), '用户/张三/照片')
+        before = (self.report/STATE_FILE).read_bytes()
+        with self.assertRaisesRegex(ValueError, '文件与目录'):
+            self.catalog.plan(self.plan, payload)
+        self.assertEqual((self.report/STATE_FILE).read_bytes(), before)
+        self.unchanged()
+
+    def test_templates_validate_input_and_keep_movie_name(self):
+        owner = self.create()
+        self.update('assign',user_id=owner,ids=[self.photo,self.movie])
+        for layout, resolution in (('../outside',False), ('Month',True), ('flat',1), ('flat','true'), ([],True)):
+            with self.assertRaises(ValueError):
+                self.catalog.plan(self.plan,{**self.selected(),'photo_layout':layout,'resolve_names':resolution})
+        result = self.catalog.plan(self.plan,{**self.selected(),'photo_layout':'month','resolve_names':True})
+        for item in result['items'][1:]:
+            self.assertEqual(item['after'].split('/')[-1],Path(item['path']).name)
+            self.assertFalse(item['name_conflict'])
+
+    def test_suffix_reserves_unselected_names_and_fits_portable_component_limit(self):
+        owner = self.create()
+        first, second = self.document['files'][:2]
+        name = '旅' * 83 + '.png'
+        first['suggested_path'] = '照片/2024/01/' + name
+        second['suggested_path'] = '用户/张三/照片/' + name
+        plan = OrganizationPlan(self.report, self.document)
+        self.update('assign', user_id=owner, ids=[self.photo])
+        payload = {'ids':[self.photo], 'revision':self.catalog.snapshot()['revision'], 'resolve_names':True}
+        preview = self.catalog.plan(plan, payload)
+        target = preview['items'][0]['after']
+        self.assertLessEqual(len(target.split('/')[-1].encode('utf-8')), 255)
+        self.assertTrue(target.endswith('.png'))
+        # Reserve the short suffix too, forcing a longer deterministic identity.
+        third = {**first,'path':str(self.source/'reserved.png'), 'suggested_path':target}
+        self.document['files'].append(third)
+        plan = OrganizationPlan(self.report, self.document)
+        payload['revision'] = self.catalog.snapshot()['revision']
+        next_target = self.catalog.plan(plan, payload)['items'][0]['after']
+        self.assertNotEqual(target, next_target)
+        self.assertLessEqual(len(next_target.split('/')[-1].encode('utf-8')), 255)
+        self.assertTrue(next_target.endswith('-' + media_id(first['path'])[:16] + '.png'))
+        self.assertFalse((self.report/STATE_FILE).exists())
+
+    def test_http_template_confirm_rejects_changed_preview_and_copies_year_month_targets(self):
+        self.document['files'][0].update(suggested_path='照片/2024/02/photo.png',date_source='文件名日期（推测）')
+        (self.report/'report.json').write_text(json.dumps(self.document),encoding='utf-8')
+        self.plan = OrganizationPlan(self.report,self.document)
+        owner = self.create()
+        self.update('assign', user_id=owner, ids=[self.photo])
+        server, prefix = self.server()
+        origin = 'http://127.0.0.1:43210'
+        payload = {'action':'plan-preview','ids':[self.photo],'revision':self.catalog.snapshot()['revision'],
+                   'photo_layout':'month','resolve_names':True}
+        headers, body = request(server,prefix+'api/users','POST',payload,origin=origin)
+        self.assertIn('200',headers)
+        preview = json.loads(body)
+        confirmation = {**payload,'action':'plan-apply','plan_revision':preview['revision'],'targets_digest':preview['targets_digest']}
+        self.assertIn('400',request(server,prefix+'api/users','POST',{**confirmation,'photo_layout':'flat'},origin=origin)[0])
+        self.assertFalse((self.report/STATE_FILE).exists())
+        self.assertIn('200',request(server,prefix+'api/users','POST',confirmation,origin=origin)[0])
+        self.plan.set_states(preview['ids'],'include')
+        operations = FileOperations(self.report,MediaActions(self.document),lambda:self.plan)
+        execution = operations.preview('copy',preview['ids'],str(self.destination))
+        job = operations.start(execution['token'])
+        deadline = time.monotonic()+8
+        while time.monotonic()<deadline:
+            status = operations.snapshot(job['id'])
+            if status['status']!='running': break
+            time.sleep(.01)
+        self.assertEqual(status['status'],'complete',status)
+        target = self.destination/'用户'/'张三'/'照片'/'2024'/'02'/'photo.png'
+        self.assertEqual(target.read_bytes(),self.originals[self.document['files'][0]['path']][0])
+        self.assertEqual(status['items'][0]['sha256'],hashlib.sha256(target.read_bytes()).hexdigest())
+        self.unchanged()
+
+    def test_both_walls_embed_shared_user_toolbar_and_valid_movie_script(self):
+        server, prefix = self.server()
+        for name in ('photos.html','organize.html'):
+            headers, body = request(server,prefix+name)
+            self.assertIn('200',headers)
+            self.assertIn(b'function createWallUsers',body)
+            self.assertNotIn(b'@@WALL_USERS@@',body)
+            self.assertIn(b'wallUsers.matches',body)
+        import media_scan
+        with mock.patch('builtins.print'):
+            media_scan.main([str(self.source),'--output',str(self.root/'rendered'),'--no-image-metadata','--no-video-covers'])
+        page = next((self.root/'rendered').glob('scan-*/library.html')).read_text(encoding='utf-8')
+        self.assertIn('选择整部电影',page)
+        self.assertIn('movieUsers.matches',page)
+        self.assertNotIn('@@WALL_USERS@@',page)
+        self.node("new(require('vm').Script)(JSON.parse(require('fs').readFileSync(0,'utf8')));", page.split('</script><script>')[1].split('</script>')[0])
+
     def test_windows_unc_and_posix_reports_use_shared_group_names(self):
         for path in ('C:\\photos\\旅行.png', '\\\\server\\share\\旅行.png', '/photos/旅行.png'):
             units=units_from({'files':[{'path':path,'kind':'照片'}]})

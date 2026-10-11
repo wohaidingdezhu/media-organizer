@@ -14,7 +14,7 @@ function userControls(){
   byId('user-assign').disabled=locked||!userSelected.size||userSelected.size>200;
   byId('user-plan').disabled=locked||!userSelected.size||userSelected.size>200;
   byId('user-plan-save').disabled=locked||!userPreview;
-  for(const id of ['user-name','user-editor-cancel','user-delete-cancel','user-plan-cancel','user-refresh'])byId(id).disabled=userBusy;
+  for(const id of ['user-name','user-editor-cancel','user-delete-cancel','user-plan-cancel','user-refresh','photo-layout','photo-names'])byId(id).disabled=userBusy;
   byId('user-selected').textContent=`已勾选 ${userSelected.size} 项（跨页保留）`;
 }
 function renderUsers(){
@@ -72,18 +72,19 @@ byId('user-assign').onclick=async()=>{if(await changeUser({action:'assign',user_
 for(const id of ['user-editor','user-delete','user-plan']){byId(id+'-cancel').onclick=()=>byId(id==='user-editor'?id:id+'-dialog').close();byId(id==='user-editor'?id:id+'-dialog').addEventListener('cancel',event=>{if(userBusy)event.preventDefault();});}
 byId('user-plan').onclick=async()=>{
   if(userBusy||userOperating||!userSelected.size)return;userBusy=true;userPreview=null;userError();renderUsers();
-  try{const ids=[...userSelected],revision=userData.revision;const result=await userApi({action:'plan-preview',ids,revision});userPreview={...result,selected_ids:ids,user_revision:revision};
-    byId('user-plan-items').replaceChildren();for(const item of result.items){const row=node('li');row.append(node('div',item.path,'path'),node('div',item.before+' → '+item.after,'path'));byId('user-plan-items').append(row);}
-    byId('user-plan-summary').textContent=`${result.items.length} 个媒体文件 · ${result.changed_count} 项位置变化，保存后需重新核对。`;userError('','user-plan-error');byId('user-plan-dialog').showModal();
+  try{const ids=[...userSelected],revision=userData.revision,options={photo_layout:byId('photo-layout').value||'month',resolve_names:byId('photo-names').value!=='reject'};const result=await userApi({action:'plan-preview',ids,revision,...options});userPreview={...result,...options,selected_ids:ids,user_revision:revision};
+    byId('user-plan-items').replaceChildren();for(const item of result.items){const row=node('li');row.append(node('div',item.path,'path'),node('div',item.before+' → '+item.after,'path'));if(item.name_conflict)row.append(node('p','同名目标：'+item.proposed_before_suffix+'；建议添加路径标识后缀（并非内容重复判断）','muted'));if(item.date_source)row.append(node('p','日期来源：'+item.date_source,'muted'));byId('user-plan-items').append(row);}
+    byId('user-plan-summary').textContent=`${result.items.length} 个媒体文件 · ${result.changed_count} 项位置变化 · ${result.name_conflict_count||0} 项同名后缀建议，保存后需重新核对。`;userError('','user-plan-error');byId('user-plan-dialog').showModal();
   }catch(error){userError(error.message);}finally{userBusy=false;renderUsers();}
 };
 byId('user-plan-save').onclick=async()=>{
   if(userBusy||userOperating||!userPreview)return;const preview=userPreview;userBusy=true;userError('','user-plan-error');renderUsers();
-  try{const result=await userApi({action:'plan-apply',ids:preview.selected_ids,revision:preview.user_revision,plan_revision:preview.revision});byId('user-plan-dialog').close();userPreview=null;
+  try{const result=await userApi({action:'plan-apply',ids:preview.selected_ids,revision:preview.user_revision,plan_revision:preview.revision,photo_layout:preview.photo_layout,resolve_names:preview.resolve_names,targets_digest:preview.targets_digest});byId('user-plan-dialog').close();userPreview=null;
     byId('user-notice').replaceChildren(node('span','分类计划已保存。请在整理页核对、纳入计划，再预览确认复制。 '));const link=node('a','打开本批整理计划','button');link.href='organize.html#user-plan='+result.ids.join(',');byId('user-notice').append(link);
   }catch(error){userPreview=null;userError(error.message+'；请取消后刷新分类并重新预览。','user-plan-error');}finally{userBusy=false;renderUsers();}
 };
 byId('user-refresh').onclick=refreshUsers;
+for(const id of ['photo-layout','photo-names'])byId(id).addEventListener('change',()=>{userPreview=null;userControls();});
 byId('user-search').oninput=renderUsers;
 for(const id of ['media-search','user-filter','media-kind'])byId(id).addEventListener(id==='media-search'?'input':'change',()=>{userPage=0;renderUsers();});
 byId('user-reset').onclick=()=>{for(const id of ['media-search','user-filter','media-kind'])byId(id).value='';userPage=0;renderUsers();};

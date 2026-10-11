@@ -84,7 +84,11 @@ def units_from(document):
             continue
         photo = file['kind'] == '照片'
         key = ('photo:' if photo else 'video:') + identifier
+        suggestion = file.get('suggested_path', '')
+        month = re.match(r'^照片/([0-9]{4})/(0[1-9]|1[0-2])/', suggestion) if photo and isinstance(suggestion, str) else None
         units[key] = {'id': key, 'kind': '照片' if photo else '电影', 'title': source_path(file['path']).name,
+                      'month': '/'.join(month.groups()) if month and int(month.group(1)) > 0 else '',
+                      'date_source': str(file.get('date_source') or '日期未提供') if photo else '',
                       'files': [{'id': identifier, 'path': file['path'], 'edition': '', 'edition_key': ''}],
                       'preview': previews.get(file['path'], '') if photo else ''}
     return list(units.values())
@@ -99,7 +103,7 @@ class UserCatalog:
 
     def _snapshot(self, values):
         units = units_from(self.document())
-        context = [(unit['id'], unit['title'], unit['files']) for unit in units]
+        context = [(unit['id'], unit['title'], unit['files'], unit.get('month'), unit.get('date_source')) for unit in units]
         revision = hashlib.sha256(json.dumps([values, context], ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
         counts = collections.Counter(values['assignments'].values())
         current = collections.Counter()
@@ -174,8 +178,14 @@ class UserCatalog:
             snapshot = self._snapshot(self._read())
             self._check_revision(snapshot, payload.get('revision'))
             items = self._selected(snapshot, payload.get('ids'))
+            layout = payload.get('photo_layout', 'flat')
+            resolve_names = payload.get('resolve_names', False)
+            if not isinstance(layout, str) or layout not in {'flat', 'year', 'month'} or type(resolve_names) is not bool:
+                raise ValueError('请选择有效的照片目录模板与同名处理方式')
+            if apply and ('photo_layout' in payload or 'resolve_names' in payload) and not isinstance(payload.get('targets_digest'), str):
+                raise ValueError('请先预览分类计划再确认保存')
             current = {item['id']: item for item in organization.snapshot()['items']}
-            targets = {}
+            targets, photos = {}, set()
             for item in items:
                 if not item['user_id'] or item['user_id'] == 'mixed':
                     raise ValueError('请先为所选照片和整部电影分配一个用户名')
@@ -186,6 +196,10 @@ class UserCatalog:
                         if _target_error(old):
                             raise ValueError('照片原建议路径无效，请先修正')
                         target = PurePosixPath('用户', item['username'], '照片', PurePosixPath(old).name)
+                        if layout != 'flat':
+                            date_folder = item['month'] if layout == 'month' else item['month'][:4]
+                            target = target.parent / (date_folder or '日期未知') / target.name
+                        photos.add(file['id'])
                     else:
                         work = safe_segment(item['title']) + '-' + item['id'].split(':')[1][:8]
                         folder = PurePosixPath('用户', item['username'], '电影', work)
@@ -193,4 +207,10 @@ class UserCatalog:
                             folder /= safe_segment(file['edition']) + '-' + file['edition_key']
                         target = folder / source_path(file['path']).name
                     targets[file['id']] = str(target)
-            return organization.update_targets(targets, payload.get('plan_revision'), apply=apply)
+            result = organization.update_targets(targets, payload.get('plan_revision'), apply=apply,
+                resolve_ids=photos if resolve_names else None, expected_digest=payload.get('targets_digest'))
+            result.update(photo_layout=layout, resolve_names=resolve_names)
+            for change in result['items']:
+                unit = next(item for item in items if any(file['id'] == change['id'] for file in item['files']))
+                change['date_source'] = unit.get('date_source', '')
+            return result

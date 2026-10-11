@@ -283,7 +283,37 @@ class OrganizationPlan:
         self._validate_included(next_states, items)
         return next_states, next_targets, changes
 
-    def update_targets(self, targets, revision=None, *, apply=False):
+    def _resolve_names(self, targets, overrides, resolve_ids):
+        """Suggest deterministic photo suffixes against the complete current plan."""
+        proposed = {**overrides, **targets}
+        groups = {}
+        for item in self._effective_items(proposed):
+            if not _target_error(item['suggested_path']):
+                groups.setdefault(_canonical_target(item['suggested_path']), []).append(item['id'])
+        reserved = set(groups)
+        resolved, conflicts = dict(targets), {}
+        for key in sorted(targets):
+            target = targets[key]
+            if key not in resolve_ids or len(groups.get(_canonical_target(target), [])) < 2:
+                continue
+            path = PurePosixPath(target)
+            for width in (8, 16, 32, 64):
+                stem, suffix = path.stem, '-' + key[:width] + path.suffix
+                while stem and (len((stem + suffix).encode('utf-8')) > 255
+                                or len((stem + suffix).encode('utf-16-le')) // 2 > 255):
+                    stem = stem[:-1]
+                if len((stem + suffix).encode('utf-8')) > 255:
+                    raise ValueError('同名文件的扩展名过长，请手动调整建议名称')
+                candidate = str(path.with_name(stem + suffix))
+                if _canonical_target(candidate) not in reserved:
+                    break
+            else:
+                raise ValueError('无法生成无冲突的建议文件名，请手动调整')
+            reserved.add(_canonical_target(candidate))
+            resolved[key], conflicts[key] = candidate, target
+        return resolved, conflicts
+
+    def update_targets(self, targets, revision=None, *, apply=False, resolve_ids=None, expected_digest=None):
         """Preview or atomically save generated targets under the report operation lock."""
         with self._lock:
             directory = self._open_directory()
@@ -292,10 +322,23 @@ class OrganizationPlan:
                 current = self._revision(states, overrides)
                 if apply and (not isinstance(revision, str) or revision != current):
                     raise ValueError('整理计划已变化，请重新预览；整批未保存')
+                if (not isinstance(targets, dict) or not 1 <= len(targets) <= 200
+                        or any(key not in self._by_id or _target_error(value) for key, value in targets.items())):
+                    raise ValueError('每批分类计划须包含 1–200 个当前报告文件')
+                conflicts = {}
+                if resolve_ids:
+                    targets, conflicts = self._resolve_names(targets, overrides, resolve_ids)
+                digest = hashlib.sha256(json.dumps([current, targets], sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
+                if apply and expected_digest is not None and expected_digest != digest:
+                    raise ValueError('目录模板或同名建议已变化，请重新预览；整批未保存')
                 states, overrides, changes = self._target_changes(targets, states, overrides)
+                for change in changes:
+                    change['name_conflict'] = change['id'] in conflicts
+                    change['proposed_before_suffix'] = conflicts.get(change['id'], '')
                 if apply:
                     self._save(directory, states, overrides)
                 return {'revision': current, 'items': changes,
+                        'targets_digest': digest, 'name_conflict_count': len(conflicts),
                         'ids': list(targets), 'changed_count': sum(item['changed'] for item in changes),
                         'saved': apply}
             finally:
