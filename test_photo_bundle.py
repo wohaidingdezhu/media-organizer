@@ -217,8 +217,11 @@ class PhotoBundleTests(unittest.TestCase):
         original = paths[-1]
         original.unlink()
         make_symlink(original, paths[0])
-        with self.assertRaises(ValueError):
+        # Windows rejects the reparse point while opening it (OSError); macOS
+        # rejects the no-follow stat as a non-regular file (ValueError).
+        with self.assertRaises((OSError, ValueError)):
             self.preview(ops, key)
+        self.assertFalse(list(target.parent.iterdir()))
 
     def test_two_folders_with_same_names_cannot_overwrite_each_other(self):
         paths, key, _, _, plan, ops = self.prepare(('IMG.jpg', 'IMG.mov', 'other/IMG.heic', 'other/IMG.mov'))
