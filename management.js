@@ -1,6 +1,37 @@
 function appendOperationStatus(item,parent){if(handledTrash.has(item.path))parent.append(make('p','warning','已移到废纸篓 / 回收站，请重新扫描更新清单'));else if(handledCopy.has(item.path))parent.append(make('span','badge status-include','已有复制成功记录 · 原件保留'));}
+function appendPhotoBundleButton(item,parent){if(item.kind!=='照片')return;const button=make('button','','配套文件核对');button.setAttribute('aria-label','配套文件核对 '+item.name);button.disabled=saving;button.onclick=()=>openPhotoBundle(item);parent.append(button);}
+function selectableBundlePhotos(){if(!photoBundleInfo||!data||photoBundleInfo.restored_snapshot)return [];const ids=new Set(photoBundleInfo.photo_ids);const items=data.items.filter(item=>ids.has(item.id));return items.length===ids.size&&items.length>0&&items.length<=200&&items.every(item=>item.kind==='照片'&&mediaIds[item.path]===item.id&&!handledTrash.has(item.path))?items:[];}
+function syncPhotoBundleControls(){const items=selectableBundlePhotos();$('photo-bundle-select').disabled=saving||operating||!items.length;$('photo-bundle-select').textContent=photoBundleInfo?`勾选本组照片（${photoBundleInfo.photo_ids.length} 张）`:'勾选本组照片';}
+async function openPhotoBundle(item){
+  const revision=++photoBundleRevision;photoBundleInfo=null;photoBundleAnchor=item;
+  $('photo-bundle-title').textContent='照片配套文件核对 · '+item.name;$('photo-bundle-summary').textContent='正在读取扫描记录和分类计划…';$('photo-bundle-message').textContent='';$('photo-bundle-items').replaceChildren();$('photo-bundle-error').hidden=true;$('photo-bundle-retry').hidden=true;syncPhotoBundleControls();
+  if(!$('photo-bundle-dialog').open)$('photo-bundle-dialog').showModal();
+  try{
+    const result=await api('api/photo-bundles/'+item.id);if(revision!==photoBundleRevision)return;photoBundleInfo=result;
+    $('photo-bundle-summary').textContent=Object.entries(result.counts).map(([label,count])=>label+' '+count).join(' · ')+` · 未明确关联 ${result.skipped.length} 项`;$('photo-bundle-message').textContent=result.message;
+    if(result.restored_snapshot)$('photo-bundle-items').append(make('li','warning','这是恢复的历史快照，只能核对记录；重新扫描后才能勾选并操作原文件。'));
+    if(result.identity_missing)$('photo-bundle-items').append(make('li','warning',`${result.identity_missing} 项缺少扫描身份记录；整组复制前需要重新扫描。`));
+    if(result.items.length===1&&!result.skipped.length)$('photo-bundle-items').append(make('li','muted','本次扫描未发现配套文件；只表示清单中没有记录，不代表照片损坏。'));
+    for(const file of result.items){const row=make('li');row.append(make('strong','',file.label+' · '+fileSize(file.bytes)),make('div','path',file.path));if(file.plan){row.append(make('p','minor','分类计划：'+(names[file.plan.state]||file.plan.state)),make('div','path',file.plan.target||'暂无分类建议'));if(file.plan.blocked_reason)row.append(make('p','warning',file.plan.blocked_reason));}else row.append(make('p','minor','附属文件：整组复制时沿用勾选照片的目录，保留原名。'));$('photo-bundle-items').append(row);}
+    for(const file of result.skipped){const row=make('li','warning');row.append(make('strong','','未自动关联：'+file.reason),make('div','path',file.path));$('photo-bundle-items').append(row);}
+    syncPhotoBundleControls();
+  }catch(err){if(revision!==photoBundleRevision)return;$('photo-bundle-summary').textContent='配套清单未读取，请重试。';$('photo-bundle-error').textContent=err.message;$('photo-bundle-error').hidden=false;$('photo-bundle-retry').hidden=false;}
+}
+$('photo-bundle-close').onclick=()=>$('photo-bundle-dialog').close();
+$('photo-bundle-dialog').addEventListener('close',()=>{photoBundleRevision++;photoBundleInfo=null;photoBundleAnchor=null;syncPhotoBundleControls();});
+$('photo-bundle-retry').onclick=()=>photoBundleAnchor?openPhotoBundle(photoBundleAnchor):undefined;
+$('photo-bundle-select').onclick=async()=>{
+  if(saving||operating||!selectableBundlePhotos().length)return;
+  const info=photoBundleInfo,revision=photoBundleRevision;saving=true;syncPhotoBundleControls();render();
+  try{
+    const latest=await request();if(revision!==photoBundleRevision)return;if(operating)throw new Error('有文件操作正在执行，请完成后再勾选。');data=latest;
+    const items=selectableBundlePhotos();if(!items.length)throw new Error('本组照片不再可勾选，请重新扫描或读取最新清单。');
+    selected=new Set(items.map(item=>item.id));buildFolders();for(const id of filters)$(id).value='';wallUsers.reset();$('kind').value='照片';$('risk').value='selected';page=0;$('photo-bundle-dialog').close();$('notice').textContent=`已勾选本组 ${info.photo_ids.length} 张照片，替换之前的勾选。请核对归属与分类目录，再纳入计划；配套视频和附属文件须另行整组预览确认。`;
+  }catch(err){if(revision===photoBundleRevision){$('photo-bundle-error').textContent=err.message;$('photo-bundle-error').hidden=false;}}
+  finally{saving=false;render();syncPhotoBundleControls();}
+};
 function picture(item,parent,interactive=true){const photo=photos.get(item.id);if(photo&&/^previews\/[A-Za-z0-9_-]+\.png$/.test(photo.preview||'')){const img=make('img');img.src=photo.preview;img.alt=item.name;img.loading='lazy';if(interactive)img.onclick=()=>viewPictures([item]);parent.append(img);}else parent.append(make('div','photo-placeholder','预览未生成 · 可打开原图'));}
-function renderPhotos(){if(!data)return;$('photo-wall').replaceChildren();if($('view-mode').value!=='wall')return;for(const item of pageItems){const card=make('article','photo-card');picture(item,card);const label=make('label'),check=make('input');check.type='checkbox';check.checked=selected.has(item.id);check.disabled=saving||operating||handledTrash.has(item.path);check.setAttribute('aria-label','选择照片 '+item.name);check.onchange=()=>{if(check.checked)selected.add(item.id);else selected.delete(item.id);updateSelection();};label.append(check,make('strong','',item.name));card.append(label,make('div','path',item.path),make('div','muted',`${fileSize(item.bytes)} · ${(photos.get(item.id)||{}).month||'日期未提供'} · ${names[item.state]}`),make('div','reason',item.reason));card.append(make('span','badge',wallUsers.label([item.path])));appendOperationStatus(item,card);appendBasketStatus(item,card);if(item.duplicate_group)card.append(make('span','badge warning','精确重复第 '+item.duplicate_group+' 组'));if(mediaIds[item.path])for(const[action,text]of[['open','打开原图'],['reveal','在 文件管理器 定位']]){const button=make('button','',text);button.disabled=saving||operating||handledTrash.has(item.path);button.setAttribute('aria-label',text+' '+item.name);button.onclick=()=>openMedia(item,action,button);card.append(button);}const edit=make('button','','调整分类位置');edit.disabled=saving||operating;edit.onclick=()=>openEditor(item);card.append(edit);$('photo-wall').append(card);}if(!pageItems.length)$('photo-wall').append(make('p','empty','没有符合条件的照片。'));}
+function renderPhotos(){if(!data)return;$('photo-wall').replaceChildren();if($('view-mode').value!=='wall')return;for(const item of pageItems){const card=make('article','photo-card');picture(item,card);const label=make('label'),check=make('input');check.type='checkbox';check.checked=selected.has(item.id);check.disabled=saving||operating||handledTrash.has(item.path);check.setAttribute('aria-label','选择照片 '+item.name);check.onchange=()=>{if(check.checked)selected.add(item.id);else selected.delete(item.id);updateSelection();};label.append(check,make('strong','',item.name));card.append(label,make('div','path',item.path),make('div','muted',`${fileSize(item.bytes)} · ${(photos.get(item.id)||{}).month||'日期未提供'} · ${names[item.state]}`),make('div','reason',item.reason));card.append(make('span','badge',wallUsers.label([item.path])));appendOperationStatus(item,card);appendBasketStatus(item,card);if(item.duplicate_group)card.append(make('span','badge warning','精确重复第 '+item.duplicate_group+' 组'));if(mediaIds[item.path])for(const[action,text]of[['open','打开原图'],['reveal','在 文件管理器 定位']]){const button=make('button','',text);button.disabled=saving||operating||handledTrash.has(item.path);button.setAttribute('aria-label',text+' '+item.name);button.onclick=()=>openMedia(item,action,button);card.append(button);}appendPhotoBundleButton(item,card);const edit=make('button','','调整分类位置');edit.disabled=saving||operating;edit.onclick=()=>openEditor(item);card.append(edit);$('photo-wall').append(card);}if(!pageItems.length)$('photo-wall').append(make('p','empty','没有符合条件的照片。'));}
 function viewPictures(items){
   pictureCompare=items.length===2;
   pictureSequence=pictureCompare?[...items]:photoBrowseSequence(visible,items[0]);
@@ -21,6 +52,7 @@ function renderPictureViewer(){
 }
 function turnPicture(step){if(pictureCompare)return;const next=pictureIndex+step;if(next<0||next>=pictureSequence.length)return;pictureIndex=next;renderPictureViewer();}
 function syncBrowseControls(){
+  syncPhotoBundleControls();
   $('reset-filters').disabled=saving;
   $('batch-folder-save').disabled=saving||operating||!folderPreview||!folderPreview.changed_count;
   $('picture-previous').hidden=$('picture-next').hidden=pictureCompare;
@@ -66,7 +98,7 @@ $('execution-start').onclick=async()=>{
   $('execution-start').disabled=true;$('execution-cancel').disabled=true;
   try{
     await api('api/operations/start',{token:executionPreview.token});
-    selected.clear();$('notice').textContent='操作已开始，请保持本机服务运行，完成后重新扫描。';
+    selected.clear();if($('risk').value==='selected')$('risk').value='';$('notice').textContent='操作已开始，请保持本机服务运行，完成后重新扫描。';
   }catch(err){
     error('启动请求未确认：'+err.message+'。正在读取操作记录，请勿重复执行。');
   }finally{
