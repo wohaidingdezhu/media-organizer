@@ -126,3 +126,30 @@ def photo_bundle_selection(document, ids, current, media):
         canonical.append(value)
     skipped = list({item['path']: item for item in skipped if media_id(item['path']) not in targets}.values())
     return actions, targets, set(targets) - set(ids), skipped, manifests
+
+
+def photo_bundle_audit(document, identifier, plan_items=()):
+    """Inspect only recorded associations and proposals, including offline snapshots."""
+    if not isinstance(identifier, str) or len(identifier) != 64 or any(char not in '0123456789abcdef' for char in identifier):
+        raise ValueError('照片标识无效')
+    records = {item['path']: item for item in document.get('files', [])}
+    photo = next((item for item in records.values() if item.get('kind') == '照片' and media_id(item['path']) == identifier), None)
+    if photo is None:
+        raise ValueError('照片不属于本次扫描报告')
+    group, = photo_manifests(document, {photo['path']})
+    plans = {item['id']: item for item in plan_items}
+    records.update({item['path']: item for item in document.get('sidecars', [])})
+    items = []
+    for item in group['items']:
+        key = media_id(item['path'])
+        signature = records[item['path']].get('source_signature')
+        identity = isinstance(signature, list) and len(signature) == 5 and all(type(value) is int for value in signature)
+        plan = plans.get(key)
+        items.append({**item, 'id': key, 'identity_available': identity,
+                      'plan': {'state': plan['state'], 'target': plan['suggested_path'],
+                               'blocked_reason': plan['blocked_reason']} if plan else None})
+    return {**group, 'items': items, 'selected_id': identifier,
+            'photo_ids': [media_id(path) for path in group['photos']],
+            'identity_missing': sum(not item['identity_available'] for item in items),
+            'restored_snapshot': bool(document.get('restored_snapshot')),
+            'message': '只显示本次扫描记录及分类计划，不检查原文件是否仍存在。关联只按同目录文件名推测，视频候选不能证明是 Live Photo。'}

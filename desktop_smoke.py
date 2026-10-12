@@ -150,6 +150,21 @@ def run():
                    for item in photo_preview['items'])
         assert photo_before == {str(path): (hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_mtime_ns)
                                 for path in photo_source.iterdir()}
+        photo_viewer, photo_url = create_library_server(photo_report.parent, photo_output)
+        threading.Thread(target=photo_viewer.serve_forever, daemon=True).start()
+        try:
+            prefix = photo_url.rsplit('/', 1)[0] + '/'
+            with urlopen(prefix + 'api/photo-bundles/' + photo_key, timeout=10) as response:
+                audit = json.load(response)
+                assert len(audit['items']) == 5 and len(audit['photo_ids']) == 2
+                assert {item['path'] for item in audit['items']} == {item['path'] for item in photo_preview['items']}
+                assert not audit['identity_missing'] and not audit['restored_snapshot']
+            with urlopen(prefix + 'photos.html', timeout=10) as response:
+                page = response.read()
+                assert b'function openPhotoBundle' in page and b'photo-bundle-dialog' in page
+        finally:
+            photo_viewer.shutdown()
+            photo_viewer.server_close()
         assert len(catalog(output)['items']) == 3
         files, _ = validate_backup(export_backup(output))
         restored = restore_backup(output, files)
