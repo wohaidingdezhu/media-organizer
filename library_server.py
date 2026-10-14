@@ -256,7 +256,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
             if route == "api/media":
                 self.send_json(200, media.snapshot())
                 return
-            if route in {"api/users", "api/photos", "api/duplicates", "api/storage", "api/basket", "api/roots", "api/changes", "api/notes", "api/operations"} or route.startswith(("api/operations/", "api/photo-bundles/")):
+            if route in {"api/users", "api/photos", "api/duplicates", "api/storage", "api/basket", "api/roots", "api/changes", "api/notes", "api/operations"} or route.startswith(("api/operations/", "api/photo-bundles/", "api/movie-bundles/")):
                 try:
                     if route == 'api/users':
                         result = users.snapshot()
@@ -265,6 +265,9 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     elif route.startswith('api/photo-bundles/'):
                         from photo_bundle import photo_bundle_audit
                         result = photo_bundle_audit(document, route.removeprefix('api/photo-bundles/'), get_organization().snapshot()['items'])
+                    elif route.startswith('api/movie-bundles/'):
+                        from movie_bundle import movie_bundle_audit
+                        result = movie_bundle_audit(current_document(), route.removeprefix('api/movie-bundles/'), get_organization().snapshot()['items'])
                     elif route == "api/storage":
                         if storage_data is None:
                             storage_data = storage_catalog(document)
