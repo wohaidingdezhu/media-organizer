@@ -87,6 +87,11 @@ def run():
         viewer, library_url = create_library_server(report.parent, output)
         threading.Thread(target=viewer.serve_forever, daemon=True).start()
         try:
+            with urlopen(library_url.rsplit('/', 1)[0] + '/api/movie-bundles/' + media_id(str(video)), timeout=10) as response:
+                audit = json.load(response)
+                assert len(audit['items']) == 4 and audit['media_ids'] == [media_id(str(video))]
+                assert {item['path'] for item in audit['items']} == {item['path'] for item in preview['items']}
+                assert audit['edition'] == '本机版本' and not audit['identity_missing']
             with urlopen(library_url.rsplit('/', 1)[0] + '/photos.html', timeout=10) as response:
                 page = response.read()
                 assert b'function sortManagementItems' in page and b'@@MANAGEMENT' not in page
@@ -161,7 +166,7 @@ def run():
                 assert not audit['identity_missing'] and not audit['restored_snapshot']
             with urlopen(prefix + 'photos.html', timeout=10) as response:
                 page = response.read()
-                assert b'function openPhotoBundle' in page and b'photo-bundle-dialog' in page
+                assert b'function openBundleReview' in page and b'bundle-review-dialog' in page
         finally:
             photo_viewer.shutdown()
             photo_viewer.server_close()

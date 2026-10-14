@@ -2,9 +2,56 @@
 from pathlib import Path, PurePosixPath
 
 from media_actions import checked_stat, file_signature, media_id
+from movie_grouping import source_path
 from organization_plan import _target_error, _canonical_target
 
 SIDECARS = set('srt ass ssa sub idx vtt nfo'.split())
+
+
+def movie_bundle_audit(document, identifier, plan_items=()):
+    """Review one current edition using report records, never original media."""
+    from movie_attachments import attachment_manifests
+    if not isinstance(identifier, str) or len(identifier) != 64 or any(char not in '0123456789abcdef' for char in identifier):
+        raise ValueError('视频标识无效')
+    records = {item['path']: item for item in document.get('files', [])}
+    video = next((item for item in records.values() if item.get('kind') == '视频' and media_id(item['path']) == identifier), None)
+    if video is None:
+        raise ValueError('视频不属于本次扫描报告')
+    library = document.get('video_library', {})
+    if not isinstance(library, dict):
+        raise ValueError('视频缺少影片资料库，请重新扫描')
+    groups = library.get('groups', [])
+    matches = [(number, group) for number, group in enumerate(groups)
+               if any(file['path'] == video['path'] for file in group.get('files', []))]
+    if len(matches) != 1:
+        raise ValueError('视频缺少唯一影片分组，请重新扫描或修正分组')
+    number, group = matches[0]
+    paths = [item['path'] for item in group['files']]
+    if len(set(paths)) != len(paths) or any(records.get(path, {}).get('kind') != '视频' for path in paths):
+        raise ValueError('影片组的视频清单无效，请重新扫描')
+    summary = attachment_manifests(document)[number]
+    plans = {item['id']: item for item in plan_items}
+    records.update({item['path']: item for item in document.get('sidecars', [])})
+    videos = [{'path': item['path'], 'relative': source_path(item['path']).name, 'label': '视频',
+               'bytes': records[item['path']].get('bytes', 0)} for item in group['files']]
+    items = []
+    for item in videos + summary['items']:
+        key = media_id(item['path'])
+        signature = records[item['path']].get('source_signature')
+        identity = isinstance(signature, list) and len(signature) == 5 and all(type(value) is int for value in signature)
+        plan = plans.get(key)
+        items.append({**item, 'id': key, 'identity_available': identity,
+                      'plan': {'state': plan['state'], 'target': plan['suggested_path'],
+                               'blocked_reason': plan['blocked_reason']} if plan else None})
+    labels = {'subtitle': '字幕', 'nfo': 'NFO', 'cover': '封面', 'still': '剧照'}
+    return {'title': group.get('title', '影片'), 'edition': group.get('edition', ''),
+            'group_key': summary['group_key'], 'grouping_revision': library.get('grouping_revision', ''),
+            'media_kind': '视频', 'media_ids': [media_id(item['path']) for item in videos],
+            'items': items, 'counts': {'视频': len(videos), **{labels[key]: value for key, value in summary['counts'].items()}},
+            'skipped': summary['skipped'], 'missing': summary['missing'],
+            'identity_missing': sum(not item['identity_available'] for item in items),
+            'restored_snapshot': bool(document.get('restored_snapshot')),
+            'message': '只显示本次扫描记录、当前影片分组及分类计划，不检查原文件是否仍存在或视频能否播放。只核对当前作品版本，附件缺少不表示影片损坏。'}
 
 
 class BundleActions:
