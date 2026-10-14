@@ -96,6 +96,7 @@ def run():
                 page = response.read()
                 assert b'function sortManagementItems' in page and b'@@MANAGEMENT' not in page
                 assert b'function createManagementFolderBrowser' in page and b'folder-browser' in page
+                assert '搜索文件夹'.encode('utf-8') in page and '文件夹排序'.encode('utf-8') in page
                 assert '批量调整分类目录'.encode('utf-8') in page
                 assert b'function createWallUsers' in page and b'@@WALL_USERS@@' not in page
             with urlopen(library_url, timeout=10) as response:
