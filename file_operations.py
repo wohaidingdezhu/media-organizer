@@ -395,6 +395,25 @@ class FileOperations:
             if not available:
                 raise ValueError("计划保留的精确重复文件已变化或不可访问，请先重新扫描并核对")
 
+    def _copy_destination(self, destination):
+        if not isinstance(destination, str) or not destination or "\x00" in destination:
+            raise ValueError("请先选择分类目标文件夹")
+        path = Path(destination)
+        descriptor = open_directory(path)
+        try:
+            dest_identity = [os.fstat(descriptor).st_dev, os.fstat(descriptor).st_ino]
+            available = os.free_bytes(descriptor)
+        finally:
+            os.close(descriptor)
+        for record in self.media.records.values():
+            if path == Path(record["path"]).parent or path in Path(record["path"]).parents:
+                raise ValueError("目标文件夹不能包含原媒体；请选择独立分类目录")
+        # Also prevent placing the result inside a scanned tree.
+        for root in getattr(self.media, "roots", []):
+            if path == root or root in path.parents:
+                raise ValueError("目标文件夹不能位于扫描来源中")
+        return dest_identity, available
+
     def preview(self, mode, ids, destination=None, bundle=False, photo_bundle=False):
         if type(bundle) is not bool or type(photo_bundle) is not bool or bundle and photo_bundle or (bundle or photo_bundle) and mode != 'copy':
             raise ValueError('整组只支持复制，且须分别选择照片或影片；不支持整组清理')
@@ -427,22 +446,7 @@ class FileOperations:
                         roles.update({item['path']: item['label'] for item in summary['items']})
             ids = list(targets)
         if mode == "copy":
-            if not isinstance(destination, str) or not destination or "\x00" in destination:
-                raise ValueError("请先选择分类目标文件夹")
-            path = Path(destination)
-            descriptor = open_directory(path)
-            try:
-                dest_identity = [os.fstat(descriptor).st_dev, os.fstat(descriptor).st_ino]
-                available = os.free_bytes(descriptor)
-            finally:
-                os.close(descriptor)
-            for record in self.media.records.values():
-                if path == Path(record["path"]).parent or path in Path(record["path"]).parents:
-                    raise ValueError("目标文件夹不能包含原媒体；请选择独立分类目录")
-            # Also prevent placing the result inside a scanned tree.
-            for root in getattr(self.media, "roots", []):
-                if path == root or root in path.parents:
-                    raise ValueError("目标文件夹不能位于扫描来源中")
+            dest_identity, available = self._copy_destination(destination)
         else:
             trash_helper()  # Capability errors happen before the confirmation page.
             destination, dest_identity, available = None, None, None
@@ -476,9 +480,58 @@ class FileOperations:
             self.previews[preview["token"]] = preview
         return {key: value for key, value in preview.items() if key not in {"expires", "dest_identity", "_media", "selected_ids"}}
 
+    def quick_preview(self, destination):
+        """Prepare whole groups without changing manual review decisions."""
+        from movie_bundle import BundleActions, SIDECARS
+        from simple_organize import propose_simple_copy
+        document = self.document() if callable(self.document) else self.document
+        if not isinstance(document, dict):
+            raise ValueError('省心整理需要完整扫描报告')
+        proposal = propose_simple_copy(document, self.plan().snapshot(), self._history())
+        identity, available = self._copy_destination(destination)
+        media = BundleActions(self.media, document, SIDECARS | {'xmp', 'aae'}, '媒体附件')
+        items, groups, skipped, remaining = [], [], list(proposal['skipped']), 0
+        for unit in proposal['units']:
+            if remaining or len(items) + len(unit['items']) > 200:
+                remaining += len(unit['items'])
+                continue
+            prepared = []
+            try:
+                for entry in unit['items']:
+                    record, info = media.validate(entry['id'])
+                    check_target(destination, entry['target'])
+                    prepared.append({'id': entry['id'], 'path': record['path'], 'bytes': info.st_size,
+                                     'target': str(Path(destination) / entry['target']),
+                                     'relative': entry['target'], 'signature': file_signature(info), 'role': entry['role']})
+            except (OSError, ValueError) as error:
+                skipped.extend({'path': entry['path'], 'reason': '本组未加入：' + str(error)} for entry in unit['items'])
+                continue
+            groups.append({'title': unit['title'], 'notes': unit['notes'], 'count': len(prepared)})
+            items.extend(prepared)
+        total = sum(item['bytes'] for item in items)
+        if available < total:
+            raise ValueError('目标磁盘可用空间不足，请更换目标或通过手动流程选择较少文件')
+        preview = {'mode': 'copy', 'quick': True, 'bundle': False, 'bundle_kind': None,
+                   'items': items, 'groups': groups, 'skipped': skipped, 'remaining_count': remaining,
+                   'bytes': total, 'destination': destination, 'available_bytes': available}
+        if not items:
+            return {**preview, 'token': None}
+        preview.update(token=secrets.token_urlsafe(24), dest_identity=identity,
+                       expires=time.monotonic() + 600, _media=media, _quick_digest=proposal['digest'])
+        with self.lock:
+            self.previews = {key: value for key, value in self.previews.items() if value['expires'] > time.monotonic()}
+            self.previews[preview['token']] = preview
+        return {key: value for key, value in preview.items() if not key.startswith('_') and key not in {'expires', 'dest_identity'}}
+
     def _validate_copy_plan(self, preview):
-        current = {item['id']: item for item in self.plan().snapshot()['items']}
-        if preview.get('bundle'):
+        snapshot = self.plan().snapshot()
+        current = {item['id']: item for item in snapshot['items']}
+        if preview.get('quick'):
+            from simple_organize import propose_simple_copy
+            document = self.document() if callable(self.document) else self.document
+            if propose_simple_copy(document, snapshot, self._history())['digest'] != preview['_quick_digest']:
+                raise ValueError('分类依据、核对状态或操作记录已变化，请重新预览')
+        elif preview.get('bundle'):
             from movie_bundle import bundle_selection
             document = self.document() if callable(self.document) else self.document
             if preview.get('bundle_kind') == 'photo':
@@ -541,7 +594,7 @@ class FileOperations:
                 raise ValueError("有文件操作正在执行，请等待完成")
             job = {"id": secrets.token_hex(12), "mode": preview["mode"], "status": "running",
                    "created_at": time.strftime("%Y-%m-%d %H:%M:%S"), "items": [], "total": len(preview["items"]),
-                   "bundle": preview.get("bundle", False),
+                   "bundle": preview.get("bundle", False), "quick": preview.get("quick", False),
                    "bundle_kind": preview.get('bundle_kind'),
                    "planned_items": [{key: item[key] for key in ("path", "target", "bytes", "role")} for item in preview["items"]]}
             descriptor = None
@@ -657,6 +710,7 @@ class FileOperations:
         finally:
             os.close(descriptor)
         if (not isinstance(job, dict) or job.get("id") != identifier
+                or 'quick' in job and (type(job['quick']) is not bool or job['quick'] and (job.get('mode') != 'copy' or job.get('bundle')))
                 or 'bundle' in job and (type(job['bundle']) is not bool or job['bundle'] and job.get('mode') != 'copy')
                 or 'bundle_kind' in job and (job['bundle_kind'] not in (None, 'movie', 'photo')
                     or bool(job['bundle_kind']) != bool(job.get('bundle')))
@@ -749,8 +803,8 @@ class FileOperations:
         job = self.snapshot(identifier)
         if job["status"] not in {"cancelled", "stopped"} or job.get("error") or not job.get("planned_items"):
             raise ValueError("此批次不能直接继续核对；请先检查逐项记录、原文件与目标位置")
-        if job.get("bundle"):
-            raise ValueError("整组复制须按逐项记录核对媒体和配套文件，再重新选择整组预览；不会自动勾选或重试")
+        if job.get("bundle") or job.get("quick"):
+            raise ValueError("整组复制或省心整理须按逐项记录核对媒体和配套文件，再重新选择整组预览；不会自动勾选或重试")
         history = self._history()
         if history["warnings"] or any(entry["status"] in {"running", "external_running"} for entry in history["jobs"]):
             raise ValueError("请等待正在执行的批次完成，或先核对无法读取的操作记录")

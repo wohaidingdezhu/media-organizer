@@ -25,6 +25,7 @@ def parse_nfo(body):
     return {'title': clean(root.findtext('title')), 'year': clean(root.findtext('year'), 4),
             'plot': clean(root.findtext('plot'), 6000), 'actors': values('actor/name'),
             'genres': values('genre'), 'tags': values('tag'), 'directors': values('director'),
+            'countries': values('country'),
             'studio': clean(root.findtext('studio')), 'source': '本地 NFO'}
 
 

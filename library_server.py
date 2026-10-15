@@ -386,7 +386,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
         def do_POST(self):
             route = self.route()
             if route not in {"api/users", "api/tags", "api/tags/toggle", "api/organization", "api/media/action", "api/notes", "api/basket", "api/grouping",
-                             "api/operations/preview", "api/operations/start", "api/operations/stop", "api/operations/destination"}:
+                             "api/operations/preview", "api/operations/quick-preview", "api/operations/start", "api/operations/stop", "api/operations/destination"}:
                 self.send_error(404)
                 return
             origin = self.headers.get("Origin")
@@ -419,7 +419,10 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 if route == "api/media/action":
                     self.send_json(200, media.perform(payload["id"], payload["action"]))
                     return
-                if route == "api/operations/preview":
+                if route == "api/operations/quick-preview":
+                    self.send_json(200, operations.quick_preview(payload.get("destination")))
+                    return
+                elif route == "api/operations/preview":
                     self.send_json(200, operations.preview(payload["mode"], payload["ids"], payload.get("destination"), payload.get('bundle', False), payload.get('photo_bundle', False)))
                     return
                 if route == 'api/grouping':
