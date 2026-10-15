@@ -26,6 +26,7 @@ if (typeof module !== 'undefined' && module.exports)
 
 // Folder keys keep full ancestry, case and Unicode; equal leaf names never merge.
 function managementFolderParts(item, mode) {
+  if(mode==='result')return item.result_parts||[item.folder];
   if (mode === 'target') return String(item.suggested_path || '').split('/').slice(0, -1).filter(Boolean);
   const folder = String(item.source_folder || '');
   if (/^[A-Za-z]:[\\/]/.test(folder)) return [folder.slice(0, 2) + '\\', ...folder.slice(3).split(/[\\/]/).filter(Boolean)];
@@ -37,7 +38,7 @@ function managementFolderTree(items, mode) {
   for(const item of items){const parts=managementFolderParts(item,mode);let parent=root;
     for(let depth=0;depth<=parts.length;depth++){
       if(depth){const prefix=parts.slice(0,depth),key=JSON.stringify(prefix);let node=nodes.get(key);
-        if(!node){const windows=/^[A-Za-z]:\\$/.test(prefix[0])||prefix[0].startsWith('\\\\');const path=mode==='target'?prefix.join('/'):(prefix[0]==='/'?'/'+prefix.slice(1).join('/'):windows?prefix[0]+prefix.slice(1).join('\\'):prefix.join('/'));node={key,name:prefix[depth-1],path,parts:prefix,parent:parent.key,count:0,bytes:0,photos:0,videos:0,direct:0,children:[]};nodes.set(key,node);parent.children.push(key);}parent=node;}
+        if(!node){const windows=(mode==='result'?/^[A-Za-z]:[\\/]/:/^[A-Za-z]:\\$/).test(prefix[0])||prefix[0].startsWith('\\\\');const path=mode==='result'?prefix[0]+(prefix.length>1?(windows?'\\':'/')+prefix.slice(1).join(windows?'\\':'/'):''):mode==='target'?prefix.join('/'):(prefix[0]==='/'?'/'+prefix.slice(1).join('/'):windows?prefix[0]+prefix.slice(1).join('\\'):prefix.join('/'));node={key,name:prefix[depth-1],path,parts:prefix,parent:parent.key,count:0,bytes:0,photos:0,videos:0,direct:0,children:[]};nodes.set(key,node);parent.children.push(key);}parent=node;}
       parent.count++;parent.bytes+=Number.isSafeInteger(item.bytes)&&item.bytes>=0?item.bytes:0;parent.photos+=item.kind==='照片';parent.videos+=item.kind==='视频';if(depth===parts.length)parent.direct++;
     }
   }

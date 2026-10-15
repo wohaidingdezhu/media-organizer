@@ -1,6 +1,7 @@
 """Read-only proposals for the explicitly confirmed simple copy workflow."""
 from collections import defaultdict
 import hashlib
+import datetime as dt
 import json
 from pathlib import PurePosixPath
 import re
@@ -36,9 +37,10 @@ def movie_region(groups):
     return (next(iter(labels)), '明确的原目录名称') if len(labels) == 1 else ('待确认地区', '本地资料与目录没有唯一地区依据')
 
 
-def propose_simple_copy(document, snapshot, history):
+def propose_simple_copy(document, snapshot, history, corrections=None):
     """Never stat/open media or persist plan changes here."""
     from media_scan import safe_segment
+    corrections = corrections or {}
     if document.get('restored_snapshot'):
         raise ValueError('历史快照不能省心整理，请重新扫描本机媒体')
     if history.get('warnings') or any(job['status'] in {'running', 'external_running'} for job in history['jobs']):
@@ -76,6 +78,9 @@ def propose_simple_copy(document, snapshot, history):
     def skip(paths, reason):
         skipped.extend({'path': path, 'reason': reason} for path in sorted(set(paths)))
     for group in photo_manifests(document, photos):
+        group['items'] = [item for item in group['items'] if not (
+            records.get(item['path'], {}).get('kind') == '视频' and
+            corrections.get(item['path'], {}).get('category') in {'movie', 'home_video'})]
         paths = [item['path'] for item in group['items']]
         if group['skipped']:
             skip(paths, '照片配套关系有歧义，请通过配套清单手动核对')
@@ -86,9 +91,18 @@ def propose_simple_copy(document, snapshot, history):
                      (item.get('date_source') != 'EXIF 拍摄日期', item.get('extension') not in {'jpg', 'jpeg'}, item['path']))
         match = re.match(r'^照片/([1-9][0-9]{3}/(?:0[1-9]|1[0-2]))/', anchor.get('suggested_path', ''))
         month = match.group(1) if match else '待确认日期'
+        fixed = {corrections[path]['month'] for path in group['photos'] if corrections.get(path, {}).get('month')}
+        if len(fixed) > 1:
+            skip(paths, '照片配套成员的手动年月不同，请先统一修正')
+            reserved.update(paths)
+            continue
+        if fixed:
+            month = next(iter(fixed))
         parent = '照片/' + month
         notes = ([] if anchor.get('date_source') == 'EXIF 拍摄日期' else
                  ['照片年月来自文件名或修改时间，非已确认拍摄日期']) if match else ['缺少有效年月，请在待确认日期目录核对']
+        if fixed:
+            notes = ['年月来自手动分类修正，不改原始日期']
         if group['counts']['配对视频候选']:
             notes.append('同名视频只按文件名关联，不能证明是 Live Photo，请在确认清单核对')
         units.append({'type': 'photo', 'title': group['title'], 'notes': notes,
@@ -106,6 +120,36 @@ def propose_simple_copy(document, snapshot, history):
             skip([file['path'] for file in videos if file['path'] not in reserved], '影片与照片配套视频范围重叠，请手动核对')
             continue
         region, reason = movie_region([group for group, _ in entries])
+        regions = {corrections[file['path']]['region'] for file in videos if corrections.get(file['path'], {}).get('region')}
+        categories = {corrections[file['path']]['category'] for file in videos if corrections.get(file['path'], {}).get('category')}
+        if len(regions) > 1 or len(categories) > 1:
+            skip([file['path'] for file in videos], '同一作品的手动分类不一致，请统一修正')
+            continue
+        if regions:
+            region, reason = next(iter(regions)), '手动确认地区'
+        evidence = any(group.get('type') == '编号' or summary['counts']['nfo'] or summary['counts']['subtitle'] for group, summary in entries)
+        camera = all(re.match(r'^(?:IMG|DSC|DSCF|DSCN|MOV|VID|PXL|MVI|GOPR|VIDEO)[-_ ]?\d', source_path(file['path']).stem, re.I) for file in videos)
+        home = next(iter(categories)) == 'home_video' if categories else camera and not evidence
+        if home:
+            for file in videos:
+                record = records[file['path']]
+                month = corrections.get(file['path'], {}).get('month')
+                if not month:
+                    # Use UTC for mtime fallback so a report has the same target
+                    # month on both platforms and after time-zone changes.
+                    stamp = re.search(r'(?<!\d)((?:19|20)\d{2})[-_]?(\d{2})[-_]?(\d{2})(?!\d)|(?<!\d)((?:19|20)\d{2})(\d{2})(\d{2})(?=\d{6}(?:\D|$))', source_path(file['path']).stem)
+                    try:
+                        parts = (stamp.groups()[:3] if stamp.group(1) else stamp.groups()[3:]) if stamp else None
+                        month = dt.date(*map(int, parts)).strftime('%Y/%m') if parts else dt.datetime.fromtimestamp(record['mtime'], dt.timezone.utc).strftime('%Y/%m')
+                    except (ValueError, OverflowError, OSError, TypeError):
+                        month = '待确认日期'
+                units.append({'type': 'home_video', 'title': source_path(file['path']).name,
+                              'notes': ['家庭视频：根据手动选择或相机文件名识别；年月为手动修正、文件名日期或 UTC 修改时间，非已验证拍摄日期'],
+                              'items': [{'path': file['path'], 'id': media_id(file['path']), 'relative': source_path(file['path']).name,
+                                         'target': '家庭视频/'+month+'/'+source_path(file['path']).name, 'role': '家庭视频'}]})
+            for _, summary in entries:
+                skip([item['path'] for item in summary['items'] if item['path'] not in reserved], '家庭视频的疑似影片附件未自动关联，请手动核对')
+            continue
         title = entries[0][0].get('title', '影片')
         parent = f'电影/{region}/{safe_segment(title)}-{work[:12] or media_id(videos[0]["path"])[:12]}'
         values = {}
@@ -113,7 +157,8 @@ def propose_simple_copy(document, snapshot, history):
             values[file['path']] = {'path': file['path'], 'relative': source_path(file['path']).name, 'role': '影片'}
         for _, summary in entries:
             for item in summary['items']:
-                values[item['path']] = {**item, 'role': item['label']}
+                if item['path'] not in reserved:
+                    values[item['path']] = {**item, 'role': item['label']}
             skipped.extend(summary['skipped'])
         units.append({'type': 'movie', 'title': title, 'notes': [region+'：'+reason],
                       'items': [{**item, 'id': media_id(item['path']), 'target': parent+'/'+item['relative']} for item in values.values()]})
@@ -126,7 +171,7 @@ def propose_simple_copy(document, snapshot, history):
     colliding = set().union(*(indexes for indexes in owners.values() if len(indexes) > 1)) if owners else set()
     for index in colliding:
         unit = units[index]
-        if unit['type'] == 'photo':
+        if unit['type'] in {'photo', 'home_video'}:
             first = min(item['path'] for item in unit['items'])
             folder = safe_segment(source_path(first).parent.name)[:30]+'-'+media_id(first)[:12]
             for item in unit['items']:

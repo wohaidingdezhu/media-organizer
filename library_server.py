@@ -188,7 +188,9 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     and re.fullmatch(r"[0-9a-f]{64}", group["tag_key"])} if isinstance(groups, list) else set()
     tag_path = output_dir / "library-tags.json"
     note_path = output_dir / "library-notes.json"
-    operations = FileOperations(report_dir, media, get_organization, document=current_document)
+    from organize_settings import OrganizeSettings
+    organize_settings = OrganizeSettings(output_dir, current_document)
+    operations = FileOperations(report_dir, media, get_organization, document=current_document, options=organize_settings.snapshot)
     from media_users import UserCatalog
     users = UserCatalog(output_dir, current_document)
     def current_keys():
@@ -256,9 +258,15 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
             if route == "api/media":
                 self.send_json(200, media.snapshot())
                 return
-            if route in {"api/users", "api/photos", "api/duplicates", "api/storage", "api/basket", "api/roots", "api/changes", "api/notes", "api/operations"} or route.startswith(("api/operations/", "api/photo-bundles/", "api/movie-bundles/")):
+            if route in {"api/users", "api/photos", "api/duplicates", "api/storage", "api/basket", "api/roots", "api/changes", "api/notes", "api/operations", "api/organize-settings", "api/organized-results"} or route.startswith(("api/operations/", "api/photo-bundles/", "api/movie-bundles/")):
                 try:
-                    if route == 'api/users':
+                    if route == 'api/organize-settings':
+                        result = organize_settings.snapshot()
+                    elif route == 'api/organized-results':
+                        from organized_results import catalog
+                        result = {'items': [{key: value for key, value in item.items() if not key.startswith('_')} for item in catalog(operations)],
+                                  'message': '显示本报告已成功复制的记录，不遍历目标磁盘；打开前重新核对副本身份。外部新增、移动和删除请重新扫描目标目录。'}
+                    elif route == 'api/users':
                         result = users.snapshot()
                     elif route == "api/photos":
                         result = photo_catalog(document)
@@ -385,13 +393,13 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
 
         def do_POST(self):
             route = self.route()
-            if route not in {"api/users", "api/tags", "api/tags/toggle", "api/organization", "api/media/action", "api/notes", "api/basket", "api/grouping",
+            if route not in {"api/users", "api/organize-settings", "api/organized-results/action", "api/tags", "api/tags/toggle", "api/organization", "api/media/action", "api/notes", "api/basket", "api/grouping",
                              "api/operations/preview", "api/operations/quick-preview", "api/operations/start", "api/operations/stop", "api/operations/destination"}:
                 self.send_error(404)
                 return
             origin = self.headers.get("Origin")
             if ((origin and origin != f"http://127.0.0.1:{self.server.server_port}")
-                    or (route in {"api/users", "api/media/action", "api/basket", "api/grouping"} or route.startswith("api/operations/")) and origin != f"http://127.0.0.1:{self.server.server_port}"):
+                    or (route in {"api/users", "api/organize-settings", "api/organized-results/action", "api/media/action", "api/basket", "api/grouping"} or route.startswith("api/operations/")) and origin != f"http://127.0.0.1:{self.server.server_port}"):
                 self.send_json(403, {"error": "页面来源不匹配"})
                 return
             if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
@@ -419,8 +427,15 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 if route == "api/media/action":
                     self.send_json(200, media.perform(payload["id"], payload["action"]))
                     return
+                if route == 'api/organize-settings':
+                    self.send_json(200, operations.update_plan(lambda: organize_settings.update(payload)))
+                    return
+                if route == 'api/organized-results/action':
+                    from organized_results import perform
+                    self.send_json(200, perform(operations, payload.get('id'), payload.get('action')))
+                    return
                 if route == "api/operations/quick-preview":
-                    self.send_json(200, operations.quick_preview(payload.get("destination")))
+                    self.send_json(200, operations.quick_preview(payload.get("destination"), payload.get("all_batches", False)))
                     return
                 elif route == "api/operations/preview":
                     self.send_json(200, operations.preview(payload["mode"], payload["ids"], payload.get("destination"), payload.get('bundle', False), payload.get('photo_bundle', False)))
