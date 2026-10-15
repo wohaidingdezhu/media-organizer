@@ -107,6 +107,19 @@ class SimpleOrganizeTests(unittest.TestCase):
         self.assertIn('电影/待确认地区/', preview['items'][0]['relative'])
         self.assertIn('没有唯一地区依据', preview['groups'][0]['notes'][0])
 
+    def test_numbered_movie_cover_without_nfo_follows_movie_not_photo_candidate(self):
+        self.file('日韩/ABC-123.mp4'); self.file('日韩/ABC-123.jpg')
+        self.file('相册/IMG-123.mov'); self.file('相册/IMG-123.jpg')
+        _, _, _, ops = self.scan()
+        preview = ops.quick_preview(str(self.destination))
+        movie = [item for item in preview['items'] if Path(item['path']).name.startswith('ABC-123')]
+        photo = [item for item in preview['items'] if Path(item['path']).name.startswith('IMG-123')]
+        self.assertEqual(len(movie), 2); self.assertEqual(len(photo), 2)
+        self.assertEqual({item['role'] for item in movie}, {'影片', '封面'})
+        self.assertTrue(all(item['relative'].startswith('电影/日韩/') for item in movie))
+        self.assertEqual({item['role'] for item in photo}, {'照片', '配对视频候选'})
+        self.assertTrue(all(item['relative'].startswith('照片/') for item in photo))
+
     def test_same_named_photos_keep_pair_names_in_stable_distinct_folders(self):
         for folder in ('a', 'b'):
             self.file(folder+'/20210506_IMG.jpg')

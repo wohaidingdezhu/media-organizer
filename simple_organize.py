@@ -58,9 +58,11 @@ def propose_simple_copy(document, snapshot, history):
     manifests = attachment_manifests(document)
     art = {item['path'] for summary in manifests for item in summary['items'] + summary['skipped'] if records.get(item['path'], {}).get('kind') == '照片'}
     # A phone's IMG.jpg + IMG.mov is also a same-stem movie-cover candidate.
-    # Prefer the photo association unless subtitles/NFO or an explicit poster
-    # name provides movie evidence; do not lose editing companions to cover logic.
-    strong_art = {item['path'] for summary in manifests if summary['counts']['nfo'] or summary['counts']['subtitle']
+    # Prefer the photo association unless subtitles/NFO, an identified movie
+    # group or explicit poster name provides movie evidence. Camera prefixes
+    # are already excluded from numbered film groups by the shared scanner.
+    strong_art = {item['path'] for group, summary in zip(groups, manifests)
+                  if group.get('type') == '编号' or summary['counts']['nfo'] or summary['counts']['subtitle']
                   for item in summary['items'] if item['kind'] in {'cover', 'still'}}
     for path in list(art - strong_art):
         pure = source_path(path)
