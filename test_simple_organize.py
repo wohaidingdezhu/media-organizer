@@ -25,14 +25,25 @@ class SimpleOrganizeTests(unittest.TestCase):
     setUp = fixtures.PhotoBundleTests.setUp
     file = fixtures.PhotoBundleTests.file
     scan = fixtures.PhotoBundleTests.scan
+
     def wait(self, ops, job):
-        deadline = time.monotonic() + 30
+        # A real 200-file batch flushes and verifies every file and journal.
+        # Windows runner storage can take over 30 seconds; do not weaken copies
+        # or race TemporaryDirectory cleanup against a still-running worker.
+        deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
             result = ops.snapshot(job['id'])
             if result['status'] != 'running':
                 return result
-            time.sleep(.01)
-        self.fail('Generated simple copy did not finish')
+            time.sleep(.05)
+        ops.request_stop(job['id'])
+        stop_deadline = time.monotonic() + 15
+        while time.monotonic() < stop_deadline:
+            result = ops.snapshot(job['id'])
+            if result['status'] != 'running':
+                break
+            time.sleep(.05)
+        self.fail('Generated simple copy timed out: ' + str(result))
 
     def sample(self):
         self.file('album/20210506_IMG.JPG')
