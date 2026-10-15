@@ -9,6 +9,26 @@ import threading
 from urllib.request import urlopen
 
 
+def verified_quick_copy(operations, destination, expected):
+    """Exercise the source and frozen app with the same confirmed workflow."""
+    import time
+    destination.mkdir()
+    preview = operations.quick_preview(str(destination))
+    assert len(preview['items']) == expected and preview['quick']
+    assert not list(destination.iterdir())
+    job = operations.start(preview['token'])
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        result = operations.snapshot(job['id'])
+        if result['status'] != 'running':
+            break
+        time.sleep(.02)
+    assert result['status'] == 'complete' and result['quick'], result
+    assert all(Path(item['target']).read_bytes() == Path(item['path']).read_bytes() for item in preview['items'])
+    assert not operations.quick_preview(str(destination))['items']
+    return preview
+
+
 def run():
     from PIL import Image
     import imageio_ffmpeg
@@ -32,7 +52,7 @@ def run():
         video = source / 'sample.mp4'
         subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=64x64:d=1',
                         '-c:v', 'mpeg4', str(video)], check=True, capture_output=True)
-        (source / 'sample.nfo').write_text('<movie><title>样例电影</title><year>2026</year><plot>离线影片资料。</plot><actor><name>样例演员</name></actor></movie>', encoding='utf-8')
+        (source / 'sample.nfo').write_text('<movie><title>样例电影</title><year>2026</year><country>日本</country><plot>离线影片资料。</plot><actor><name>样例演员</name></actor></movie>', encoding='utf-8')
         before = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in source.rglob('*') if path.is_file()}
         if media_scan.main([str(source), '--output', str(output)]) != 0:
             raise AssertionError('Packaged scan failed')
@@ -51,6 +71,10 @@ def run():
         destination = base / '副本'
         destination.mkdir()
         plan = OrganizationPlan(report.parent, document)
+        quick_ops = FileOperations(report.parent, MediaActions(document), lambda: plan, document=document)
+        quick_movie = verified_quick_copy(quick_ops, base / '电影省心副本', 4)
+        assert all(item['relative'].startswith('电影/日韩/') for item in quick_movie['items'])
+        assert all(item['state'] == 'pending' for item in plan.snapshot()['items'])
         from media_users import UserCatalog
         users = UserCatalog(output, lambda: document)
         username = users.update({'action': 'create', 'name': '样例用户', 'revision': users.snapshot()['revision']})
@@ -140,6 +164,9 @@ def run():
         photo_report = next(photo_output.glob('scan-*/report.json'))
         photo_document = json.loads(photo_report.read_text(encoding='utf-8'))
         photo_plan = OrganizationPlan(photo_report.parent, photo_document)
+        quick_photo_ops = FileOperations(photo_report.parent, MediaActions(photo_document), lambda: photo_plan, document=photo_document)
+        quick_photo = verified_quick_copy(quick_photo_ops, base / '照片省心副本', 5)
+        assert all(item['relative'].startswith('照片/') for item in quick_photo['items'])
         photo_key = media_id(str(photo_source / 'IMG.JPG'))
         photo_plan.set_states([photo_key], 'include')
         photo_ops = FileOperations(photo_report.parent, MediaActions(photo_document), lambda: photo_plan, document=photo_document)
@@ -169,6 +196,7 @@ def run():
             with urlopen(prefix + 'photos.html', timeout=10) as response:
                 page = response.read()
                 assert b'function openBundleReview' in page and b'bundle-review-dialog' in page
+                assert '省心整理'.encode('utf-8') in page and b'quick-preview' in page
         finally:
             photo_viewer.shutdown()
             photo_viewer.server_close()
@@ -192,4 +220,4 @@ def run():
             server.server_close()
         after = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in source.rglob('*') if path.is_file()}
         assert before == after
-        print('PACKAGED_SMOKE_OK: scan, reuse, FFmpeg frame cache, grouping, attachment audit, batch classification, shared photo interface, film and photo bundle copies, NFO, poster, still, catalog, backup, restore, HTTP, originals unchanged', flush=True)
+        print('PACKAGED_SMOKE_OK: scan, reuse, FFmpeg frame cache, grouping, attachment audit, batch classification, shared photo interface, simple month/region copies, film and photo bundle copies, NFO, poster, still, catalog, backup, restore, HTTP, originals unchanged', flush=True)
