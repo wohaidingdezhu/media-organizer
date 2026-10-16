@@ -75,8 +75,8 @@ def propose_simple_copy(document, snapshot, history, corrections=None):
             art.remove(path)
     photos = {path for path, item in records.items() if item['kind'] == '照片' and path not in art}
     units, skipped, reserved = [], [], set()
-    def skip(paths, reason):
-        skipped.extend({'path': path, 'reason': reason} for path in sorted(set(paths)))
+    def skip(paths, reason, category='review'):
+        skipped.extend({'path': path, 'reason': reason, 'category': category} for path in sorted(set(paths)))
     for group in photo_manifests(document, photos):
         group['items'] = [item for item in group['items'] if not (
             records.get(item['path'], {}).get('kind') == '视频' and
@@ -203,14 +203,20 @@ def propose_simple_copy(document, snapshot, history, corrections=None):
     for index, unit in sorted(enumerate(units), key=lambda pair: min(item['path'] for item in pair[1]['items'])):
         paths = [item['path'] for item in unit['items']]
         reason = None
+        category = 'review'
         if index in conflicts:
             reason = '分组存在来源重叠、目标重名或大小写冲突，请手动核对'
         elif any(path in uncertain for path in paths):
             reason = '曾失败或结果未确认，请先手动核对；不会自动重试'
         elif any(path in completed for path in paths):
-            reason = '本组已有成功处理记录，请核对原目标；再次复制请用手动流程'
+            if all(path in completed for path in paths):
+                reason = '本组全部文件已有成功处理记录，本次不重复处理；当前文件状态需重新扫描确认'
+                category = 'handled'
+            else:
+                reason = '本组仅部分文件有成功处理记录，请逐项核对；不会自动补复制'
         elif any(plans.get(path, {}).get('state') == 'hold' for path in paths):
             reason = '本组媒体已暂缓'
+            category = 'held'
         elif any(plans.get(path, {}).get('target_edited') for path in paths):
             reason = '本组已有手动分类位置，请按原计划手动核对'
         elif len(unit['items']) > 200:
@@ -224,14 +230,16 @@ def propose_simple_copy(document, snapshot, history, corrections=None):
         canonical = [_canonical_target(item['target']) for item in unit['items']]
         if len(set(canonical)) != len(canonical) or any(value.startswith(other+'/') for value in canonical for other in canonical if value != other):
             reason = '本组存在目标重名或文件与目录冲突，请手动核对'
+            category = 'review'
         if reason:
-            skip(paths, reason)
+            skip(paths, reason, category)
         else:
             for item in unit['items']:
                 item['bytes'] = all_records[item['path']]['bytes']
             proposed.append(unit)
         claimed.update(paths)
     skip(set(all_records)-claimed-reserved, '未明确关联的附件或媒体，留待手动核对')
+    skipped = list({item['path']: {'category': 'review', **item} for item in skipped}.values())
     digest = hashlib.sha256(json.dumps({'units': proposed, 'skipped': skipped, 'revision': snapshot['revision']},
                                       sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
-    return {'units': proposed, 'skipped': list({item['path']: item for item in skipped}.values()), 'digest': digest}
+    return {'units': proposed, 'skipped': skipped, 'digest': digest}

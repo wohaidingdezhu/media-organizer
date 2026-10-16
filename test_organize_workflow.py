@@ -15,6 +15,7 @@ from file_operations import FileOperations
 from media_actions import MediaActions, media_id
 from organize_settings import OrganizeSettings
 from organized_results import catalog, perform
+from simple_organize import propose_simple_copy
 from test_library_server import MemoryServer, request
 from test_support import make_symlink
 
@@ -268,6 +269,84 @@ const skipped=Array.from({length:151},(_,i)=>({path:i===150?'=unsafe':'/skip/'+i
             ops._save_job({'id':'a'*24,'data':'x'*(4*1024*1024)})
         self.assertFalse((report/'operations').exists())
         self.assertFalse(list(self.destination.iterdir()))
+
+    def test_repeat_preview_separates_successful_groups_and_deliberate_holds(self):
+        photo=self.file('20210506_ready.jpg'); held=self.file('held.jpg')
+        _, document, plan, _, ops=self.setup_workflow()
+        plan.set_states([media_id(str(held))], 'hold')
+        preview=ops.quick_preview(str(self.destination),True)
+        self.assertEqual(len(preview['items']),1)
+        self.assertEqual(self.wait(ops,ops.start(preview['token']))['status'],'complete')
+        before={item['path']:Path(item['path']).read_bytes() for item in document['files']}
+        preview=ops.quick_preview(str(self.destination),True)
+        self.assertIsNone(preview['token']);self.assertFalse(preview['items'])
+        self.assertEqual({item['path']:item['category'] for item in preview['skipped']},
+                         {str(photo):'handled',str(held):'held'})
+        self.assertEqual(before,{path:Path(path).read_bytes() for path in before})
+
+    def test_partial_and_uncertain_group_history_stays_visible_for_review(self):
+        jpg=self.file('IMG.jpg');raw=self.file('IMG.dng')
+        _, document, plan, _, _=self.setup_workflow()
+        success={'path':str(jpg),'status':'success'}
+        job={'mode':'copy','status':'cancelled','items':[success]}
+        def propose():
+            return propose_simple_copy(document,plan.snapshot(),{'jobs':[job]})
+        partial=propose()
+        self.assertFalse(partial['units'])
+        self.assertEqual({item['category'] for item in partial['skipped']},{'review'})
+        self.assertTrue(all('部分' in item['reason'] for item in partial['skipped']))
+        job['items'].append({'path':str(raw),'status':'success'})
+        self.assertEqual({item['category'] for item in propose()['skipped']},{'handled'})
+        job.update(error='日志未确认',planned_items=[{'path':str(jpg)},{'path':str(raw)}])
+        self.assertEqual({item['category'] for item in propose()['skipped']},{'review'})
+        job.pop('error');job['status']='interrupted'
+        self.assertEqual({item['category'] for item in propose()['skipped']},{'review'})
+
+    def test_destination_collision_is_an_actionable_issue_not_a_success_record(self):
+        self.file('20210506_photo.jpg');_,_,_,_,ops=self.setup_workflow()
+        preview=ops.quick_preview(str(self.destination),True)
+        target=Path(preview['items'][0]['target']);target.parent.mkdir(parents=True);target.write_bytes(b'existing')
+        preview=ops.quick_preview(str(self.destination),True)
+        self.assertFalse(preview['items']);self.assertIsNone(preview['token'])
+        self.assertEqual(preview['skipped'][0]['category'],'review')
+        self.assertEqual(target.read_bytes(),b'existing')
+
+    def test_actual_triage_ui_bulk_selection_filters_busy_state_and_correction(self):
+        node=shutil.which('node');self.assertIsNotNone(node)
+        code=r'''
+const fs=require('fs'),vm=require('vm'),browse=require(process.argv[2]);
+class E{constructor(t,s){this.textContent=s||'';this.children=[];this.value='';this.attrs={};}append(...x){this.children.push(...x);}replaceChildren(...x){this.children=x;}setAttribute(k,v){this.attrs[k]=v;}getAttribute(k){return this.attrs[k];}click(){}querySelectorAll(tag){return this.children.flatMap(e=>[...(e.type==='checkbox'&&tag==='input'?[e]:[]),...e.querySelectorAll(tag)]);}}
+const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new E());return nodes.get(id);};let csv,correction;
+const media=Array.from({length:205},(_,i)=>({path:'/video/'+i+'.mp4',id:'v'+i,kind:'视频'}));media.push({path:'/photo/a.jpg',id:'photo',kind:'照片'});
+const scope={...browse,$,make:(t,c,s)=>new E(t,s),data:{items:media},saving:false,operating:false,executionPreview:{token:'old'},selected:new Set(['unrelated']),mediaIds:Object.fromEntries(media.map(item=>[item.path,item.id])),picture(){},fileSize:String,render(){},error(m){throw Error(m);},Blob,URL:{createObjectURL(b){csv=b;return 'blob:sample';},revokeObjectURL(){}},setTimeout(f){f();},api:async(route,body)=>{if(route==='api/organized-results')return {items:[],message:'records'};if(body?.action==='correct')correction=body;return {destination:'',all_batches:true,revision:'saved'};}};
+vm.createContext(scope);const source=fs.readFileSync(process.argv[1],'utf8');vm.runInContext(source.slice(source.indexOf('// Source-scoped preferences')),scope);
+(async()=>{
+await scope.loadQuickSettings();
+scope.updateQuickIssues({skipped:[],items:[{path:'/named.jpg',relative:'照片/2021/05/待确认.jpg'},{path:'/named.mp4',relative:'电影/日韩/待确认片名/待确认.mp4'},{path:'/unknown.jpg',relative:'照片/待确认日期/a.jpg'},{path:'/unknown.mp4',relative:'电影/待确认地区/a/a.mp4'}]});
+if(!$('quick-issues-counts').textContent.includes('需处理 2 项'))throw Error('filename mistaken for classification uncertainty');
+const skipped=media.map(item=>({path:item.path,reason:'需要核对'}));
+skipped.push({path:'/attachment.nfo',reason:'附件待核对'},{path:'/handled.jpg',reason:'成功',category:'handled'},{path:'/held.jpg',reason:'暂缓',category:'held'});
+scope.mediaIds['/handled.jpg']='handled';scope.mediaIds['/held.jpg']='held';
+scope.updateQuickIssues({items:[],skipped});
+if(!$('quick-issues-counts').textContent.includes('需处理 207 项')||!$('quick-issues-counts').textContent.includes('已有成功记录 1 项'))throw Error('category counts');
+$('quick-issues-select').onclick();if(!$('quick-issues-summary').textContent.includes('已勾选 200 项')||!$('quick-issues-selection-note').textContent.includes('还有 6 项'))throw Error('cross-page bounded selection');
+for(let i=0;i<3;i++)$('quick-issues-next').onclick();if(!$('quick-issues-list').querySelectorAll('input').every(e=>e.checked))throw Error('later pages not selected');
+$('quick-issues-kind').value='照片';$('quick-issues-kind').onchange();if(!$('quick-issues-summary').textContent.includes('已勾选 0 项'))throw Error('hidden selection survived');
+$('quick-issues-select').onclick();if(!$('quick-issues-summary').textContent.includes('已勾选 1 项'))throw Error('photo filter');
+$('quick-issues-kind').value='视频';$('quick-issues-kind').onchange();$('quick-issues-search').value='/video/204.mp4';$('quick-issues-search').oninput();$('quick-issues-select').onclick();
+$('quick-correction-field').value='region';$('quick-correction-field').onchange();$('quick-region').value='日韩';
+if($('quick-region').hidden||!$('quick-month').hidden||!$('quick-category').hidden)throw Error('irrelevant correction fields visible');
+scope.operating=true;scope.syncQuickIssueControls();if(!$('quick-issues-select').disabled||!$('quick-issues-kind').disabled||!$('quick-issues-list').querySelectorAll('input').every(e=>e.disabled))throw Error('busy controls enabled');
+await $('quick-correct').onclick();if(correction)throw Error('busy correction submitted');scope.operating=false;
+await $('quick-correct').onclick();if(correction.ids.join()!=='v204'||correction.value!=='日韩'||scope.executionPreview!==null)throw Error('wrong correction or stale preview');
+if(!scope.selected.has('unrelated'))throw Error('main media selection changed');
+$('quick-issues-kind').value='';$('quick-issues-kind').onchange();$('quick-issues-search').value='';$('quick-issues-search').oninput();$('quick-issues-status').value='handled';$('quick-issues-status').onchange();
+if(!$('quick-issues-select').disabled||!$('quick-issues-list').querySelectorAll('input').every(e=>e.disabled))throw Error('completed records selectable');
+$('quick-issues-export').onclick();const body=await csv.text();if(body.split('\r\n').length!==210||!body.includes('已有成功记录')||!body.includes('/video/0.mp4'))throw Error('filtered export lost records');
+})().catch(e=>{console.error(e);process.exitCode=1;});
+'''
+        result=subprocess.run([node,'-e',code,str(Path(__file__).parent/'management.js'),str(Path(__file__).parent/'management_browse.js')],capture_output=True,text=True,encoding='utf-8',timeout=15)
+        self.assertEqual(result.returncode,0,result.stderr)
 
 
 if __name__=='__main__':unittest.main()
