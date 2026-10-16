@@ -156,31 +156,73 @@ $('execution-start').onclick=async()=>{
   }
 };
 function activeOperation(job){return ['running','external_running'].includes(job.status);}
+const operationViews=new Map();
+function operationItemState(job,item){
+  if(item.status==='processing')return activeOperation(job)?'processing':'attention';
+  return ['failed','unknown'].includes(item.status)?'attention':item.status;
+}
+function operationItemText(job,item){
+  const labels={success:'成功',cancelled:'已取消，原件保留',pending:activeOperation(job)?'尚未开始':'未处理（原位置保留）',failed:'失败',unknown:'结果未确认'};
+  const label=item.status==='processing'?(activeOperation(job)?`正在${({copying:'复制',verifying:'校验副本',verified:'完成校验'})[item.phase]||'处理'}${job.mode==='copy'?'（'+fileSize(item.processed_bytes||0)+' / '+fileSize(item.bytes||0)+'）':''}`:'处理结果待确认'):labels[item.status]||'结果待核对';
+  return `${label}：${item.role?'['+item.role+'] ':''}${item.path}\n→ ${item.trashed_path||item.target}${item.error?'\n'+item.error:''}`;
+}
+function renderOperationRows(view){
+  const query=view.search.value.trim().toLocaleLowerCase(),status=view.filter.value;
+  const rows=view.records.filter(item=>(!status||operationItemState(view.job,item)===status)&&(!query||(item.path+' '+item.target+' '+(item.error||'')).toLocaleLowerCase().includes(query)));
+  const pages=Math.max(1,Math.ceil(rows.length/50));view.page=Math.max(0,Math.min(view.page,pages-1));view.rows.replaceChildren();
+  for(const item of rows.slice(view.page*50,(view.page+1)*50))view.rows.append(make('pre',operationItemState(view.job,item)==='attention'?'warning':'',operationItemText(view.job,item)));
+  if(!rows.length)view.rows.append(make('p','muted','当前筛选没有文件。'));
+  view.position.textContent=`明细 ${rows.length}/${view.records.length} 项 · 第 ${view.page+1}/${pages} 页（每页 50 项）`;
+  view.previous.disabled=view.page===0;view.next.disabled=view.page>=pages-1;
+}
 function operationCard(job){
-  const box=make('div','operation'),state={running:'执行中',external_running:'另一服务执行中',complete:'已完成',stopped:'遇到问题已停止',cancelled:'已安全停止',interrupted:'服务曾中断'};
-  box.append(make('strong','',`${job.quick?(job.queue?'省心整理自动分批 '+job.completed_batches+'/'+job.batch_count:'省心整理'):job.bundle?(job.bundle_kind==='photo'?'照片和配套文件整组复制':'影片和附件整组复制'):job.mode==='copy'?'复制分类':'废纸篓 / 回收站清理'} · ${state[job.status]||job.status} · ${job.items.filter(item=>item.status==='success').length}/${job.total}`),make('p','muted',job.created_at||''));
-  if(activeOperation(job)){
-    const stop=make('button','',job.stop_requested?'正在安全停止…':'安全停止此批次');
-    stop.disabled=!!job.stop_requested;stop.onclick=()=>stopOperation(job.id,stop);box.append(stop);
-    box.append(make('p','muted',job.mode==='copy'?'停止会清理当前未完成临时副本，已完成副本保留；磁盘正在响应时可能需要等待。':'当前文件的系统废纸篓 / 回收站操作会完成，再停止后续项；不会自动恢复已成功项。'));
+  let view=operationViews.get(job.id);
+  if(!view){
+    view={page:0,box:make('div','operation'),title:make('strong'),date:make('p','muted'),counts:make('p'),current:make('pre'),error:make('p','warning'),
+      stop:make('button'),stopHint:make('p','muted'),search:make('input'),filter:make('select'),rows:make('div'),position:make('span'),
+      previous:make('button','','上一页明细'),next:make('button','','下一页明细'),attention:make('button'),
+      unknown:make('p','warning'),incomplete:make('p','warning'),review:make('button','','核对此批次未处理项'),reviewResult:make('div')};
+    view.search.type='search';view.search.value='';view.search.placeholder='搜索本批次路径或错误…';view.search.setAttribute('aria-label','搜索批次 '+job.id+' 的文件');
+    view.filter.setAttribute('aria-label','筛选批次 '+job.id+' 的文件状态');
+    for(const[value,label]of [['','全部明细'],['attention','需要核对'],['processing','处理中'],['pending','未开始'],['success','成功'],['cancelled','已安全取消']]){const option=make('option','',label);option.value=value;view.filter.append(option);}view.filter.value='';
+    const controls=make('div','manage-controls'),pager=make('div','pager');controls.append(view.filter,view.search);pager.append(view.previous,view.position,view.next);
+    view.box.append(view.title,view.date,view.counts,view.current,view.error,view.stop,view.stopHint,view.attention,controls,view.rows,pager,view.unknown,view.review,view.reviewResult,view.incomplete,
+      make('p','muted','记录保存在本次报告的 operations 文件夹。已成功项不会自动撤销；结果未确认时先在 文件管理器 核对。'));
+    view.search.oninput=view.filter.onchange=()=>{view.page=0;renderOperationRows(view);};
+    view.previous.onclick=()=>{view.page--;renderOperationRows(view);};view.next.onclick=()=>{view.page++;renderOperationRows(view);};
+    view.attention.onclick=()=>{view.filter.value='attention';view.search.value='';view.page=0;renderOperationRows(view);};
+    view.stop.onclick=async()=>{view.stopping=true;try{await stopOperation(view.job.id,view.stop);}finally{view.stopping=false;}};
+    view.reviewResult.setAttribute('role','status');view.review.onclick=()=>reviewRemaining(view.job.id,view.review,view.reviewResult);
+    operationViews.set(job.id,view);
   }
-  if(job.error)box.append(make('p','warning',job.error));
-  for(const item of job.items){
-    const text=make('pre','',`${item.status==='success'?'成功':item.status==='cancelled'?'已取消，原件保留':item.status==='processing'?(activeOperation(job)?`正在${({copying:'复制',verifying:'校验副本',verified:'完成校验'})[item.phase]||'处理'}${job.mode==='copy'?'（'+fileSize(item.processed_bytes||0)+' / '+fileSize(item.bytes||0)+'）':''}`:'处理结果待确认'):item.status==='unknown'?'结果未确认':'失败'}：${item.role?'['+item.role+'] ':''}${item.path}\n→ ${item.trashed_path||item.target}${item.error?'\n'+item.error:''}`);
-    box.append(text);
-  }
+  view.job=job;
+  const active=activeOperation(job),state={running:'执行中',external_running:'另一服务执行中',complete:'已完成',stopped:'遇到问题已停止',cancelled:'已安全停止',interrupted:'服务曾中断'};
   const started=new Set(job.items.map(item=>item.path)),pending=(job.planned_items||[]).filter(item=>!started.has(item.path));
-  if(pending.length){
-    const details=make('details'),summary=make('summary','',`${activeOperation(job)?'尚未开始':'未处理'} ${pending.length} 个文件（原位置保留）`);details.append(summary);
-    for(const item of pending)details.append(make('pre','',(item.role?'['+item.role+'] ':'')+item.path+'\n→ '+item.target));box.append(details);
-  }else if(!job.planned_items&&job.total>job.items.length){box.append(make('p','warning',`还有 ${job.total-job.items.length} 项未记录处理结果。旧记录没有完整批次清单，请对照报告核对。`));}
-  if(!job.bundle&&!job.quick&&['cancelled','stopped'].includes(job.status)&&!job.error&&job.planned_items&&(pending.length||job.items.some(item=>item.status==='cancelled'))){
-    const review=make('button','','核对此批次未处理项');review.disabled=operating||saving;
-    const result=make('div');result.setAttribute('role','status');
-    review.onclick=()=>reviewRemaining(job.id,review,result);box.append(review,result);
-  }
-  if((job.bundle||job.quick)&&!activeOperation(job)&&job.status!=='complete')box.append(make('p','warning','整组未全部完成，请按媒体和配套文件逐项核对。已成功副本保留；重新整组预览遇到已有目标会拒绝覆盖，不会自动重试。'));
-  box.append(make('p','muted','记录保存在本次报告的 operations 文件夹。已成功项不会自动撤销；结果未确认时先在 文件管理器 核对。'));return box;
+  view.records=[...job.items,...pending.map(item=>({...item,status:'pending'}))];
+  const counts={success:0,attention:0,processing:0,pending:0,cancelled:0};for(const item of view.records)counts[operationItemState(job,item)]++;
+  view.title.textContent=`${job.quick?(job.queue?'省心整理自动分批 '+job.completed_batches+'/'+job.batch_count:'省心整理'):job.bundle?(job.bundle_kind==='photo'?'照片和配套文件整组复制':'影片和附件整组复制'):job.mode==='copy'?'复制分类':'废纸篓 / 回收站清理'} · ${state[job.status]||job.status} · ${counts.success}/${job.total}`;
+  view.date.textContent=job.created_at||'';
+  view.counts.textContent=`成功 ${counts.success} · 需核对 ${counts.attention} · 处理中 ${counts.processing} · 未开始 ${counts.pending} · 已取消 ${counts.cancelled}`;
+  const current=active?job.items.find(item=>item.status==='processing'):null;
+  view.current.hidden=!current;view.current.textContent=current?operationItemText(job,current):'';
+  view.error.hidden=!job.error;view.error.textContent=job.error||'';
+  view.stop.hidden=view.stopHint.hidden=!active;view.stop.disabled=!!job.stop_requested||!!view.stopping;
+  view.stop.textContent=job.stop_requested?'正在安全停止…':job.queue?'安全停止整个整理任务':'安全停止此批次';
+  view.stopHint.textContent=job.mode==='copy'?'停止会清理当前未完成临时副本，已完成副本保留；磁盘正在响应时可能需要等待。':'当前文件的系统废纸篓 / 回收站操作会完成，再停止后续项；不会自动恢复已成功项。';
+  view.attention.hidden=!counts.attention;view.attention.textContent=`查看需核对的 ${counts.attention} 项`;
+  view.unknown.hidden=!!job.planned_items||job.total<=job.items.length;view.unknown.textContent=`还有 ${job.total-job.items.length} 项未记录处理结果。旧记录没有完整批次清单，请对照报告核对。`;
+  view.review.hidden=!!job.bundle||!!job.quick||!['cancelled','stopped'].includes(job.status)||!!job.error||!job.planned_items||!(pending.length||counts.cancelled);
+  view.review.disabled=operating||saving;view.reviewResult.hidden=view.review.hidden;
+  view.incomplete.hidden=!(job.bundle||job.quick)||active||job.status==='complete';view.incomplete.textContent='整组未全部完成，请按媒体和配套文件逐项核对。已成功副本保留；重新整组预览遇到已有目标会拒绝覆盖，不会自动重试。';
+  renderOperationRows(view);return view.box;
+}
+function renderOperationCards(result){
+  const parent=$('operations'),keys=new Set(result.jobs.map(job=>job.id));
+  for(const key of operationViews.keys())if(!keys.has(key))operationViews.delete(key);
+  const desired=[...(result.warnings||[]).map(warning=>make('p','warning',warning)),...result.jobs.map(operationCard)];
+  if(!desired.length)desired.push(make('p','','本次扫描还没有文件操作记录。'));
+  for(const child of [...parent.children])if(!desired.includes(child))child.remove();
+  desired.forEach((child,index)=>{if(parent.children[index]!==child)parent.insertBefore(child,parent.children[index]||null);});
 }
 async function reviewRemaining(id,button,result){
   if(operating||saving||!data)return;
@@ -215,11 +257,7 @@ async function refreshOperations(){
     operating=result.jobs.some(activeOperation)||(result.warnings||[]).length>0;
     handledTrash=new Set(result.handled.trash);handledCopy=new Set(result.handled.copy);
     $('operations-summary').textContent=`展示最近 ${result.jobs.length}/${result.record_count} 个批次；文件标记核对本报告的全部有效操作记录。成功记录不代表文件现在仍在目标位置，操作后请重新扫描。`;
-    $('operations').replaceChildren();
-    for(const warning of result.warnings||[])$('operations').append(make('p','warning',warning));
-    for(const job of result.jobs){
-      $('operations').append(operationCard(job));
-    }
+    renderOperationCards(result);
     if(wasRetrying)error();
     if(result.jobs.some(activeOperation)){
       $('notice').textContent=result.jobs.some(job=>activeOperation(job)&&job.stop_requested)?'正在安全停止，请保持本机服务运行，等待当前文件结果。':'文件操作执行中，进度会自动更新。请保持本机服务运行；完成前暂停修改计划。';
@@ -230,7 +268,6 @@ async function refreshOperations(){
       if(typeof refreshOrganizedResults==='function')refreshOrganizedResults();
       $('notice').textContent=result.jobs[0].status==='complete'?'操作完成，请重新扫描更新文件清单。':result.jobs[0].status==='cancelled'?'已安全停止，已成功项保留。请查看未处理文件清单，重新选择后预览。':'操作已停止，请查看逐项结果；成功项保留，未确认项先在 文件管理器 核对。';
     }else if(wasRetrying){$('notice').textContent='已恢复连接，没有正在执行的文件操作。';}
-    if(!result.jobs.length&&!(result.warnings||[]).length)$('operations').append(make('p','','本次扫描还没有文件操作记录。'));
     render();
   }catch(err){
     if(revision!==monitorRevision)return;

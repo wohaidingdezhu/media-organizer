@@ -463,9 +463,9 @@ class MovieUpgradeTests(unittest.TestCase):
         node = shutil.which('node')
         code = r"""
 const fs=require('fs'),vm=require('vm');
-class Element{constructor(tag,text=''){this.tag=tag;this.textContent=text;this.children=[];}append(...children){this.children.push(...children);}setAttribute(){} }
+class Element{constructor(tag,text=''){this.tag=tag;this.textContent=text;this.children=[];}append(...children){this.children.push(...children);}replaceChildren(...children){this.children=children;}setAttribute(){} }
 function make(tag,cls,text){return new Element(tag,text||'');}
-function text(node){return [node.textContent,...node.children.map(text)].join(' ');}
+function text(node){return node.hidden?'':[node.textContent,...node.children.map(text)].join(' ');}
 const scope={make,operating:false,saving:false,fileSize:n=>String(n)};vm.createContext(scope);
 vm.runInContext(fs.readFileSync(process.argv[1],'utf8'),scope);
 const summary={videos:2,counts:{subtitle:1,nfo:0,cover:1,still:0},missing:['NFO','剧照'],identity_missing:0,items:[{label:'字幕',path:'C:\\sample\\film.srt'}],skipped:[{path:'orphan.srt',reason:'未唯一关联'}]};
