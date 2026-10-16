@@ -528,7 +528,7 @@ class FileOperations:
                                      'target': str(Path(destination) / entry['target']),
                                      'relative': entry['target'], 'signature': file_signature(info), 'role': entry['role']})
             except (OSError, ValueError) as error:
-                skipped.extend({'path': entry['path'], 'reason': '本组未加入：' + str(error)} for entry in unit['items'])
+                skipped.extend({'path': entry['path'], 'reason': '本组未加入：' + str(error), 'category': 'review'} for entry in unit['items'])
                 continue
             groups.append({'title': unit['title'], 'notes': unit['notes'], 'count': len(prepared)})
             if len(batch) + len(prepared) > 200:
