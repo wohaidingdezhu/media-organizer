@@ -20,7 +20,7 @@ async function openBundleReview(item){
     for(const file of result.items){const row=make('li');row.append(make('strong','',file.label+' · '+fileSize(file.bytes)),make('div','path',file.path));if(file.plan){row.append(make('p','minor','分类计划：'+(names[file.plan.state]||file.plan.state)),make('div','path',file.plan.target||'暂无分类建议'));if(file.plan.blocked_reason)row.append(make('p','warning',file.plan.blocked_reason));}else row.append(make('p','minor','附属文件：整组复制时沿用本组媒体的目录，保留原名。'));$('bundle-review-items').append(row);}
     for(const file of result.skipped){const row=make('li','warning');row.append(make('strong','','未自动关联：'+file.reason),make('div','path',file.path));$('bundle-review-items').append(row);}
     syncBundleReviewControls();
-  for(const id of ['quick-choose','quick-preview','quick-destination'])$(id).disabled=saving||operating;
+  for(const id of ['quick-choose','quick-preview','quick-destination','quick-save-settings','quick-all-batches','quick-correct'])$(id).disabled=saving||operating;
   }catch(err){if(revision!==bundleReviewRevision)return;$('bundle-review-summary').textContent='配套清单未读取，请重试。';$('bundle-review-error').textContent=err.message;$('bundle-review-error').hidden=false;$('bundle-review-retry').hidden=false;}
 }
 $('bundle-review-close').onclick=()=>$('bundle-review-dialog').close();
@@ -60,7 +60,9 @@ function renderPictureViewer(){
 function turnPicture(step){if(pictureCompare)return;const next=pictureIndex+step;if(next<0||next>=pictureSequence.length)return;pictureIndex=next;renderPictureViewer();}
 function syncBrowseControls(){
   syncBundleReviewControls();
-  for(const id of ['quick-choose','quick-preview','quick-destination'])$(id).disabled=saving||operating;
+  for(const id of ['quick-choose','quick-preview','quick-destination','quick-save-settings','quick-all-batches','quick-correct'])$(id).disabled=saving||operating;
+  for(const button of $('organized-items').querySelectorAll?.('button')||[])button.disabled=saving||operating;
+  for(const input of $('quick-issues-list').querySelectorAll?.('input')||[])input.disabled=saving||operating||!mediaIds[input.getAttribute('data-media-path')];
   $('reset-filters').disabled=saving;
   $('batch-folder-save').disabled=saving||operating||!folderPreview||!folderPreview.changed_count;
   $('picture-previous').hidden=$('picture-next').hidden=pictureCompare;
@@ -92,7 +94,43 @@ $('check-disks').onclick=checkDisks;
 async function loadExtras(){const results=await Promise.allSettled([api('api/photos'),api('api/changes')]);if(results[0].status==='fulfilled'){const items=results[0].value.items;photos=new Map(items.map(item=>[item.id,item]));optionsFor('photo-month',items.map(item=>item.month),'全部照片年月');render();}else error('照片清单读取失败：'+results[0].reason.message);if(results[1].status==='fulfilled'){const result=results[1].value;const labels={added:'新增',changed:'发生变化',absent:'本次未扫描到'};$('changes-list').replaceChildren();$('changes-list').append(make('p','',result.message||`对比 ${result.previous_created_at}：新增 ${result.counts.added} · 变化 ${result.counts.changed} · 本次未扫描到 ${result.counts.absent}`));for(const item of result.items.slice(0,200))$('changes-list').append(make('p','path',labels[item.state]+'：'+item.path));if(result.items.length>200)$('changes-list').append(make('p','','仅展示前 200 项。'));}else $('changes-list').textContent='比较失败：'+results[1].reason.message;checkDisks();refreshOperations();refreshBasket();}
 const oldBuildFolders=buildFolders;buildFolders=function(){oldBuildFolders();optionsFor('source-folder',data.items.map(item=>item.source_folder),'全部原文件夹');};
 $('choose-destination').onclick=async()=>{if(operating||saving)return;const button=$('choose-destination');button.disabled=true;try{const result=await api('api/operations/destination',{});if(result.destination)$('destination').value=result.destination;}catch(err){error(err.message);}finally{render();}};
-async function previewOperation(mode,bundle=false,photoBundle=false,quick=false){if(operating||saving||!quick&&!selected.size)return;saving=true;error();$('notice').textContent='正在检查文件和目标位置…';render();try{executionPreview=await api(quick?'api/operations/quick-preview':'api/operations/preview',quick?{destination:$('quick-destination').value.trim()}:{mode,bundle,photo_bundle:photoBundle,ids:[...selected],destination:$('destination').value.trim()});$('execution-title').textContent=quick?'确认省心整理（复制并保留原件）':photoBundle?'确认照片和配套文件整组复制':bundle?'确认影片和附件整组复制':mode==='copy'?'确认复制到分类目录':'确认移到废纸篓 / 回收站';$('execution-summary').textContent=`${executionPreview.items.length} 个文件 · ${fileSize(executionPreview.bytes)} · ${mode==='copy'?'复制后保留原件，目标副本使用 SHA-256 校验':'从原位置移到系统废纸篓 / 回收站，可在文件管理器恢复；占用空间不一定立即释放'}`;$('execution-items').replaceChildren();if(quick){if(!executionPreview.items.length)$('execution-items').append(make('li','warning','没有可执行文件，请查看下方原因。'));if(executionPreview.remaining_count)$('execution-items').append(make('li','warning',`还有 ${executionPreview.remaining_count} 个文件留待下一批检查，完成本批后再次生成预览。`));for(const group of executionPreview.groups||[])$('execution-items').append(make('li','',group.title+' · '+group.count+' 个文件 · '+group.notes.join('；')));}if(photoBundle)$('execution-items').append(make('li','warning','同名视频仅为配对候选，请人工核对。配套文件将使用勾选照片的目录和原文件名；展开项也必须逐项确认。'));for(const group of executionPreview.bundles||[]){const row=make('li');row.append(make('strong','',group.title+(group.edition?' · '+group.edition:'')),make('p','',photoBundle?Object.entries(group.counts).map(([label,count])=>label+' '+count).join(' · '):`${group.videos} 视频 · 字幕 ${group.counts.subtitle} · NFO ${group.counts.nfo} · 封面 ${group.counts.cover} · 剧照 ${group.counts.still}`));if(group.missing&&group.missing.length)row.append(make('p','muted','未发现可选资料：'+group.missing.join('、')));$('execution-items').append(row);}for(const item of executionPreview.items){const row=make('li');row.append(make('strong','',item.role||'媒体'),make('div','path',item.path),make('div','path','→ '+item.target));$('execution-items').append(row);}for(const item of (executionPreview.skipped||[]).slice(0,200)){const row=make('li','warning');row.append(make('strong','','未加入复制：'+item.reason),make('div','path',item.path));$('execution-items').append(row);}if((executionPreview.skipped||[]).length>200)$('execution-items').append(make('li','warning',`共 ${executionPreview.skipped.length} 项未加入，显示前 200 项；可通过下方文件夹和处理记录继续核对。`));$('execution-confirm').disabled=quick&&!executionPreview.token;$('execution-confirm').checked=false;$('execution-start').disabled=true;$('execution-error').hidden=true;$('execution').showModal();$('notice').textContent='检查完成，请在弹窗中核对。';}catch(err){error(err.message);$('notice').textContent='';}finally{saving=false;render();}}
+let executionPage=0;
+function renderExecutionPreview(){
+  const result=executionPreview;if(!result)return;
+  const quick=!!result.quick,photoBundle=result.bundle_kind==='photo',limit=100;
+  $('execution-items').replaceChildren();
+  if(quick){
+    if(!result.items.length)$('execution-items').append(make('li','warning','没有可执行文件，请查看问题清单。'));
+    $('execution-items').append(make('li','',`${result.queue?'一次确认后自动执行':'本次执行'} ${result.batch_count||1} 批 · 未加入 ${result.skipped.length} 项。每组配套文件不拆开。`));
+    if(result.remaining_count)$('execution-items').append(make('li','warning',`还有 ${result.remaining_count} 个文件留待下一批检查；超过单次确认范围的文件须再次预览。`));
+    const totals=new Map();for(const item of result.items){const key=item.relative?item.relative.split('/').slice(0,item.relative.startsWith('电影/')?2:3).join('/'):'分类目录';totals.set(key,(totals.get(key)||0)+1);}
+    for(const [folder,count]of [...totals].slice(0,30))$('execution-items').append(make('li','',folder+' · '+count+' 项'));
+    const notes=[...new Set((result.groups||[]).flatMap(group=>group.notes||[]))];for(const note of notes)$('execution-items').append(make('li','warning',note));
+  }
+  if(photoBundle)$('execution-items').append(make('li','warning','同名视频仅为配对候选，请人工核对。配套文件使用照片目录和原文件名；展开项也须确认。'));
+  for(const group of (result.bundles||[]).slice(0,30)){
+    const row=make('li');row.append(make('strong','',group.title+(group.edition?' · '+group.edition:'')),make('p','',photoBundle?Object.entries(group.counts).map(([label,count])=>label+' '+count).join(' · '):`${group.videos} 视频 · 字幕 ${group.counts.subtitle} · NFO ${group.counts.nfo} · 封面 ${group.counts.cover} · 剧照 ${group.counts.still}`));$('execution-items').append(row);
+  }
+  const rows=[...result.items.map(item=>({...item,copy:true})),...(result.skipped||[])],pages=Math.max(1,Math.ceil(rows.length/limit));executionPage=Math.min(executionPage,pages-1);
+  for(const item of rows.slice(executionPage*limit,(executionPage+1)*limit)){
+    const row=make('li',item.copy?'':'warning');row.append(make('strong','',item.copy?item.role||'媒体':'未加入复制：'+item.reason),make('div','path',item.path));if(item.copy)row.append(make('div','path','→ '+item.target));$('execution-items').append(row);
+  }
+  $('execution-page').textContent=`确认清单第 ${executionPage+1}/${pages} 页 · 共 ${result.items.length} 项复制、${(result.skipped||[]).length} 项未加入`;
+  $('execution-previous').disabled=executionPage===0;$('execution-next').disabled=executionPage>=pages-1;
+}
+$('execution-previous').onclick=()=>{executionPage--;renderExecutionPreview();};$('execution-next').onclick=()=>{executionPage++;renderExecutionPreview();};
+async function previewOperation(mode,bundle=false,photoBundle=false,quick=false){
+  if(operating||saving||!quick&&!selected.size)return;
+  saving=true;error();$('notice').textContent='正在检查文件和目标位置…';render();
+  try{
+    executionPreview=await api(quick?'api/operations/quick-preview':'api/operations/preview',quick?{destination:$('quick-destination').value.trim(),all_batches:$('quick-all-batches').checked}:{mode,bundle,photo_bundle:photoBundle,ids:[...selected],destination:$('destination').value.trim()});
+    $('execution-title').textContent=quick?'确认省心整理（复制并保留原件）':photoBundle?'确认照片和配套文件整组复制':bundle?'确认影片和附件整组复制':mode==='copy'?'确认复制到分类目录':'确认移到废纸篓 / 回收站';
+    $('execution-summary').textContent=`${executionPreview.items.length} 个文件 · ${fileSize(executionPreview.bytes)} · ${mode==='copy'?'复制后保留原件，目标副本使用 SHA-256 校验':'移到系统废纸篓 / 回收站，可通过文件管理器恢复'}`;
+    executionPage=0;renderExecutionPreview();
+    if(quick&&typeof updateQuickIssues==='function')updateQuickIssues(executionPreview);
+    $('execution-confirm').disabled=quick&&!executionPreview.token;$('execution-confirm').checked=false;$('execution-start').disabled=true;$('execution-error').hidden=true;$('execution').showModal();$('notice').textContent='检查完成，请核对整份清单；可翻页查看全部确认项。';
+  }catch(err){executionPreview=null;error(err.message);$('notice').textContent='';}finally{saving=false;render();}
+}
 $('copy-files').onclick=()=>previewOperation('copy');$('trash-files').onclick=()=>previewOperation('trash');
 $('copy-bundles').onclick=()=>previewOperation('copy',true);
 $('copy-photo-bundles').onclick=()=>previewOperation('copy',false,true);
@@ -119,7 +157,7 @@ $('execution-start').onclick=async()=>{
 function activeOperation(job){return ['running','external_running'].includes(job.status);}
 function operationCard(job){
   const box=make('div','operation'),state={running:'执行中',external_running:'另一服务执行中',complete:'已完成',stopped:'遇到问题已停止',cancelled:'已安全停止',interrupted:'服务曾中断'};
-  box.append(make('strong','',`${job.quick?'省心整理':job.bundle?(job.bundle_kind==='photo'?'照片和配套文件整组复制':'影片和附件整组复制'):job.mode==='copy'?'复制分类':'废纸篓 / 回收站清理'} · ${state[job.status]||job.status} · ${job.items.filter(item=>item.status==='success').length}/${job.total}`),make('p','muted',job.created_at||''));
+  box.append(make('strong','',`${job.quick?(job.queue?'省心整理自动分批 '+job.completed_batches+'/'+job.batch_count:'省心整理'):job.bundle?(job.bundle_kind==='photo'?'照片和配套文件整组复制':'影片和附件整组复制'):job.mode==='copy'?'复制分类':'废纸篓 / 回收站清理'} · ${state[job.status]||job.status} · ${job.items.filter(item=>item.status==='success').length}/${job.total}`),make('p','muted',job.created_at||''));
   if(activeOperation(job)){
     const stop=make('button','',job.stop_requested?'正在安全停止…':'安全停止此批次');
     stop.disabled=!!job.stop_requested;stop.onclick=()=>stopOperation(job.id,stop);box.append(stop);
@@ -188,6 +226,7 @@ async function refreshOperations(){
     }else if((result.warnings||[]).length){
       $('notice').textContent='部分操作记录无法读取，暂时锁定文件操作。请先核对记录与 文件管理器，再点击“读取操作记录”。';
     }else if(wasBusy&&result.jobs.length){
+      if(typeof refreshOrganizedResults==='function')refreshOrganizedResults();
       $('notice').textContent=result.jobs[0].status==='complete'?'操作完成，请重新扫描更新文件清单。':result.jobs[0].status==='cancelled'?'已安全停止，已成功项保留。请查看未处理文件清单，重新选择后预览。':'操作已停止，请查看逐项结果；成功项保留，未确认项先在 文件管理器 核对。';
     }else if(wasRetrying){$('notice').textContent='已恢复连接，没有正在执行的文件操作。';}
     if(!result.jobs.length&&!(result.warnings||[]).length)$('operations').append(make('p','','本次扫描还没有文件操作记录。'));
@@ -204,3 +243,61 @@ $('refresh-operations').onclick=refreshOperations;
 // Keep idle windows in sync with batches started elsewhere.
 window.addEventListener('focus',()=>{if(!executionPreview&&!saving){refreshOperations();refreshBasket();}});
 window.addEventListener('pagehide',()=>{monitorRevision++;clearTimeout(operationTimer);});
+
+// Source-scoped preferences, report-only exceptions and successful-copy browser.
+let quickSettings=null,quickIssues=[],quickIssuePage=0,quickIssueSelected=new Set(),organizedItems=[],organizedNode='',organizedPage=0;
+async function loadQuickSettings(){
+  try{quickSettings=await api('api/organize-settings');$('quick-destination').value=quickSettings.destination;$('quick-all-batches').checked=quickSettings.all_batches;$('quick-settings-status').textContent=quickSettings.destination?'已读取当前扫描来源的常用设置。':'设置按扫描来源保存，换来源时分别记住。';}
+  catch(err){$('quick-settings-status').textContent='设置未读取：'+err.message;}
+}
+$('quick-save-settings').onclick=async()=>{
+  if(saving||operating)return;saving=true;render();
+  try{if(!quickSettings)quickSettings=await api('api/organize-settings');quickSettings=await api('api/organize-settings',{action:'preferences',revision:quickSettings.revision,destination:$('quick-destination').value.trim(),all_batches:$('quick-all-batches').checked});$('quick-settings-status').textContent='已记住当前来源的整理设置；每次执行仍会重新校验目标。';}
+  catch(err){error(err.message);}finally{saving=false;render();}
+};
+$('quick-correct').onclick=async()=>{
+  if(saving||operating)return;
+  const ids=quickIssueSelected.size?[...quickIssueSelected].map(path=>mediaIds[path]).filter(Boolean):[...selected];
+  if(!ids.length||ids.length>200){error('请勾选 1–200 个媒体或问题项；附件需核对其主媒体。');return;}
+  const field=$('quick-correction-field').value,value=field==='region'?$('quick-region').value:field==='category'?$('quick-category').value:$('quick-month').value.trim().replace('-','/');
+  saving=true;render();try{if(!quickSettings)quickSettings=await api('api/organize-settings');quickSettings=await api('api/organize-settings',{action:'correct',revision:quickSettings.revision,ids,field,value});executionPreview=null;quickIssueSelected.clear();$('quick-settings-status').textContent='分类修正已保存，原件未修改。请重新生成整理预览。';renderQuickIssues();}
+  catch(err){error(err.message);}finally{saving=false;render();}
+};
+function updateQuickIssues(preview){
+  const values=new Map((preview.skipped||[]).map(item=>[item.path,item]));
+  for(const item of preview.items)if((item.relative||'').includes('待确认'))values.set(item.path,{path:item.path,reason:'分类依据不明确：'+item.relative});
+  quickIssues=[...values.values()];quickIssuePage=0;quickIssueSelected.clear();
+  const reasons=[...new Set(quickIssues.map(item=>item.reason))];$('quick-issues-reason').replaceChildren();const all=make('option','','全部原因');all.value='';$('quick-issues-reason').append(all);
+  for(const reason of reasons){const option=make('option','',reason);option.value=reason;$('quick-issues-reason').append(option);}renderQuickIssues();
+}
+function renderQuickIssues(){
+  const query=$('quick-issues-search').value.trim().toLocaleLowerCase(),reason=$('quick-issues-reason').value;
+  const rows=quickIssues.filter(item=>(!reason||item.reason===reason)&&(!query||(item.path+' '+item.reason).toLocaleLowerCase().includes(query))),pages=Math.max(1,Math.ceil(rows.length/50));quickIssuePage=Math.max(0,Math.min(quickIssuePage,pages-1));$('quick-issues-list').replaceChildren();
+  for(const item of rows.slice(quickIssuePage*50,(quickIssuePage+1)*50)){
+    const row=make('div','operation'),label=make('label'),check=make('input');check.type='checkbox';check.checked=quickIssueSelected.has(item.path);check.disabled=!mediaIds[item.path]||saving||operating;check.setAttribute('aria-label','选择问题项 '+item.path);check.setAttribute('data-media-path',item.path);check.onchange=()=>{if(check.checked){if(quickIssueSelected.size>=200){check.checked=false;error('一次最多修正 200 个问题媒体。');return;}quickIssueSelected.add(item.path);}else quickIssueSelected.delete(item.path);renderQuickIssues();};label.append(check,make('strong','',item.reason));row.append(label,make('div','path',item.path));$('quick-issues-list').append(row);
+  }
+  $('quick-issues-summary').textContent=`问题 ${rows.length}/${quickIssues.length} 项 · 第 ${quickIssuePage+1}/${pages} 页 · 已勾选 ${quickIssueSelected.size} 项`;
+  $('quick-issues-previous').disabled=quickIssuePage===0;$('quick-issues-next').disabled=quickIssuePage>=pages-1;$('quick-issues-export').disabled=!quickIssues.length;
+}
+$('quick-issues-search').oninput=$('quick-issues-reason').onchange=()=>{quickIssuePage=0;renderQuickIssues();};$('quick-issues-previous').onclick=()=>{quickIssuePage--;renderQuickIssues();};$('quick-issues-next').onclick=()=>{quickIssuePage++;renderQuickIssues();};
+$('quick-issues-export').onclick=()=>{
+  const cell=value=>{let text=String(value);if(/^[\s]*[=+@-]/.test(text))text="'"+text;return '"'+text.replaceAll('"','""')+'"';};
+  const body='\ufeff'+[['原路径','原因'],...quickIssues.map(item=>[item.path,item.reason])].map(row=>row.map(cell).join(',')).join('\r\n');
+  const url=URL.createObjectURL(new Blob([body],{type:'text/csv;charset=utf-8'})),link=make('a');link.href=url;link.download='整理问题清单.csv';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+};
+async function refreshOrganizedResults(){
+  try{const result=await api('api/organized-results');organizedItems=result.items;$('organized-message').textContent=result.message+' 缩略图沿用扫描预览。';renderOrganizedResults();}catch(err){$('organized-summary').textContent='结果未读取：'+err.message;}
+}
+function renderOrganizedResults(){
+  const mapped=organizedItems.map(item=>({...item,source_folder:item.folder})),tree=managementFolderTree(mapped,'result'),node=tree.get(organizedNode)||tree.get('');organizedNode=node.key;
+  $('organized-folders').replaceChildren();for(const key of node.children){const child=tree.get(key),button=make('button','folder-card'),label=child.parts.length===1?child.name.split(/[\\/]/).filter(Boolean).pop()||child.name:child.name;button.append(make('strong','','📁 '+label),make('span','',child.path),make('span','',child.count+' 项'));button.onclick=()=>{organizedNode=key;organizedPage=0;renderOrganizedResults();};$('organized-folders').append(button);}
+  const query=$('organized-search').value.trim().toLocaleLowerCase(),rows=mapped.filter(item=>(query?managementFolderContains(item,node,'result',true):node.key&&managementFolderContains(item,node,'result',false))&&(!query||(item.target+' '+item.name).toLocaleLowerCase().includes(query))),pages=Math.max(1,Math.ceil(rows.length/50));organizedPage=Math.max(0,Math.min(organizedPage,pages-1));$('organized-items').replaceChildren();
+  for(const item of rows.slice(organizedPage*50,(organizedPage+1)*50)){
+    const card=make('article','photo-card');if(item.kind==='照片')picture({...item,id:mediaIds[item.path]},card,false);card.append(make('strong','',item.name),make('div','path',item.target),make('p','muted',item.kind+' · '+fileSize(item.bytes)));
+    if(item.can_open)for(const[action,label]of[['open',item.kind==='照片'?'查看整理照片':'播放整理视频'],['reveal','打开所在文件夹']]){const button=make('button','',label);button.disabled=operating;button.onclick=async()=>{button.disabled=true;try{await api('api/organized-results/action',{id:item.id,action});}catch(err){error(err.message);}finally{button.disabled=operating;}};card.append(button);}else card.append(make('p','muted','附件或旧副本记录，请通过主媒体定位文件夹。'));$('organized-items').append(card);
+  }
+  $('organized-summary').textContent=(node.path||'全部整理结果')+` · 共 ${node.count} 项 · 当前层或搜索 ${rows.length} 项 · 第 ${organizedPage+1}/${pages} 页`;
+  $('organized-up').disabled=!node.key;$('organized-previous').disabled=organizedPage===0;$('organized-next').disabled=organizedPage>=pages-1;
+}
+$('organized-refresh').onclick=refreshOrganizedResults;$('organized-root').onclick=()=>{organizedNode='';organizedPage=0;renderOrganizedResults();};$('organized-up').onclick=()=>{const tree=managementFolderTree(organizedItems.map(item=>({...item,source_folder:item.folder})),'result');organizedNode=(tree.get(organizedNode)||{}).parent||'';organizedPage=0;renderOrganizedResults();};$('organized-search').oninput=()=>{organizedPage=0;renderOrganizedResults();};$('organized-previous').onclick=()=>{organizedPage--;renderOrganizedResults();};$('organized-next').onclick=()=>{organizedPage++;renderOrganizedResults();};
+loadQuickSettings();refreshOrganizedResults();renderQuickIssues();

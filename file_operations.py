@@ -200,9 +200,22 @@ def copy_one(media, identifier, destination, relative, expected, dest_identity=N
         check_cancelled()
         # Exclusive publication: an existing file is never replaced.
         os.publish(temporary, parts[-1], parent)
+        published = file_signature(os.stat(parts[-1], dir_fd=parent, follow_symlinks=False))
+        # POSIX publication creates a hard link: removing the temporary name
+        # changes ctime. Capture the final identity after that cleanup; Windows
+        # has already renamed the temporary file exclusively.
+        try:
+            os.unlink(temporary, dir_fd=parent)
+        except FileNotFoundError:
+            pass
+        temporary_created = False
+        target_signature = file_signature(os.stat(parts[-1], dir_fd=parent, follow_symlinks=False))
+        if published[:4] != target_signature[:4]:
+            raise OutcomeUnknown('已发布副本的身份发生变化，请先核对目标')
         if progress:
             progress(verified, "verified")
-        return {"target": str(Path(destination) / relative), "sha256": expected_hash}
+        return {"target": str(Path(destination) / relative), "sha256": expected_hash,
+                "target_signature": target_signature}
     finally:
         try:
             if temporary_created:
@@ -273,7 +286,8 @@ def trash_one(media, identifier, expected):
 
 
 class FileOperations:
-    def __init__(self, report_dir, media, plan, document=None):
+    def __init__(self, report_dir, media, plan, document=None, options=None):
+        self.options = options
         self.report_dir, self.media, self.plan = Path(report_dir), media, plan
         self.lock = _STATE_LOCK
         self.report_key = os.path.abspath(self.report_dir)
@@ -480,19 +494,29 @@ class FileOperations:
             self.previews[preview["token"]] = preview
         return {key: value for key, value in preview.items() if key not in {"expires", "dest_identity", "_media", "selected_ids"}}
 
-    def quick_preview(self, destination):
+    def _simple_proposal(self, document, snapshot):
+        from simple_organize import propose_simple_copy
+        options = self.options() if callable(self.options) else {}
+        return propose_simple_copy(document, snapshot, self._history(), options.get('corrections', {}))
+
+    def quick_preview(self, destination, all_batches=False):
         """Prepare whole groups without changing manual review decisions."""
         from movie_bundle import BundleActions, SIDECARS
         from simple_organize import propose_simple_copy
         document = self.document() if callable(self.document) else self.document
         if not isinstance(document, dict):
             raise ValueError('省心整理需要完整扫描报告')
-        proposal = propose_simple_copy(document, self.plan().snapshot(), self._history())
+        if type(all_batches) is not bool:
+            raise ValueError('自动分批选项无效')
+        from copy_queue import MAX_QUEUE
+        proposal = self._simple_proposal(document, self.plan().snapshot())
         identity, available = self._copy_destination(destination)
         media = BundleActions(self.media, document, SIDECARS | {'xmp', 'aae'}, '媒体附件')
         items, groups, skipped, remaining = [], [], list(proposal['skipped']), 0
+        batches, batch = [], []
+        limit = MAX_QUEUE if all_batches else 200
         for unit in proposal['units']:
-            if remaining or len(items) + len(unit['items']) > 200:
+            if remaining or len(items) + len(unit['items']) > limit:
                 remaining += len(unit['items'])
                 continue
             prepared = []
@@ -507,17 +531,24 @@ class FileOperations:
                 skipped.extend({'path': entry['path'], 'reason': '本组未加入：' + str(error)} for entry in unit['items'])
                 continue
             groups.append({'title': unit['title'], 'notes': unit['notes'], 'count': len(prepared)})
+            if len(batch) + len(prepared) > 200:
+                batches.append(batch)
+                batch = []
+            batch.extend(prepared)
             items.extend(prepared)
+        if batch:
+            batches.append(batch)
         total = sum(item['bytes'] for item in items)
         if available < total:
             raise ValueError('目标磁盘可用空间不足，请更换目标或通过手动流程选择较少文件')
         preview = {'mode': 'copy', 'quick': True, 'bundle': False, 'bundle_kind': None,
                    'items': items, 'groups': groups, 'skipped': skipped, 'remaining_count': remaining,
-                   'bytes': total, 'destination': destination, 'available_bytes': available}
+                   'bytes': total, 'destination': destination, 'available_bytes': available,
+                   'queue': len(batches) > 1, 'batch_count': len(batches)}
         if not items:
             return {**preview, 'token': None}
         preview.update(token=secrets.token_urlsafe(24), dest_identity=identity,
-                       expires=time.monotonic() + 600, _media=media, _quick_digest=proposal['digest'])
+                       expires=time.monotonic() + 600, _media=media, _quick_digest=proposal['digest'], _batches=batches)
         with self.lock:
             self.previews = {key: value for key, value in self.previews.items() if value['expires'] > time.monotonic()}
             self.previews[preview['token']] = preview
@@ -529,7 +560,7 @@ class FileOperations:
         if preview.get('quick'):
             from simple_organize import propose_simple_copy
             document = self.document() if callable(self.document) else self.document
-            if propose_simple_copy(document, snapshot, self._history())['digest'] != preview['_quick_digest']:
+            if self._simple_proposal(document, snapshot)['digest'] != preview['_quick_digest']:
                 raise ValueError('分类依据、核对状态或操作记录已变化，请重新预览')
         elif preview.get('bundle'):
             from movie_bundle import bundle_selection
@@ -550,6 +581,9 @@ class FileOperations:
             check_target(preview['destination'], item['relative'])
 
     def _save_job(self, job):
+        body = json.dumps(job, ensure_ascii=False, allow_nan=False, indent=2).encode('utf-8')
+        if len(body) > 4 * 1024 * 1024:
+            raise ValueError('操作记录超过大小上限，已停止，请缩小整理范围')
         directory = self.report_dir / "operations"
         if directory.is_symlink():
             raise ValueError("操作记录目录不能是符号链接")
@@ -559,8 +593,8 @@ class FileOperations:
         temporary = ".job-" + secrets.token_hex(12)
         try:
             fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=descriptor)
-            with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                json.dump(job, stream, ensure_ascii=False, indent=2)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(body)
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, name, src_dir_fd=descriptor, dst_dir_fd=descriptor)
@@ -594,6 +628,7 @@ class FileOperations:
                 raise ValueError("有文件操作正在执行，请等待完成")
             job = {"id": secrets.token_hex(12), "mode": preview["mode"], "status": "running",
                    "created_at": time.strftime("%Y-%m-%d %H:%M:%S"), "items": [], "total": len(preview["items"]),
+                   "destination": preview.get('destination'),
                    "bundle": preview.get("bundle", False), "quick": preview.get("quick", False),
                    "bundle_kind": preview.get('bundle_kind'),
                    "planned_items": [{key: item[key] for key in ("path", "target", "bytes", "role")} for item in preview["items"]]}
@@ -609,11 +644,19 @@ class FileOperations:
                 os.ftruncate(descriptor, 0)
                 os.write(descriptor, job["id"].encode("ascii"))
                 os.fsync(descriptor)
+                batches = None
+                if preview.get('queue'):
+                    from copy_queue import prepare
+                    batches = prepare(self, job, preview)
                 self._save_job(job)  # Refuse action if a journal cannot be written.
                 self.previews.pop(token)
                 self.jobs[job["id"]] = job
                 _ACTIVE_JOBS[(self.report_key, job["id"])] = job
-                threading.Thread(target=self._run, args=(job, preview, descriptor), daemon=True).start()
+                if batches is not None:
+                    from copy_queue import run
+                    threading.Thread(target=run, args=(self, job, batches, descriptor), daemon=True).start()
+                else:
+                    threading.Thread(target=self._run, args=(job, preview, descriptor), daemon=True).start()
             except BaseException:
                 _ACTIVE_JOBS.pop((self.report_key, job["id"]), None)
                 self.jobs.pop(job["id"], None)
@@ -623,10 +666,10 @@ class FileOperations:
                 raise
             return json.loads(json.dumps(job))
 
-    def _run(self, job, preview, batch_descriptor):
+    def _run(self, job, preview, batch_descriptor, release_batch=True, stop_id=None):
         final_status = "stopped"
         def cancelled():
-            requested = self._stop_requested(job["id"])
+            requested = self._stop_requested(stop_id or job["id"])
             if requested:
                 with self.lock:
                     job["stop_requested"] = True
@@ -696,10 +739,11 @@ class FileOperations:
                     job.update(status="stopped", error="操作记录写入失败，请先核对原文件和目标位置：" + str(error))
                 finally:
                     _ACTIVE_JOBS.pop((self.report_key, job["id"]), None)
-                    os.close(batch_descriptor)
-                    _BATCH_LOCK.release()
+                    if release_batch:
+                        os.close(batch_descriptor)
+                        _BATCH_LOCK.release()
 
-    def _read_job(self, identifier):
+    def _read_job(self, identifier, allow_queue=True):
         descriptor = open_directory(self.report_dir / "operations")
         try:
             fd = os.open(identifier + ".json", FLAGS, dir_fd=descriptor)
@@ -709,13 +753,21 @@ class FileOperations:
                 job = json.load(stream)
         finally:
             os.close(descriptor)
+        if not isinstance(job, dict) or job.get('id') != identifier:
+            raise ValueError('操作记录无效')
+        if job.get('queue'):
+            if not allow_queue or job.get('queue_parent'):
+                raise ValueError('分批任务不能相互嵌套')
+            from copy_queue import expand
+            return expand(self, job)
         if (not isinstance(job, dict) or job.get("id") != identifier
+                or job.get('queue_parent') is not None and (not isinstance(job['queue_parent'], str) or len(job['queue_parent']) != 24 or any(char not in '0123456789abcdef' for char in job['queue_parent']))
                 or 'quick' in job and (type(job['quick']) is not bool or job['quick'] and (job.get('mode') != 'copy' or job.get('bundle')))
                 or 'bundle' in job and (type(job['bundle']) is not bool or job['bundle'] and job.get('mode') != 'copy')
                 or 'bundle_kind' in job and (job['bundle_kind'] not in (None, 'movie', 'photo')
                     or bool(job['bundle_kind']) != bool(job.get('bundle')))
                 or job.get("mode") not in {"copy", "trash"}
-                or job.get("status") not in {"running", "complete", "stopped", "cancelled"}
+                or job.get("status") not in {"running", "complete", "stopped", "cancelled"} and not (job.get("queue_parent") and job.get("status") == "queued")
                 or type(job.get("total")) is not int or not 1 <= job["total"] <= 200
                 or not isinstance(job.get("items"), list) or len(job["items"]) > job["total"]
                 or any(not isinstance(item, dict) or item.get("status") not in {"processing", "success", "failed", "unknown", "cancelled"}
@@ -727,7 +779,7 @@ class FileOperations:
                 or any(not isinstance(item, dict) or not isinstance(item.get("path"), str)
                        or not isinstance(item.get("target"), str) for item in planned)):
             raise ValueError("批次文件清单无效")
-        if any('role' in item and (not isinstance(item['role'], str) or item['role'] not in {'媒体', '影片', '字幕', 'NFO', '封面', '剧照', '照片', 'RAW', '配对视频候选', 'XMP', 'AAE'})
+        if any('role' in item and (not isinstance(item['role'], str) or item['role'] not in {'媒体', '影片', '家庭视频', '字幕', 'NFO', '封面', '剧照', '照片', 'RAW', '配对视频候选', 'XMP', 'AAE'})
                for item in job['items'] + (planned or [])):
             raise ValueError('操作记录文件类型无效')
         started = {item["path"]: item["target"] for item in job["items"]}
@@ -747,11 +799,17 @@ class FileOperations:
                 job = json.loads(json.dumps(self.jobs[identifier]))
                 if job["status"] == "running":
                     job["stop_requested"] = self._stop_requested(identifier)
+                if job.get("queue"):
+                    from copy_queue import expand
+                    job = expand(self, job)
                 return job
             active = _ACTIVE_JOBS.get((self.report_key, identifier))
             if active is not None:
                 job = json.loads(json.dumps(active))
                 job["stop_requested"] = self._stop_requested(identifier)
+                if job.get("queue"):
+                    from copy_queue import expand
+                    job = expand(self, job)
                 return job
             job = self._read_job(identifier)
             if job.get("status") == "running":
@@ -781,6 +839,11 @@ class FileOperations:
         jobs, warnings = [], []
         for identifier in names:
             try:
+                entry = self._read_job(identifier)
+                if entry.get('queue_parent'):
+                    if entry['queue_parent'] not in names:
+                        raise ValueError('子批次缺少主任务记录，请核对')
+                    continue
                 jobs.append(self.snapshot(identifier))
             except (OSError, ValueError, TypeError) as error:
                 warnings.append("记录 " + identifier + " 读取失败：" + str(error))

@@ -16,7 +16,7 @@ from file_operations import maintenance_when_idle, open_directory
 MAX_ARCHIVE = 64 * 1024 * 1024
 MAX_TOTAL = 512 * 1024 * 1024
 MAX_FILES = 10000
-ROOT_FILES = {'library-tags.json', 'library-notes.json', 'library-index.json', 'workspace-settings.json', 'library-grouping.json', 'media-users.json'}
+ROOT_FILES = {'library-tags.json', 'library-notes.json', 'library-index.json', 'workspace-settings.json', 'library-grouping.json', 'media-users.json', 'organize-settings.json'}
 REPORT_FILES = {'report.json', 'report.html', 'library.html', 'inventory.csv', 'duplicates.csv', 'similar.csv',
                 'video_groups.csv', 'sidecars.csv', 'folder_names.csv', 'classification.csv', 'issues.csv',
                 'library_issues.csv', 'organization-plan.json', 'cleanup-basket.json'}
@@ -143,9 +143,12 @@ def validate_backup(body):
         if len(files['media-users.json']) > MAX_BYTES:
             raise ValueError('用户分类资料超过大小上限')
         validate_users(json.loads(files['media-users.json']))
-    for name, limit in [('library-tags.json', 1024 * 1024), ('library-notes.json', 4 * 1024 * 1024), ('workspace-settings.json', 65536), ('library-grouping.json', 16 * 1024 * 1024)]:
+    for name, limit in [('library-tags.json', 1024 * 1024), ('library-notes.json', 4 * 1024 * 1024), ('workspace-settings.json', 65536), ('library-grouping.json', 16 * 1024 * 1024), ('organize-settings.json', 16 * 1024 * 1024)]:
         if name in files and len(files[name]) > limit:
             raise ValueError(name + ' 超过应用资料大小上限')
+    if 'organize-settings.json' in files:
+        from organize_settings import validate_settings
+        validate_settings(json.loads(files['organize-settings.json']))
     if 'library-grouping.json' in files:
         from movie_grouping import validate_assignments
         validate_assignments(json.loads(files['library-grouping.json']))

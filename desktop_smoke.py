@@ -13,19 +13,25 @@ def verified_quick_copy(operations, destination, expected):
     """Exercise the source and frozen app with the same confirmed workflow."""
     import time
     destination.mkdir()
-    preview = operations.quick_preview(str(destination))
+    preview = operations.quick_preview(str(destination), True)
     assert len(preview['items']) == expected and preview['quick']
     assert not list(destination.iterdir())
     job = operations.start(preview['token'])
-    deadline = time.monotonic() + 15
+    deadline = time.monotonic() + 120
     while time.monotonic() < deadline:
         result = operations.snapshot(job['id'])
         if result['status'] != 'running':
             break
         time.sleep(.02)
+    if result['status'] == 'running':
+        operations.request_stop(job['id'])
+        stop_deadline = time.monotonic() + 15
+        while time.monotonic() < stop_deadline and operations.snapshot(job['id'])['status'] == 'running':
+            time.sleep(.05)
+        raise AssertionError('Generated confirmed queue timed out; requested safe stop')
     assert result['status'] == 'complete' and result['quick'], result
     assert all(Path(item['target']).read_bytes() == Path(item['path']).read_bytes() for item in preview['items'])
-    assert not operations.quick_preview(str(destination))['items']
+    assert not operations.quick_preview(str(destination), True)['items']
     return preview
 
 
@@ -200,6 +206,28 @@ def run():
         finally:
             photo_viewer.shutdown()
             photo_viewer.server_close()
+        # The frozen app must retain queue, settings and successful-copy modules.
+        queue_source, queue_output = base / '分批样例', base / 'queue-reports'
+        queue_source.mkdir()
+        sample_image = (source / 'poster.png').read_bytes()
+        for number in range(201):
+            (queue_source / ('20260101_%03d.png' % number)).write_bytes(sample_image)
+        assert media_scan.main([str(queue_source), '--output', str(queue_output), '--no-image-metadata']) == 0
+        queue_report = next(queue_output.glob('scan-*/report.json'))
+        queue_document = json.loads(queue_report.read_text(encoding='utf-8'))
+        queue_plan = OrganizationPlan(queue_report.parent, queue_document)
+        from organize_settings import OrganizeSettings
+        preferences = OrganizeSettings(queue_output, queue_document)
+        preferences.update({'action': 'preferences', 'revision': preferences.snapshot()['revision'],
+                            'destination': str(base / '分批副本'), 'all_batches': True})
+        assert OrganizeSettings(queue_output, queue_document).snapshot()['all_batches']
+        queue_ops = FileOperations(queue_report.parent, MediaActions(queue_document), lambda: queue_plan,
+                                   document=queue_document, options=preferences.snapshot)
+        queue_preview = verified_quick_copy(queue_ops, base / '分批副本', 201)
+        assert queue_preview['queue'] and queue_preview['batch_count'] == 2
+        from organized_results import catalog as result_catalog
+        assert len(result_catalog(queue_ops)) == 201 and all(item['can_open'] for item in result_catalog(queue_ops))
+        assert all(path.read_bytes() == sample_image for path in queue_source.iterdir())
         assert len(catalog(output)['items']) == 3
         files, _ = validate_backup(export_backup(output))
         restored = restore_backup(output, files)
@@ -220,4 +248,4 @@ def run():
             server.server_close()
         after = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in source.rglob('*') if path.is_file()}
         assert before == after
-        print('PACKAGED_SMOKE_OK: scan, reuse, FFmpeg frame cache, grouping, attachment audit, batch classification, shared photo interface, simple month/region copies, film and photo bundle copies, NFO, poster, still, catalog, backup, restore, HTTP, originals unchanged', flush=True)
+        print('PACKAGED_SMOKE_OK: scan, reuse, FFmpeg frame cache, grouping, attachment audit, batch classification, shared photo interface, simple month/region copies, confirmed multi-batch queue, settings, copy result identities, film and photo bundle copies, NFO, poster, still, catalog, backup, restore, HTTP, originals unchanged', flush=True)
