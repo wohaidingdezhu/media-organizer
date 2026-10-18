@@ -14,10 +14,15 @@ function copy(id,parts,name,kind='照片',bytes=10){
   return {id,path:'/generated/'+id,name,folder,result_parts:parts,target:folder+separator+name,kind,bytes,can_open:kind==='照片'||kind==='视频'};
 }
 class E {
-  constructor(tag,text=''){this.tag=tag;this.textContent=text;this.children=[];this.value='';this.attrs={};this.disabled=false;}
+  constructor(tag,text=''){this.tag=tag;this.textContent=text;this.children=[];this.value='';this.attrs={};this.disabled=false;this.events={};this.open=false;}
   append(...values){this.children.push(...values);}
   replaceChildren(...values){this.children=values;}
   setAttribute(key,value){this.attrs[key]=value;}
+  getAttribute(key){return this.attrs[key];}
+  addEventListener(name,handler){this.events[name]=handler;}
+  showModal(){this.open=true;}
+  close(){this.open=false;this.events.close?.();}
+  querySelectorAll(tag){return this.children.flatMap(child=>[...(child.tag===tag?[child]:[]),...child.querySelectorAll(tag)]);}
 }
 const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new E('div'));return nodes.get(id);};
 const text=node=>[node.textContent,...node.children.map(text)].join(' ');
@@ -29,7 +34,7 @@ const scope={...browse,$,make:(tag,cls,value)=>new E(tag,value||''),organizedIte
   calls.push({route,body});if(failure)throw Error(failure);return {opened:true};
 }};
 vm.createContext(scope);const source=fs.readFileSync(process.argv[2],'utf8');
-vm.runInContext(source.slice(source.indexOf('async function refreshOrganizedResults'),source.indexOf('loadQuickSettings();refreshOrganizedResults();renderQuickIssues();')),scope);
+vm.runInContext(source.slice(source.indexOf('async function openOrganizedCopy'),source.indexOf('loadQuickSettings();refreshOrganizedResults();renderQuickIssues();')),scope);
 const render=()=>scope.renderOrganizedResults();
 '''
 
@@ -92,7 +97,7 @@ await scope.refreshOrganizedResults();assert.equal($('organized-search').value,'
 $('organized-search').value='';$('organized-search').oninput();$('organized-sort').value='size';$('organized-sort').onchange();assert(cards()[0].children[0].textContent==='video.mp4');
 const play=cards()[0].children.find(e=>e.textContent==='播放整理视频');scope.operating=true;await play.onclick();assert.equal(calls.length,0);scope.operating=false;await play.onclick();assert.equal(calls[0].body.id,'v');assert.equal(calls[0].body.action,'open');
 const reveal=cards()[0].children.find(e=>e.textContent==='打开所在文件夹');failure='副本已变化';await reveal.onclick();assert.equal(calls[2].error,'副本已变化');assert(!reveal.disabled);
-const old=cards().find(card=>text(card).includes('old.jpg'));assert(!old.children.some(e=>e.tag==='button'));
+const old=cards().find(card=>text(card).includes('old.jpg'));assert.equal(old.children.filter(e=>e.tag==='button').length,1);assert(old.children[0].attrs['aria-label'].startsWith('预览整理照片'));
 $('organized-up').onclick();assert.equal($('organized-search').value,'');assert.equal($('organized-sort').value,'size');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 ''')
