@@ -82,3 +82,22 @@ function createManagementFolderBrowser({host,items,locked,changed,selectable,sel
   return {prepare,render,matches:item=>managementFolderContains(item,active,mode,descendants),reset(){key='';folderPage=0;active=null;prepared=false;descendants=true;within.checked=true;folderSearch.value='';folderSort.value='name';locations.clear();},};
 }
 if(typeof module!=='undefined'&&module.exports)Object.assign(module.exports,{managementFolderParts,managementFolderTree,managementFolderContains,managementFolderRows,createManagementFolderBrowser});
+
+// Successful copy records only; filtering never reads the destination disk.
+function organizedResultView(items, {key='',kind='',query='',order='name',descendants=true}={}) {
+  const tree=managementFolderTree(items,'result'),active=tree.get(key)||tree.get('');
+  const typed=items.filter(item=>!kind||(kind==='attachment'?!['照片','视频'].includes(item.kind):item.kind===kind));
+  const filteredTree=managementFolderTree(typed,'result'),node=filteredTree.get(active.key);
+  const folders=(node?.children||[]).map(child=>filteredTree.get(child));
+  const needle=query.trim().normalize('NFC').toLocaleLowerCase('zh-CN');
+  const rows=typed.filter(item=>managementFolderContains(item,active,'result',!!needle||descendants)&&
+    (!needle||(item.target+' '+item.name).normalize('NFC').toLocaleLowerCase('zh-CN').includes(needle)));
+  const size=item=>Number.isSafeInteger(item.bytes)&&item.bytes>=0?item.bytes:0;
+  const compare=(a,b)=>a.localeCompare(b,'zh-CN',{numeric:true})||(a<b?-1:a>b?1:0);
+  rows.sort((a,b)=>(order==='size'?size(b)-size(a):0)||compare(a.name||'',b.name||'')||compare(a.target,b.target));
+  folders.sort((a,b)=>(order==='size'?b.bytes-a.bytes:0)||compare(a.name,b.name)||compare(a.path,b.path));
+  const ancestors=[];for(let node=active;node;node=tree.get(node.parent))ancestors.unshift(node);
+  return {active,folders,rows,ancestors,bytes:rows.reduce((total,item)=>total+size(item),0),
+    photos:rows.filter(item=>item.kind==='照片').length,videos:rows.filter(item=>item.kind==='视频').length};
+}
+if(typeof module!=='undefined'&&module.exports)Object.assign(module.exports,{organizedResultView});
