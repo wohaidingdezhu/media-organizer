@@ -283,7 +283,7 @@ window.addEventListener('focus',()=>{if(!executionPreview&&!saving){refreshOpera
 window.addEventListener('pagehide',()=>{monitorRevision++;clearTimeout(operationTimer);});
 
 // Source-scoped preferences, report-only exceptions and successful-copy browser.
-let quickSettings=null,quickIssuesLoaded=false,quickIssues=[],quickIssuePage=0,quickIssueSelected=new Set(),organizedItems=[],organizedNode='',organizedPage=0;
+let quickSettings=null,quickIssuesLoaded=false,quickIssues=[],quickIssuePage=0,quickIssueSelected=new Set(),organizedItems=[],organizedNode='',organizedPage=0,organizedFolderPage=0;
 async function loadQuickSettings(){
   try{quickSettings=await api('api/organize-settings');$('quick-destination').value=quickSettings.destination;$('quick-all-batches').checked=quickSettings.all_batches;$('quick-settings-status').textContent=quickSettings.destination?'已读取当前扫描来源的常用设置。':'设置按扫描来源保存，换来源时分别记住。';}
   catch(err){$('quick-settings-status').textContent='设置未读取：'+err.message;}
@@ -364,16 +364,36 @@ $('quick-issues-export').onclick=()=>{
 async function refreshOrganizedResults(){
   try{const result=await api('api/organized-results');organizedItems=result.items;$('organized-message').textContent=result.message+' 缩略图沿用扫描预览。';renderOrganizedResults();}catch(err){$('organized-summary').textContent='结果未读取：'+err.message;}
 }
+function navigateOrganizedResults(key){
+  organizedNode=key;organizedPage=organizedFolderPage=0;$('organized-search').value='';renderOrganizedResults();
+}
 function renderOrganizedResults(){
-  const mapped=organizedItems.map(item=>({...item,source_folder:item.folder})),tree=managementFolderTree(mapped,'result'),node=tree.get(organizedNode)||tree.get('');organizedNode=node.key;
-  $('organized-folders').replaceChildren();for(const key of node.children){const child=tree.get(key),button=make('button','folder-card'),label=child.parts.length===1?child.name.split(/[\\/]/).filter(Boolean).pop()||child.name:child.name;button.append(make('strong','','📁 '+label),make('span','',child.path),make('span','',child.count+' 项'));button.onclick=()=>{organizedNode=key;organizedPage=0;renderOrganizedResults();};$('organized-folders').append(button);}
-  const query=$('organized-search').value.trim().toLocaleLowerCase(),rows=mapped.filter(item=>(query?managementFolderContains(item,node,'result',true):node.key&&managementFolderContains(item,node,'result',false))&&(!query||(item.target+' '+item.name).toLocaleLowerCase().includes(query))),pages=Math.max(1,Math.ceil(rows.length/50));organizedPage=Math.max(0,Math.min(organizedPage,pages-1));$('organized-items').replaceChildren();
+  const view=organizedResultView(organizedItems,{key:organizedNode,kind:$('organized-kind').value,query:$('organized-search').value,order:$('organized-sort').value,descendants:$('organized-descendants').checked});
+  const {active:node,folders,rows,ancestors}=view;organizedNode=node.key;
+  $('organized-breadcrumbs').replaceChildren();
+  for(const ancestor of ancestors){const button=make('button','',ancestor.key?ancestor.name:'全部整理结果');button.disabled=ancestor.key===node.key;button.setAttribute('aria-label','前往整理目录 '+(ancestor.path||'全部整理结果'));if(button.disabled)button.setAttribute('aria-current','location');button.onclick=()=>navigateOrganizedResults(ancestor.key);$('organized-breadcrumbs').append(button);}
+  const folderPages=Math.max(1,Math.ceil(folders.length/30));organizedFolderPage=Math.max(0,Math.min(organizedFolderPage,folderPages-1));
+  $('organized-folders').replaceChildren();for(const child of folders.slice(organizedFolderPage*30,organizedFolderPage*30+30)){
+    const button=make('button','folder-card'),label=child.parts.length===1?child.name.split(/[\\/]/).filter(Boolean).pop()||child.name:child.name;
+    button.setAttribute('aria-label','进入整理目录 '+child.path);button.append(make('strong','','📁 '+label),make('span','',child.path),make('span','',child.count+' 项 · '+fileSize(child.bytes)+'（含子目录）'));button.onclick=()=>navigateOrganizedResults(child.key);$('organized-folders').append(button);
+  }
+  $('organized-folder-page').textContent=`当前类型的子目录 ${folders.length} 个 · 第 ${organizedFolderPage+1}/${folderPages} 页`;
+  $('organized-folder-previous').disabled=organizedFolderPage===0;$('organized-folder-next').disabled=organizedFolderPage>=folderPages-1;
+  const pages=Math.max(1,Math.ceil(rows.length/50));organizedPage=Math.max(0,Math.min(organizedPage,pages-1));$('organized-items').replaceChildren();
   for(const item of rows.slice(organizedPage*50,(organizedPage+1)*50)){
     const card=make('article','photo-card');if(item.kind==='照片')picture({...item,id:mediaIds[item.path]},card,false);card.append(make('strong','',item.name),make('div','path',item.target),make('p','muted',item.kind+' · '+fileSize(item.bytes)));
-    if(item.can_open)for(const[action,label]of[['open',item.kind==='照片'?'查看整理照片':'播放整理视频'],['reveal','打开所在文件夹']]){const button=make('button','',label);button.disabled=operating;button.onclick=async()=>{button.disabled=true;try{await api('api/organized-results/action',{id:item.id,action});}catch(err){error(err.message);}finally{button.disabled=operating;}};card.append(button);}else card.append(make('p','muted','附件或旧副本记录，请通过主媒体定位文件夹。'));$('organized-items').append(card);
+    if(item.can_open)for(const[action,label]of[['open',item.kind==='照片'?'查看整理照片':'播放整理视频'],['reveal','打开所在文件夹']]){const button=make('button','',label);button.disabled=operating||saving;button.onclick=async()=>{if(operating||saving||button.disabled)return;button.disabled=true;try{await api('api/organized-results/action',{id:item.id,action});}catch(err){error(err.message);}finally{button.disabled=operating||saving;}};card.append(button);}else card.append(make('p','muted','附件或旧副本记录，请通过主媒体定位文件夹。'));$('organized-items').append(card);
   }
-  $('organized-summary').textContent=(node.path||'全部整理结果')+` · 共 ${node.count} 项 · 当前层或搜索 ${rows.length} 项 · 第 ${organizedPage+1}/${pages} 页`;
-  $('organized-up').disabled=!node.key;$('organized-previous').disabled=organizedPage===0;$('organized-next').disabled=organizedPage>=pages-1;
+  if(!rows.length)$('organized-items').append(make('p','empty',!organizedItems.length?'还没有成功复制记录，完成整理后点击“刷新整理结果”。':'当前范围没有匹配的副本，可清空搜索、切换类型或勾选包含子文件夹。'));
+  const scope=$('organized-search').value.trim()?'搜索当前目录及子目录':!node.key?'全部目录':$('organized-descendants').checked?'当前目录及子目录':'仅当前目录';
+  $('organized-summary').textContent=(node.path||'全部整理结果')+` · 目录内共 ${node.count} 项 · ${scope}：${rows.length} 项 · 照片 ${view.photos} · 视频 ${view.videos} · 附件 ${rows.length-view.photos-view.videos} · ${fileSize(view.bytes)}（逻辑大小）`;
+  $('organized-page').textContent=`结果第 ${organizedPage+1}/${pages} 页 · 每页最多 50 项`;
+  $('organized-up').disabled=!node.key;$('organized-descendants').disabled=!node.key;$('organized-previous').disabled=organizedPage===0;$('organized-next').disabled=organizedPage>=pages-1;
+  $('organized-up').onclick=()=>navigateOrganizedResults(node.parent||'');
 }
-$('organized-refresh').onclick=refreshOrganizedResults;$('organized-root').onclick=()=>{organizedNode='';organizedPage=0;renderOrganizedResults();};$('organized-up').onclick=()=>{const tree=managementFolderTree(organizedItems.map(item=>({...item,source_folder:item.folder})),'result');organizedNode=(tree.get(organizedNode)||{}).parent||'';organizedPage=0;renderOrganizedResults();};$('organized-search').oninput=()=>{organizedPage=0;renderOrganizedResults();};$('organized-previous').onclick=()=>{organizedPage--;renderOrganizedResults();};$('organized-next').onclick=()=>{organizedPage++;renderOrganizedResults();};
+$('organized-refresh').onclick=refreshOrganizedResults;$('organized-root').onclick=()=>navigateOrganizedResults('');
+$('organized-search').oninput=$('organized-kind').onchange=$('organized-sort').onchange=$('organized-descendants').onchange=()=>{organizedPage=organizedFolderPage=0;renderOrganizedResults();};
+$('organized-reset').onclick=()=>{$('organized-kind').value='';$('organized-sort').value='name';$('organized-descendants').checked=true;navigateOrganizedResults('');};
+$('organized-previous').onclick=()=>{organizedPage--;renderOrganizedResults();};$('organized-next').onclick=()=>{organizedPage++;renderOrganizedResults();};
+$('organized-folder-previous').onclick=()=>{organizedFolderPage--;renderOrganizedResults();};$('organized-folder-next').onclick=()=>{organizedFolderPage++;renderOrganizedResults();};
 loadQuickSettings();refreshOrganizedResults();renderQuickIssues();
