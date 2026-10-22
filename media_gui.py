@@ -27,7 +27,7 @@ MAX_REQUEST = 4096
 MAX_REPORT_BYTES = 128 * 1024 * 1024
 MAX_REPORT_HISTORY = 50
 REPORT_VIEWS = {
-    "overview": "report.html", "duplicates": "report.html#duplicates",
+    "overview": "report.html", "duplicates": "organize.html#duplicates",
     "similar": "report.html#similar", "library": "library.html",
     "issues": "report.html#issues", "folders": "report.html#folder-groups",
     "organize": "organize.html", "photos": "photos.html", "users": "users.html",

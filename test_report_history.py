@@ -175,7 +175,7 @@ class ReportHistoryTests(unittest.TestCase):
                 headers, raw = request(server, prefix + "api/reports/view", "POST",
                                        {"report_id": "scan-new", "view": "duplicates"})
                 self.assertIn("200 OK", headers)
-                self.assertTrue(json.loads(raw)["url"].endswith("report.html#duplicates"))
+                self.assertTrue(json.loads(raw)["url"].endswith("organize.html#duplicates"))
                 self.assertEqual(len(state.report_servers), 2)
                 headers, _ = request(server, prefix + "api/reports/view", "POST",
                                      {"report_id": "../scan-old", "view": "issues"})

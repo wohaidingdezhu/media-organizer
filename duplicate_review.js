@@ -43,12 +43,14 @@ function renderDuplicateGroups(){
         button.onclick=()=>openMedia(item,action,button);actions.append(button);
       }
       if(handled)body.append(make('p','warning','已移到废纸篓 / 回收站，请重新扫描更新分组。'));
-      body.append(actions);row.append(body);box.append(row);
+      appendTrashButton(item,actions);body.append(actions);row.append(body);box.append(row);
     }
     if(group.items.length>limit){const more=make('button','',`再显示 50 个成员（尚有 ${group.items.length-limit} 项）`);more.onclick=()=>{duplicateExpanded.set(group.number,limit+50);renderDuplicateGroups();};box.append(more);}
     const active=group.items.filter(item=>!handledTrash.has(item.path)),chosen=active.find(item=>item.id===keeper),preview=make('button','danger','预览清理其余副本');
     preview.disabled=saving||operating||!chosen||active.length<2||active.length>201||group.items.length>limit||!mediaAvailable||active.some(item=>!mediaIds[item.path]);
-    preview.onclick=()=>previewDuplicateGroup(group);const toolbar=make('div','duplicate-toolbar');toolbar.append(preview);box.append(toolbar);
+    preview.onclick=()=>previewDuplicateGroup(group);const toolbar=make('div','duplicate-toolbar');toolbar.append(preview);
+    if(group.items.length===2&&group.items.every(item=>item.kind==='照片')){const compare=make('button','','对比这两张');compare.disabled=saving||operating;compare.onclick=()=>viewPictures(group.items);toolbar.append(compare);}
+    box.append(toolbar);
     if(duplicateErrors.has(group.number))box.append(make('p','error',duplicateErrors.get(group.number)));
     box.append(make('p','muted',group.items.length>limit?'请先展开完整分组核对。':active.length<2?'本组已处理后仅剩一份可选，请重新扫描更新分组。':active.length>201?'本组副本超过单批 200 项，请在主清单分批勾选，并至少保留一份。':chosen?'预览只选本组其余副本，会清空其他勾选；保留选择仅用于本页核对，刷新后需要重新选择。':'请明确选择一份保留项，再预览其余副本；没有默认保留或默认勾选。'));
     $('duplicate-groups').append(box);

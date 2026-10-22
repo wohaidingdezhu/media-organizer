@@ -82,7 +82,10 @@ class ReportServerTests(unittest.TestCase):
             self.assertIn(f"Content-Length: {len(body)}", headers)
             self.assertEqual((self.report / name).read_bytes(), self.page)
         plain = self.server()
-        self.assertEqual(request(plain, self.prefix + "report.html")[1], self.page)
+        body = request(plain, self.prefix + "report.html")[1]
+        self.assertIn(self.page, body)
+        self.assertIn(b"function reportActionOpen", body)
+        self.assertEqual((self.report / "report.html").read_bytes(), self.page)
 
     def test_only_local_dashboard_addresses_are_accepted(self):
         for url in ("https://127.0.0.1:123/a", "http://localhost:123/a",
@@ -90,6 +93,18 @@ class ReportServerTests(unittest.TestCase):
                     "http://127.0.0.1:99999/", "http://127.0.0.1:123/\nfoo"):
             with self.subTest(url=url), self.assertRaises(ValueError):
                 self.server(dashboard_url=url)
+
+    def test_served_report_actions_allow_only_same_origin_and_leave_offline_policy_unchanged(self):
+        page = b'''<html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; img-src 'self' file: data:"></head><body>generated</body></html>'''
+        (self.report / 'report.html').write_bytes(page)
+        server = self.server()
+        headers, body = request(server, self.prefix + 'report.html')
+        self.assertIn('200 OK', headers)
+        self.assertIn(b"connect-src 'self'; frame-src 'self'", body)
+        self.assertIn(b"default-src 'none'", body)
+        self.assertNotIn(b"frame-src *", body)
+        self.assertIn(b'function reportActionOpen', body)
+        self.assertEqual((self.report / 'report.html').read_bytes(), page)
 
     def test_organizing_workspace_uses_shipped_page_and_dashboard_navigation(self):
         assets = self.output / "assets"
