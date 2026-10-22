@@ -371,6 +371,15 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     if b"@@STORAGE_CLEANUP@@" in body:
                         with _open_report_file(Path(__file__).resolve().parent, ("storage_cleanup.js",)) as script:
                             body = body.replace(b"@@STORAGE_CLEANUP@@", script.read())
+                if route in {"report.html", "library.html"}:
+                    if body is None:
+                        body = stream.read()
+                    # Only loopback-served pages may use their own API/confirmation frame.
+                    # The saved offline report retains its original restrictive policy.
+                    body = body.replace(b"img-src 'self' file: data:\"", b"img-src 'self' file: data:; connect-src 'self'\"")
+                    body = body.replace(b"connect-src 'self'\"", b"connect-src 'self'; frame-src 'self'\"")
+                    with _open_report_file(Path(__file__).resolve().parent, ("report_actions.js",)) as script:
+                        body += b"<script>" + script.read() + b"</script>"
                 if dashboard_link and route in {"report.html", "library.html", "organize.html", "photos.html", "users.html"}:
                     if body is None:
                         body = stream.read()
