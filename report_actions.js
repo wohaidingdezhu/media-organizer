@@ -26,7 +26,7 @@ function focusReportSection(){
   }
   if(section.id==='similar')pageReportPairs(section);
 }
-function reportActionOpen(action,ids){
+function reportActionOpen(action,ids,onClose){
   if(!['delete','compare'].includes(action)||(action==='delete'?(ids.length<1||ids.length>200):ids.length!==2)||ids.some(id=>!/^[0-9a-f]{64}$/.test(id)))return;
   const dialog=document.createElement('dialog'),frame=document.createElement('iframe'),close=document.createElement('button');
   dialog.setAttribute('aria-label',action==='delete'?'删除文件预览':'对比照片');
@@ -35,7 +35,10 @@ function reportActionOpen(action,ids){
   frame.title=action==='delete'?'核对后移到废纸篓 / 回收站':'并排比较并选择删除';
   frame.style.cssText='display:block;width:100%;height:calc(100% - 48px);border:0;margin-top:8px';
   frame.src='organize.html#'+action+'='+ids.join(',');
-  dialog.append(close,frame);dialog.addEventListener('close',()=>dialog.remove());document.body.append(dialog);dialog.showModal();
+  const finished=event=>{if(action==='delete'&&event.detail?.status==='complete')dialog.close();};
+  let child=null;
+  frame.addEventListener('load',()=>{child=frame.contentDocument?frame.contentWindow:null;if(child)child.addEventListener('media-operation-finished',finished);});
+  dialog.append(close,frame);dialog.addEventListener('close',()=>{if(child&&frame.contentDocument)child.removeEventListener('media-operation-finished',finished);dialog.remove();if(typeof onClose==='function')onClose();});document.body.append(dialog);dialog.showModal();
 }
 async function addReportFileActions(){
   if(!document.querySelector('#duplicates')&&!document.querySelector('#similar'))return;

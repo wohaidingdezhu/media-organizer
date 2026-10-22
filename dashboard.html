@@ -30,7 +30,7 @@
 </head>
 <body>
 <aside class="sidebar" aria-label="媒体中心导航"><div class="brand"><span class="brand-icon">M</span><div>Media Organizer<small>本地多媒体资料库</small></div></div><nav class="side-nav"><p>媒体中心</p>
-<button id="nav-results" data-view="home" aria-current="page">⌂　首页</button><button data-view="library">▤　电影</button><button data-view="videos">▷　视频</button><button data-view="photos">▧　照片</button><button data-view="collections">▦　相册与合集</button><button data-view="favorites">☆　收藏</button>
+<button id="nav-results" data-view="home" aria-current="page">⌂　首页</button><button data-view="library">▤　电影</button><button data-view="videos">▷　视频</button><button data-view="photos">▧　照片</button><button data-view="collections">▦　相册与合集</button><button data-view="favorites">☆　收藏</button><button data-view="review">≋　重复与相似</button>
 <p>资源管理</p><button data-view="resources">▣　资源管理</button><button data-view="tags">⌗　标签与分类</button><button id="nav-scan">＋　媒体库</button>
 <p>工具与设置</p><details><summary>整理工具</summary><button data-view="organize">文件整理</button><button data-view="duplicates">重复文件</button><button data-view="similar">相似照片</button><button data-view="users">用户名分类</button><button data-view="folders">目录检查</button><button data-view="issues">读取问题</button><button data-view="overview">扫描报告</button></details><button id="nav-catalog">▥　跨扫描索引</button><button id="nav-settings">⚙　设置</button><button id="reports">打开数据文件夹</button></nav><div class="sidebar-foot">离线浏览 · 媒体保存在本机</div></aside>
 <main id="platform-main">
@@ -81,7 +81,7 @@
 </main>
 <script>
 const $ = id => document.getElementById(id);
-const descriptions = {home:'本地电影、视频、照片的统一资料库。',videos:'浏览本地视频，点击卡片查看详情并播放。',collections:'目录相册与自定义合集，原文件保持原位置。',favorites:'收藏你喜欢的照片、电影和视频。',tags:'按标签集中浏览不同类型的媒体。',resources:'浏览本次媒体库全部文件。',users:'管理用户名，给照片和整部电影分配归属，预览对应用户目录的分类计划。',photos:'按年月和原文件夹浏览照片、并排比较，勾选后可核对分类计划或预览废纸篓 / 回收站清理。',organize:'按文件夹浏览，点击文件旁的查看、播放或删除。整理到新文件夹时会先预览。',overview:'本次扫描的完整汇总。选择上方分类，可直接定位需要核对的结果。',duplicates:'内容完全相同的文件。可逐项删除，或选择一份保留后清理其余副本。',similar:'点击“对比这两张”查看，或在文件旁点击“删除…”。相似照片可能内容不同，请自行核对。',library:'浏览影片封面、播放影片，编辑标签、评分和观看备注；可筛选已观看与收藏。',folders:'同名或整理后名称冲突的文件夹候选；请结合来源路径核对。',issues:'本次扫描遇到的读取问题与跳过项。没有问题不表示所有视频都已验证可播放。'};
+const descriptions = {review:'核对精确重复与相似照片，比较后再清理。',home:'本地电影、视频、照片的统一资料库。',videos:'浏览本地视频，点击卡片查看详情并播放。',collections:'目录相册与自定义合集，原文件保持原位置。',favorites:'收藏你喜欢的照片、电影和视频。',tags:'按标签集中浏览不同类型的媒体。',resources:'浏览本次媒体库全部文件。',users:'管理用户名，给照片和整部电影分配归属，预览对应用户目录的分类计划。',photos:'按年月和原文件夹浏览照片、并排比较，勾选后可核对分类计划或预览废纸篓 / 回收站清理。',organize:'按文件夹浏览，点击文件旁的查看、播放或删除。整理到新文件夹时会先预览。',overview:'本次扫描的完整汇总。选择上方分类，可直接定位需要核对的结果。',duplicates:'内容完全相同的文件。可逐项删除，或选择一份保留后清理其余副本。',similar:'点击“对比这两张”查看，或在文件旁点击“删除…”。相似照片可能内容不同，请自行核对。',library:'浏览影片封面、播放影片，编辑标签、评分和观看备注；可筛选已观看与收藏。',folders:'同名或整理后名称冲突的文件夹候选；请结合来源路径核对。',issues:'本次扫描遇到的读取问题与跳过项。没有问题不表示所有视频都已验证可播放。'};
 let reports=[], selectedReport='', selectedView='home', lastLog='', lastFolders='', previousRunning=false, knownLatest;
 let pollTimer=null, stopped=false, historyLoading=false, viewRequest=0;
 try { const saved=JSON.parse(sessionStorage.getItem('media-result-selection') || '{}'); selectedReport=saved.report || ''; if(descriptions[saved.view])selectedView=saved.view; } catch (_) {}

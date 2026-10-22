@@ -161,6 +161,82 @@ await file.children.find(n=>n.textContent==='播放').onclick();assert.equal(cal
 $('media-detail').close();location.hash='#home';events.hashchange();assert($('center-content').children.some(n=>n.textContent==='最近打开'));
 ''')
 
+    def test_review_keeps_full_hash_and_visual_candidates_distinct_and_projects_success_records(self):
+        paths=['/generated/a.jpg','/generated/b.jpg','/generated/c.jpg'];digest='a'*64
+        doc={'roots':['/generated'],'files':[{'path':path,'kind':'照片','bytes':12,'mtime':1,'sha256':digest if index<2 else 'c'*64} for index,path in enumerate(paths)],
+             'duplicates':[{'paths':paths[:2],'bytes_each':12,'sha256':digest}],
+             'similar':{'pairs':[{'left':paths[0],'right':paths[2],'distance':2},{'left':paths[2],'right':paths[0],'distance':2},{'left':paths[0],'right':paths[0],'distance':0}],'truncated':False}}
+        before=json.dumps(doc,sort_keys=True);catalog=center_catalog(doc,self.state.snapshot())
+        self.assertEqual(len(catalog['review']['exact']),1);self.assertEqual(len(catalog['review']['similar']),1)
+        self.assertEqual(catalog['review']['exact'][0]['sha256'],digest);self.assertNotIn('sha256',catalog['review']['similar'][0]);self.assertTrue(catalog['review']['warnings'])
+        projected=center_catalog(doc,self.state.snapshot(),handled_trash=[paths[0]])
+        self.assertEqual(projected['hidden_files'],1);self.assertEqual(len(projected['items']),2)
+        self.assertEqual(projected['review']['exact'],[]);self.assertEqual(projected['review']['similar'],[])
+        self.assertEqual(projected['folders']['/generated'],[media_id(path) for path in paths[1:]])
+        doc['files'][1]['sha256']='f'*64;invalid=center_catalog(doc,self.state.snapshot());self.assertEqual(invalid['review']['exact'],[]);self.assertTrue(invalid['review']['warnings'])
+        doc['files'][1]['sha256']=digest;self.assertEqual(json.dumps(doc,sort_keys=True),before);doc['similar']['truncated']=True;self.assertIn('上限',center_catalog(doc,self.state.snapshot())['review']['similar_note']);doc['similar']['enabled']=False;self.assertIn('未启用',center_catalog(doc,self.state.snapshot())['review']['similar_note']);self.unchanged()
+
+    def test_center_api_uses_validated_operation_history_and_reports_running_and_warning_states(self):
+        path=next(record['path'] for record in self.doc['files'] if record['kind']=='照片')
+        history={'jobs':[{'status':'running'}],'warnings':['Review record'],'handled':{'copy':[],'trash':[path]}}
+        with mock.patch.object(library_server,'ThreadingHTTPServer',MemoryServer),mock.patch.object(library_server.FileOperations,'history',return_value=history):
+            server,url=library_server.create_library_server(self.report,self.output);prefix=urlsplit(url).path.removesuffix('library.html')
+            headers,body=request(server,prefix+'api/center');self.assertIn('200 OK',headers);catalog=json.loads(body)
+        self.assertEqual(catalog['hidden_files'],1);self.assertTrue(catalog['operation_state']['running']);self.assertEqual(catalog['operation_state']['warnings'],['Review record'])
+        self.assertFalse(any(file['path']==path for item in catalog['items'] for file in item['files']));self.unchanged()
+
+    def test_confirmed_mock_trash_updates_center_from_real_journal_without_changing_source(self):
+        import file_operations
+        import time
+        path=next(record['path'] for record in self.doc['files'] if record['kind']=='照片');identifier=media_id(path)
+        with mock.patch.object(library_server,'ThreadingHTTPServer',MemoryServer),mock.patch.object(file_operations,'trash_helper',return_value=Path('/generated/mock-trash')),mock.patch.object(file_operations,'trash_one',return_value={'trashed_path':'/generated/mock-trash/photo.jpg'}) as trash:
+            server,url=library_server.create_library_server(self.report,self.output);prefix=urlsplit(url).path.removesuffix('library.html');origin='http://127.0.0.1:43210'
+            headers,body=request(server,prefix+'api/operations/preview','POST',{'mode':'trash','ids':[identifier]},origin=origin);self.assertIn('200 OK',headers);preview=json.loads(body)
+            trash.assert_not_called()
+            headers,body=request(server,prefix+'api/operations/start','POST',{'token':preview['token']},origin=origin);self.assertIn('200 OK',headers);job=json.loads(body)
+            deadline=time.monotonic()+10
+            while time.monotonic()<deadline:
+                _,body=request(server,prefix+'api/operations/'+job['id']);job=json.loads(body)
+                if job['status']!='running':break
+                time.sleep(.01)
+            self.assertEqual(job['status'],'complete');trash.assert_called_once()
+            _,body=request(server,prefix+'api/center');catalog=json.loads(body)
+            self.assertEqual(catalog['hidden_files'],1);self.assertFalse(catalog['operation_state']['running']);self.assertFalse(any(file['path']==path for item in catalog['items'] for file in item['files']))
+        self.unchanged()
+
+    def test_manage_comparison_and_return_refresh_preserve_scope_and_remove_only_successful_item(self):
+        self.run_ui(r"""
+const second={...photo,id:'f'.repeat(64),title:'Second',files:[{...photo.files[0],id:'1'.repeat(64),path:'/second.jpg'}]};items.push(second);access.ids_by_path['/second.jpg']='1'.repeat(64);location.hash='#photos';events.hashchange();await $('center-refresh').onclick();
+$('manage-toggle').onclick();const picks=$('center-content').children[0].children.map(card=>card.children.find(n=>n.className==='pick').children[0]);for(const pick of picks){pick.checked=true;pick.onchange();}
+assert(!$('compare-selected').disabled);$('compare-selected').onclick();assert.equal(operations[0].action,'compare');assert.deepEqual(Array.from(operations[0].ids),['b'.repeat(64),'1'.repeat(64)]);assert.equal(calls.length,0);
+items=items.filter(item=>item.id!==photo.id);hiddenFiles=1;await operations[0].onClose();assert.equal($('center-title').textContent,'照片');assert.equal($('center-content').children[0].children.length,1);assert($('selected-count').textContent.includes('1'));assert(!$('center-status').hidden);assert.equal(scope.window.scrollY,350);assert.equal(calls.length,0);
+""")
+
+    def test_direct_card_delete_is_guarded_during_jobs_warnings_and_refresh_failure(self):
+        self.run_ui(r"""
+$('manage-toggle').onclick();const trash=()=>$('center-content').children[0].children[0].children.find(n=>n.className==='card-actions').children.find(n=>n.textContent==='删除…');
+assert(!trash().disabled);operationState={running:true,warnings:[]};await $('center-refresh').onclick();assert(trash().disabled);trash().onclick();assert.equal(operations.length,0);assert.equal(typeof pendingRefresh,'function');
+operationState={running:false,warnings:['Check records']};await pendingRefresh();assert(trash().disabled);assert($('center-status').textContent.includes('暂停清理'));
+operationState={running:false,warnings:[]};await $('center-refresh').onclick();assert(!trash().disabled);failCenter=true;await $('center-refresh').onclick();assert(trash().disabled);trash().onclick();assert.equal(operations.length,0);assert($('center-error').textContent.includes('Disconnected'));
+failCenter=false;await $('center-refresh').onclick();trash().onclick();assert.equal(operations.length,1);assert.equal(operations[0].action,'delete');assert.equal(calls.length,0);
+""")
+
+    def test_review_tabs_compare_and_delete_use_same_confirmation_without_posting(self):
+        self.run_ui(r"""
+const second={...photo,id:'f'.repeat(64),title:'Second',files:[{...photo.files[0],id:'1'.repeat(64),path:'/second.jpg'}]};items.push(second);access.ids_by_path['/second.jpg']='1'.repeat(64);
+const files=[photo,second].map(item=>({...item.files[0],name:item.title,kind:'photo',media_kind:'photo',owner:item.id,metadata:item.metadata,preview:item.preview}));review={exact:[{sha256:'2'.repeat(64),files}],similar:[{distance:2,files}],warnings:[]};location.hash='#review';events.hashchange();await $('center-refresh').onclick();
+const group=()=>$('center-content').children.find(n=>n.className==='review-group');assert($('manage-toggle').hidden);assert($('center-content').children.some(n=>n.textContent.includes('SHA-256')));
+group().children.find(n=>n.textContent==='对比这两张').onclick();assert.equal(operations[0].action,'compare');assert.equal(operations[0].ids.length,2);
+const first=group().children.find(n=>n.className==='review-files').children[0];first.children.find(n=>n.className==='actions').children.find(n=>n.textContent==='删除…').onclick();assert.equal(operations[1].action,'delete');assert.deepEqual(Array.from(operations[1].ids),[photo.files[0].id]);
+$('center-content').children[0].children[1].onclick();assert($('center-content').children.some(n=>n.textContent.includes('视觉相似候选')));assert.equal(calls.length,0);
+""")
+
+    def test_quick_favorite_and_play_are_explicit_actions_and_keep_scroll(self):
+        self.run_ui(r"""
+const actions=$('center-content').children[0].children[0].children.find(n=>n.className==='card-actions');assert(!actions.children.some(n=>n.textContent==='删除…'));await actions.children.find(n=>n.textContent==='☆ 收藏').onclick();assert.equal(calls[0].body.action,'favorite');assert.equal(scope.window.scrollY,350);
+const refreshed=$('center-content').children[0].children[0].children.find(n=>n.className==='card-actions');await refreshed.children.find(n=>n.textContent==='播放').onclick();assert.equal(calls[1].path,'api/media/action');assert.equal(calls[1].body.action,'open');assert.equal(calls[2].body.action,'recent');assert.equal(operations.length,0);
+""")
+
     def test_year_genre_size_order_and_recursive_folder_ids_do_not_change_input(self):
         self.run_ui(r"""
 const b=require(process.argv[1]),rows=[{...movie,id:'one',title:'Film10',mtime:10,bytes:100,metadata:{year:'2025',genres:['剧情']}},{...movie,id:'two',title:'Film2',mtime:5,bytes:200,metadata:{year:'2024',genres:['科幻']}},{...photo,id:'three',metadata:{date_original:'2025:10:22 12:00:00'},mtime:2,bytes:50}];
@@ -202,9 +278,12 @@ const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new E());return node
 const movie={id:'c'.repeat(64),kind:'movie',title:'Film',files:[{id:'a'.repeat(64),name:'Film.mp4',path:'C:\\movie.mp4',bytes:12,mtime:1}],preview:'covers/a.png',folder:'C:\\',mtime:1,metadata:{actors:['Actor']},tags:[],local_tags:[],personal:{rating:0,note:''},tag_key:'d'.repeat(64),favorite:false,bytes:12};
 const photo={...movie,id:'e'.repeat(64),kind:'photo',title:'Photo',files:[{id:'b'.repeat(64),name:'Photo.jpg',path:'/photo.jpg',bytes:12,mtime:2}],metadata:{camera:'Sample Camera',width:20,height:10},tag_key:'',folder:'/',mtime:2};
 let items=[movie,photo],folders={'C:\\':[movie.id],'/':[photo.id]},directories={};
-const scope={console,location,document:{body:new E(),createElement:tag=>new E(tag),getElementById:$},window:{addEventListener:(k,v)=>events[k]=v},reportActionOpen:(action,ids)=>operations.push({action,ids}),fetch:async(path,options)=>{
+let access={available:true,ids_by_path:{'C:\\movie.mp4':'a'.repeat(64),'/photo.jpg':'b'.repeat(64)}},failCenter=false;
+let operationState={running:false,warnings:[]},review={exact:[],similar:[],warnings:[]},hiddenFiles=0,pendingRefresh=null;
+const scope={console,location,clearTimeout(){},setTimeout(fn){pendingRefresh=fn;return 1;},document:{body:new E(),createElement:tag=>new E(tag),getElementById:$},window:{scrollX:0,scrollY:350,scrollTo(x,y){this.scrollX=x;this.scrollY=y;},addEventListener:(k,v)=>events[k]=v},reportActionOpen:(action,ids,onClose)=>operations.push({action,ids,onClose}),fetch:async(path,options)=>{
 if(options?.body){const body=JSON.parse(options.body);calls.push({path,body});if(body.action==='favorite')state.favorites[body.id]=body.value;if(body.action==='recent')state.recent=[body.id];return {ok:true,json:async()=>state};}
-return {ok:true,json:async()=>path==='api/media'?{available:true,ids_by_path:{'C:\\movie.mp4':'a'.repeat(64),'/photo.jpg':'b'.repeat(64)}}:{items:items.map(i=>({...i,favorite:state.favorites[i.id]||false})),state,folders,directories,recent:state.recent,restored:false}};
+if(failCenter&&path==='api/center')return {ok:false,json:async()=>({error:'Disconnected'})};
+return {ok:true,json:async()=>path==='api/media'?access:{items:items.map(i=>({...i,favorite:state.favorites[i.id]||false})),state,folders,directories,review,operation_state:operationState,hidden_files:hiddenFiles,recent:state.recent,restored:false}};
 }};vm.createContext(scope);vm.runInContext(fs.readFileSync(process.argv[1],'utf8'),scope);
 (async()=>{await new Promise(resolve=>setImmediate(resolve));if($('center-error').textContent)throw Error($('center-error').textContent);
 '''+assertions+r'''

@@ -193,8 +193,12 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
     from media_center import CenterState, center_catalog
     center_state = CenterState(output_dir)
     def center_snapshot():
+        history = operations.history()
         with data_lock(output_dir):
-            return center_catalog(current_document(), center_state.snapshot(), load_notes(note_path))
+            result = center_catalog(current_document(), center_state.snapshot(), load_notes(note_path), history['handled']['trash'])
+        result['operation_state'] = {'running': any(job['status'] in {'running', 'external_running'} for job in history['jobs']),
+                                     'warnings': history['warnings']}
+        return result
     operations = FileOperations(report_dir, media, get_organization, document=current_document, options=organize_settings.snapshot)
     from media_users import UserCatalog
     users = UserCatalog(output_dir, current_document)

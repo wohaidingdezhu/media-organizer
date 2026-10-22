@@ -124,12 +124,15 @@ def run():
                 page = response.read()
                 assert b'function centerFilter' in page and b'@@MEDIA_CENTER@@' not in page
                 assert b'media-detail' in page and b'manage-toggle' in page
+                assert b'function centerReviewGroups' in page and b'compare-selected' in page
                 assert b'function centerFolderIds' in page and b'include-subfolders' in page and b'filter-year' in page
             with urlopen(prefix + 'api/center', timeout=10) as response:
                 center = json.load(response)
                 feature = next(item for item in center['items'] if item['kind'] == 'movie')
                 assert feature['metadata']['title'] == '样例电影'
                 assert any(item['kind'] == 'photo' for item in center['items'])
+                assert 'exact' in center['review'] and 'similar' in center['review']
+                assert not center['operation_state']['running']
                 assert center['directories'][str(source)]['parent'] == ''
                 assert str(source / 'extrafanart') in center['directories'][str(source)]['children']
             favorite = Request(prefix + 'api/center',

@@ -31,7 +31,7 @@ REPORT_VIEWS = {
     "similar": "report.html#similar", "library": "center.html#movies",
     "issues": "report.html#issues", "folders": "report.html#folder-groups",
     "organize": "organize.html", "photos": "center.html#photos", "users": "users.html",
-    "home": "center.html#home", "videos": "center.html#videos", "collections": "center.html#collections",
+    "review": "center.html#review", "home": "center.html#home", "videos": "center.html#videos", "collections": "center.html#collections",
     "favorites": "center.html#favorites", "tags": "center.html#tags", "resources": "center.html#resources",
 }
 

@@ -76,6 +76,31 @@ class DirectCleanupTests(unittest.TestCase):
 })().catch(e=>{console.error(e);process.exitCode=1;});
 ''')
 
+    def test_closing_review_refreshes_caller_without_starting_file_operations(self):
+        self.node(r"""
+let refreshed=0;const body=new E();scope.document={body,createElement:t=>new E(t),querySelector:()=>null};vm.runInContext(fs.readFileSync(root+'/report_actions.js','utf8'),scope);
+scope.reportActionOpen('delete',[a.id],()=>{refreshed++;});assert.equal(refreshed,0);body.children[0].children[0].onclick();assert.equal(refreshed,1);assert(body.children[0].removed);assert.equal(requests.length,0);
+""")
+
+    def test_only_successful_delete_auto_closes_and_cross_origin_frames_are_not_observed(self):
+        self.node(r"""
+let refreshed=0,attached=0,events={};const body=new E();scope.document={body,createElement:t=>new E(t),querySelector:()=>null};vm.runInContext(fs.readFileSync(root+'/report_actions.js','utf8'),scope);
+function connect(dialog){const frame=dialog.children[1];frame.contentDocument={};frame.contentWindow={addEventListener:(name,fn)=>{events[name]=fn;attached++;},removeEventListener:name=>{delete events[name];}};frame.events.load();return frame;}
+scope.reportActionOpen('delete',[a.id],()=>refreshed++);const dialog=body.children[0];connect(dialog);events['media-operation-finished']({detail:{status:'stopped'}});assert(dialog.open);assert.equal(refreshed,0);events['media-operation-finished']({detail:{status:'complete'}});assert(dialog.removed);assert.equal(refreshed,1);
+scope.reportActionOpen('compare',[a.id,b.id]);connect(body.children[1]);events['media-operation-finished']({detail:{status:'complete'}});assert(body.children[1].open);
+const frame=body.children[1].children[1];frame.contentDocument=null;const before=attached;frame.events.load();assert.equal(attached,before);assert.equal(requests.length,0);
+""")
+
+    def test_completion_notification_matches_only_the_submitted_job_and_fires_once(self):
+        self.node(r"""
+(async()=>{
+let history={jobs:[{id:'other',status:'complete'}],handled:{trash:[],copy:[]},warnings:[],record_count:1},notifications=[];
+Object.assign(scope,{operationTimer:null,monitorRevision:0,monitorFailures:0,renderOperationCards(){},clearTimeout(){},setTimeout(){return 1;},api:async()=>history,window:{dispatchEvent:event=>notifications.push(event)},CustomEvent:class{constructor(type,options){this.type=type;this.detail=options.detail;}}});
+vm.runInContext(management.slice(management.indexOf('function activeOperation('),management.indexOf('const operationViews=')),scope);vm.runInContext(management.slice(management.indexOf('async function refreshOperations()'),management.indexOf("$('refresh-operations').onclick")),scope);vm.runInContext("submittedOperationId='mine'",scope);
+await scope.refreshOperations();assert.equal(notifications.length,0);history.jobs=[{id:'mine',status:'running'}];await scope.refreshOperations();assert.equal(notifications.length,0);history.jobs[0].status='complete';await scope.refreshOperations();assert.equal(notifications.length,1);assert.equal(notifications[0].type,'media-operation-finished');assert.equal(notifications[0].detail.status,'complete');await scope.refreshOperations();assert.equal(notifications.length,1);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+""")
+
     def test_direct_entry_waits_for_media_then_previews_once_and_rejects_missing_files(self):
         self.node(r'''
 (async()=>{

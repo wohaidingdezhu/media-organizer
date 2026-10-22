@@ -170,12 +170,13 @@ $('execution-confirm').onchange=()=>$('execution-start').disabled=!$('execution-
 function cancelPreview(){executionPreview=null;$('notice').textContent='已取消预览，未执行文件操作。';}
 $('execution-cancel').onclick=()=>{cancelPreview();$('execution').close();};
 $('execution').addEventListener('cancel',event=>{if(operating)event.preventDefault();else cancelPreview();});
+let submittedOperationId='';
 $('execution-start').onclick=async()=>{
   if(!executionPreview?.token||!$('execution-confirm').checked||operating)return;
   operating=true;monitorRevision++;clearTimeout(operationTimer);render();
   $('execution-start').disabled=true;$('execution-cancel').disabled=true;
   try{
-    await api('api/operations/start',{token:executionPreview.token});
+    const started=await api('api/operations/start',{token:executionPreview.token});submittedOperationId=started.id;
     selected.clear();if($('risk').value==='selected')$('risk').value='';$('notice').textContent='操作已开始，请保持本机服务运行，完成后重新扫描。';
   }catch(err){
     error('启动请求未确认：'+err.message+'。正在读取操作记录，请勿重复执行。');
@@ -299,6 +300,11 @@ async function refreshOperations(){
       $('notice').textContent=result.jobs[0].status==='complete'?'操作完成，请重新扫描更新文件清单。':result.jobs[0].status==='cancelled'?'已安全停止，已成功项保留。请查看未处理文件清单，重新选择后预览。':'操作已停止，请查看逐项结果；成功项保留，未确认项先在 文件管理器 核对。';
     }else if(wasRetrying){$('notice').textContent='已恢复连接，没有正在执行的文件操作。';}
     render();
+    const submitted=result.jobs.find(job=>job.id===submittedOperationId);
+    if(submitted&&!activeOperation(submitted)){
+      submittedOperationId='';
+      if(typeof CustomEvent==='function'&&typeof window?.dispatchEvent==='function')window.dispatchEvent(new CustomEvent('media-operation-finished',{detail:{status:submitted.status}}));
+    }
   }catch(err){
     if(revision!==monitorRevision)return;
     operating=true;monitorFailures++;

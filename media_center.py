@@ -142,9 +142,10 @@ def directory_catalog(items, roots):
     return nodes
 
 
-def center_catalog(document, state, notes=None):
+def center_catalog(document, state, notes=None, handled_trash=()):
     """Use scanned facts only. Missing duration/camera data stays unknown."""
-    records = {item['path']: item for item in document.get('files', []) if isinstance(item, dict) and isinstance(item.get('path'), str)}
+    hidden = set(handled_trash)
+    records = {item['path']: item for item in document.get('files', []) if isinstance(item, dict) and isinstance(item.get('path'), str) and item['path'] not in hidden}
     previews = document.get('previews', {})
     result, covered, video_art = [], set(), {}
     notes = notes or {}
@@ -188,10 +189,46 @@ def center_catalog(document, state, notes=None):
         entry(media_id(path), 'photo' if record['kind'] == '照片' else 'video', source_path(path).name,
               [file_item(path)], previews.get(path, '') if record['kind'] == '照片' else video_art.get(path, ''), image)
     by_id = {item['id']: item for item in result}
+    owners = {file['path']: item for item in result for file in item['files']}
+
+    def review_file(path):
+        owner = owners.get(path)
+        if not owner or path not in records:
+            return None
+        return {**file_item(path), 'kind': 'photo' if records[path]['kind'] == '照片' else 'video',
+                'media_kind': owner['kind'], 'owner': owner['id'], 'metadata': owner['metadata'],
+                'preview': previews.get(path, '') if owner['kind'] == 'photo' else video_art.get(path, '')}
+
+    from media_catalog import exact_duplicate_catalog
+    exact = exact_duplicate_catalog(document)
+    review = {'exact': [], 'similar': [], 'warnings': exact['warnings']}
+    similarity = document.get('similar') or {}
+    review['similar_note'] = ('本次未启用图片相似检测，请在媒体库启用照片解析并重新扫描。' if similarity.get('enabled') is False
+                              else '相似候选达到数量上限，结果可能不完整；可缩小扫描目录后重扫。' if similarity.get('truncated') else '')
+    for group in exact['groups']:
+        members = [member for member in (review_file(item['path']) for item in group['items']) if member]
+        if len(members) >= 2:
+            review['exact'].append({'number': group['number'], 'sha256': group['sha256'], 'files': members})
+    seen_pairs, invalid_pairs = set(), 0
+    for pair in similarity.get('pairs', []):
+        if (not isinstance(pair, dict) or not isinstance(pair.get('left'), str) or not isinstance(pair.get('right'), str)
+                or pair['left'] == pair['right'] or type(pair.get('distance')) is not int or not 0 <= pair['distance'] <= 64):
+            invalid_pairs += 1
+            continue
+        key = tuple(sorted((pair['left'], pair['right'])))
+        members = [review_file(path) for path in key]
+        if key in seen_pairs or any(not member or member['kind'] != 'photo' for member in members):
+            continue
+        seen_pairs.add(key)
+        review['similar'].append({'distance': pair['distance'], 'files': members})
+    if invalid_pairs:
+        review['warnings'].append(f'{invalid_pairs} 条相似候选记录无效，请核对报告或重新扫描。')
     folders = {}
     for item in result:
         for folder in dict.fromkeys(str(source_path(file['path']).parent) for file in item['files']):
             folders.setdefault(folder, []).append(item['id'])
-    return {'items': result, 'state': state, 'folders': folders, 'directories': directory_catalog(result, document.get('roots', [])),
+    return {'items': result, 'state': state, 'folders': folders, 'review': review,
+            'hidden_files': sum(item.get('path') in hidden for item in document.get('files', []) if isinstance(item, dict)),
+            'directories': directory_catalog(result, document.get('roots', [])),
             'recent': [key for key in state['recent'] if key in by_id],
             'created_at': document.get('created_at', ''), 'restored': bool(document.get('restored_snapshot'))}
