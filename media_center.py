@@ -104,6 +104,44 @@ class CenterState:
             return value
 
 
+def directory_catalog(items, roots):
+    """Build a directory tree solely from saved paths; never traverse the disk."""
+    boundaries = [source_path(value) for value in roots if isinstance(value, str) and source_path(value).is_absolute()]
+    nodes, seen = {}, {}
+
+    def add(path, parent=''):
+        key = str(path)
+        if key not in nodes:
+            nodes[key] = {'name': path.name or key, 'parent': parent, 'children': [], 'ids': []}
+            seen[key] = set()
+        return nodes[key]
+
+    for root in boundaries:
+        add(root)
+    for item in items:
+        for folder in dict.fromkeys(str(source_path(file['path']).parent) for file in item['files']):
+            if folder not in nodes:
+                path = source_path(folder)
+                # Exact spelling keeps case and Unicode-equivalent report paths
+                # distinct, including restored reports from another operating system.
+                matches = [root for root in boundaries if type(root) is type(path) and path.parts[:len(root.parts)] == root.parts]
+                boundary = max(matches, key=lambda root: len(root.parts)) if matches else path.parents[len(path.parents) - 1] if path.parents else path
+                current = path
+                while True:
+                    parent = '' if str(current) == str(boundary) else str(current.parent)
+                    add(current, parent)
+                    if not parent:
+                        break
+                    current = current.parent
+            if item['id'] not in seen[folder]:
+                nodes[folder]['ids'].append(item['id'])
+                seen[folder].add(item['id'])
+    for path, node in nodes.items():
+        if node['parent'] in nodes:
+            nodes[node['parent']]['children'].append(path)
+    return nodes
+
+
 def center_catalog(document, state, notes=None):
     """Use scanned facts only. Missing duration/camera data stays unknown."""
     records = {item['path']: item for item in document.get('files', []) if isinstance(item, dict) and isinstance(item.get('path'), str)}
@@ -152,6 +190,8 @@ def center_catalog(document, state, notes=None):
     by_id = {item['id']: item for item in result}
     folders = {}
     for item in result:
-        folders.setdefault(item['folder'], []).append(item['id'])
-    return {'items': result, 'state': state, 'folders': folders, 'recent': [key for key in state['recent'] if key in by_id],
+        for folder in dict.fromkeys(str(source_path(file['path']).parent) for file in item['files']):
+            folders.setdefault(folder, []).append(item['id'])
+    return {'items': result, 'state': state, 'folders': folders, 'directories': directory_catalog(result, document.get('roots', [])),
+            'recent': [key for key in state['recent'] if key in by_id],
             'created_at': document.get('created_at', ''), 'restored': bool(document.get('restored_snapshot'))}
