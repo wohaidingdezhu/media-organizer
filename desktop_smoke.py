@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import threading
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 
 def verified_quick_copy(operations, destination, expected):
@@ -117,6 +117,25 @@ def run():
         viewer, library_url = create_library_server(report.parent, output)
         threading.Thread(target=viewer.serve_forever, daemon=True).start()
         try:
+            prefix = library_url.rsplit('/', 1)[0] + '/'
+            # The frozen Mac and Windows apps must include the new shared page,
+            # its script and its metadata module, not just the legacy reports.
+            with urlopen(prefix + 'center.html', timeout=10) as response:
+                page = response.read()
+                assert b'function centerFilter' in page and b'@@MEDIA_CENTER@@' not in page
+                assert b'media-detail' in page and b'manage-toggle' in page
+            with urlopen(prefix + 'api/center', timeout=10) as response:
+                center = json.load(response)
+                feature = next(item for item in center['items'] if item['kind'] == 'movie')
+                assert feature['metadata']['title'] == '样例电影'
+                assert any(item['kind'] == 'photo' for item in center['items'])
+            favorite = Request(prefix + 'api/center',
+                               data=json.dumps({'action': 'favorite', 'id': feature['id'], 'value': True}).encode('utf-8'),
+                               headers={'Content-Type': 'application/json', 'Origin': f'http://127.0.0.1:{viewer.server_port}'})
+            with urlopen(favorite, timeout=10) as response:
+                assert json.load(response)['favorites'][feature['id']] is True
+            with urlopen(prefix + 'api/center', timeout=10) as response:
+                assert next(item for item in json.load(response)['items'] if item['id'] == feature['id'])['favorite']
             with urlopen(library_url.rsplit('/', 1)[0] + '/api/movie-bundles/' + media_id(str(video)), timeout=10) as response:
                 audit = json.load(response)
                 assert len(audit['items']) == 4 and audit['media_ids'] == [media_id(str(video))]
@@ -248,4 +267,4 @@ def run():
             server.server_close()
         after = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in source.rglob('*') if path.is_file()}
         assert before == after
-        print('PACKAGED_SMOKE_OK: scan, reuse, FFmpeg frame cache, grouping, attachment audit, batch classification, shared photo interface, simple month/region copies, confirmed multi-batch queue, settings, copy result identities, film and photo bundle copies, NFO, poster, still, catalog, backup, restore, HTTP, originals unchanged', flush=True)
+        print('PACKAGED_SMOKE_OK: media center, shared cards, favorites, scan, reuse, FFmpeg frame cache, grouping, attachment audit, batch classification, shared photo interface, simple month/region copies, confirmed multi-batch queue, settings, copy result identities, film and photo bundle copies, NFO, poster, still, catalog, backup, restore, HTTP, originals unchanged', flush=True)
