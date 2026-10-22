@@ -18,6 +18,8 @@
 .simple-workspace:not(.show-advanced) #state,.simple-workspace:not(.show-advanced) #risk,.simple-workspace:not(.show-advanced) #folder,.simple-workspace:not(.show-advanced) #include,.simple-workspace:not(.show-advanced) #batch-folder,.simple-workspace:not(.show-advanced) #hold,.simple-workspace:not(.show-advanced) #pending-action,.simple-workspace:not(.show-advanced) .cleanup-extra,.simple-workspace:not(.show-advanced) .photo-card .reason{display:none!important}
 .simple-workspace:not(.show-advanced) #list-view td:nth-child(n+3),.simple-workspace:not(.show-advanced) #list-view th:nth-child(n+3){display:none}
 .advanced-options>summary,#simple-organize>summary{font-size:16px;cursor:pointer;padding:12px;background:#e5f0eb;border:1px solid #c6ded2;border-radius:9px}
+
+.browse-options{margin-left:auto;max-width:100%}.browse-options>summary,#photo-folders>summary{cursor:pointer;padding:8px 12px;border:1px solid #c6ded2;border-radius:8px;background:#fff}.browse-options[open]{flex-basis:100%}.browse-options .manage-controls{margin:8px 0}#photo-folders>h2{display:none}.simple-workspace:not(.show-advanced) .photo-plan-state{display:none} .photo-card .media-facts{font-size:12px;color:#667b70}
 </style>
 <style>
 .duplicate-group{background:white;border:1px solid #dce5df;border-radius:12px;padding:16px;margin:12px 0}.duplicate-member{display:flex;align-items:flex-start;gap:12px;border-top:1px solid #e5ebe7;padding:14px 0}.duplicate-member>div:last-child{flex:1;min-width:0}.duplicate-thumb{width:100px;flex-shrink:0}.duplicate-thumb img,.duplicate-thumb .photo-placeholder{height:80px;width:100%;object-fit:contain}.duplicate-member.kept{background:#eef8f2}.duplicate-toolbar{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.duplicate-toolbar input{flex:1;min-width:200px}.duplicate-group summary{cursor:pointer}.duplicate-group h3{margin:0}.duplicate-group pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}#duplicate-warnings{max-height:180px;overflow:auto}@media(max-width:600px){.duplicate-member{flex-wrap:wrap}.duplicate-thumb{width:70px}}
@@ -56,7 +58,7 @@
   <p>复制前先将勾选文件纳入计划；保留原件，不覆盖目标。普通复制和清理只处理勾选媒体；配套文件须使用相应整组复制并核对预览。相似图片不自动清理。</p>
   <section class="section"><strong>清理候选篮</strong><p>手动加入待核对的照片或视频，跨筛选和刷新保留；加入或移出只修改候选记录。最多 200 项，执行仍须逐次预览确认，精确重复至少保留一份。</p><p id="basket-summary" role="status">正在读取候选篮…</p><div class="manage-controls"><button id="basket-add" disabled>将勾选项加入候选篮</button><button id="basket-view" disabled>查看候选篮</button><button id="basket-select" disabled>勾选候选篮可处理项</button><button id="basket-remove" disabled>将勾选项移出候选篮</button><button id="basket-clear" disabled>清空候选篮</button><button id="basket-refresh">刷新候选篮</button></div></section>
   <p id="folder-note" class="folder-note"></p>
-  <div class="toolbar"><span id="selection" class="muted">已勾选 0 项</span><button id="select-all-current">全选当前页</button><button id="include" class="primary" disabled>纳入计划</button><button id="batch-folder" disabled>批量调整分类目录</button><button id="hold" disabled>暂缓</button><button id="pending-action" disabled>恢复待核对</button><span class="spacer"></span><button id="clear" disabled>清空勾选</button><button id="trash-files" class="danger" disabled>移到废纸篓 / 回收站…</button></div>
+  <div id="selection-toolbar" class="toolbar"><span id="selection" class="muted">已勾选 0 项</span><button id="select-all-current">全选当前页</button><button id="include" class="primary" disabled>纳入计划</button><button id="batch-folder" disabled>批量调整分类目录</button><button id="hold" disabled>暂缓</button><button id="pending-action" disabled>恢复待核对</button><span class="spacer"></span><button id="clear" disabled>清空勾选</button><button id="trash-files" class="danger" disabled>移到废纸篓 / 回收站…</button></div>
   <div id="wall-user-controls" class="manage-controls"></div>
   <div id="photo-wall" class="photo-wall" hidden></div><div id="list-view" class="table-wrap"><table><thead><tr><th><input id="select-page" type="checkbox" aria-label="勾选当前页"></th><th>文件与原位置</th><th>建议分类位置（相对目录）</th><th>核对状态</th></tr></thead><tbody id="rows"></tbody></table></div>
   <div id="notice" class="notice" role="status" aria-live="polite"></div>
@@ -96,11 +98,13 @@ function editorError(message){$('editor-error').textContent=message||'';$('edito
 function fileSize(value){if(value<1024)return value+' B';if(value>=1073741824)return(value/1073741824).toFixed(2)+' GB';if(value>=1048576)return(value/1048576).toFixed(1)+' MB';return(value/1024).toFixed(1)+' KB';}
 async function request(body){const response=await fetch('api/organization',body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});const result=await response.json();if(!response.ok)throw new Error(result.error||'整理计划未保存');return result;}
 async function openMedia(item,action,button){button.disabled=true;error();$('notice').textContent='正在请求系统打开功能…';try{const response=await fetch('api/media/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:item.id,action})});const result=await response.json();if(!response.ok)throw new Error(result.error||'无法打开原文件');$('notice').textContent=result.message;}catch(err){$('notice').textContent='';error(err.message);}finally{button.disabled=saving||operating||handledTrash.has(item.path);}}
-function updateSelection(){const count=selected.size,chosen=data.items.filter(item=>selected.has(item.id));$('selection').textContent=`已勾选 ${count} 项 · ${fileSize(chosen.reduce((total,item)=>total+item.bytes,0))}`;
+function updateSelection(){const count=selected.size,chosen=data.items.filter(item=>selected.has(item.id));$('selection').textContent=count?`已勾选 ${count} 项 · ${fileSize(chosen.reduce((total,item)=>total+item.bytes,0))}`:'可直接查看或删除文件，也可勾选后批量处理。';
+  $('trash-files').hidden=$('clear').hidden=$('compare').hidden=!count;
+  $('trash-files').textContent=count?`删除所选 ${count} 项…`:'删除所选…';
   wallUsers.update();
   $('copy-bundles').disabled=saving||operating||!count||chosen.some(item=>item.kind!=='视频'||!mediaIds[item.path]);
   $('copy-photo-bundles').disabled=saving||operating||!count||chosen.some(item=>item.kind!=='照片'||item.state!=='include'||!item.selectable||!mediaIds[item.path]);
-  $('copy-files').disabled=saving||operating||!count||chosen.some(item=>item.state!=='include'||!item.selectable||!mediaIds[item.path]);$('trash-files').disabled=saving||operating||!count||!mediaAvailable||chosen.some(item=>!mediaIds[item.path]);$('compare').disabled=count!==2||chosen.some(item=>item.kind!=='照片')||saving;
+  $('copy-files').disabled=saving||operating||!count||chosen.some(item=>item.state!=='include'||!item.selectable||!mediaIds[item.path]);$('trash-files').disabled=saving||operating||!count||!mediaAvailable||chosen.some(item=>!mediaIds[item.path]);$('compare').disabled=count!==2||chosen.some(item=>item.kind!=='照片')||saving||operating;
   for(const id of ['include','hold','pending-action','clear','batch-folder'])$(id).disabled=saving||operating||!count;
   $('batch-folder').disabled=saving||operating||!count||count>200;
   $('include').disabled=saving||operating||!count||data.items.some(item=>selected.has(item.id)&&!item.selectable);
@@ -171,9 +175,10 @@ function tryIncomingReview(){
   if(!incomingReview||!data||!mediaLoaded||saving||operating)return;
   const [,action,raw]=incomingReview,ids=raw.split(',');incomingReview=null;
   const items=ids.map(id=>data.items.find(item=>item.id===id));
-  if(ids.some(id=>!/^[0-9a-f]{64}$/.test(id))||items.some(item=>!item)||new Set(ids).size!==ids.length||ids.length!==(action==='delete'?1:2)){error('文件记录无效，请重新扫描。');return;}
+  if(ids.some(id=>!/^[0-9a-f]{64}$/.test(id))||items.some(item=>!item)||new Set(ids).size!==ids.length||(action==='delete'?(ids.length<1||ids.length>200):ids.length!==2)){error('文件记录无效，请重新扫描。');return;}
   if(action==='compare'){if(items.some(item=>item.kind!=='照片')){error('只能比较照片。');return;}viewPictures(items);}
-  else previewTrashItem(items[0]);
+  else if(items.length===1)previewTrashItem(items[0]);
+  else previewOperation('trash',false,false,false,ids);
 }
 function setupSimpleWorkspace(){
   if(document.body.classList.contains('focused-cleanup'))return;
@@ -187,6 +192,13 @@ function setupSimpleWorkspace(){
     if(!visible)advanced.append(child);
   }
   workspace.prepend(quickPanel);workspace.append(advanced);
+  const options=make('details','browse-options'),optionsSummary=make('summary','','筛选与排序'),fields=make('div','manage-controls');options.id='browse-options';optionsSummary.id='browse-options-summary';
+  fields.append($('sort'),$('photo-month'),$('source-folder'));options.append(optionsSummary,fields);$('browse-controls').append(options);$('selection-toolbar').append($('compare'));
+  if(location.pathname.endsWith('/photos.html')){const folders=make('details');folders.id='photo-folders';folders.append(make('summary','','按文件夹浏览'),...$('folder-browser').children);$('folder-browser').replaceChildren(folders);}
+  const hints=make('details','preview-hint');hints.append(make('summary','','预览说明'));
+  for(const hint of [...workspace.children].filter(child=>child.classList.contains('preview-hint')))hints.append(hint);
+  advanced.append(hints);
+
   const log=make('details');log.id='operation-log';log.append(make('summary','','操作记录'),...$('operation-section').children);$('operation-section').replaceChildren(log);
   advanced.addEventListener('toggle',()=>document.body.classList.toggle('show-advanced',advanced.open));
   const header=$('workspace-header');header.replaceChildren(make('h1','',location.pathname.endsWith('/photos.html')?'照片':'照片和电影'),make('p','','浏览文件夹，查看或播放文件；不要的文件直接点“删除…”。删除前会让你确认，并移到废纸篓 / 回收站。'));

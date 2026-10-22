@@ -190,6 +190,11 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
     note_path = output_dir / "library-notes.json"
     from organize_settings import OrganizeSettings
     organize_settings = OrganizeSettings(output_dir, current_document)
+    from media_center import CenterState, center_catalog
+    center_state = CenterState(output_dir)
+    def center_snapshot():
+        with data_lock(output_dir):
+            return center_catalog(current_document(), center_state.snapshot(), load_notes(note_path))
     operations = FileOperations(report_dir, media, get_organization, document=current_document, options=organize_settings.snapshot)
     from media_users import UserCatalog
     users = UserCatalog(output_dir, current_document)
@@ -257,6 +262,12 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 return
             if route == "api/media":
                 self.send_json(200, media.snapshot())
+                return
+            if route == 'api/center':
+                try:
+                    self.send_json(200, center_snapshot())
+                except (OSError, ValueError, KeyError, TypeError) as error:
+                    self.send_json(400, {'error': str(error)})
                 return
             if route in {"api/users", "api/photos", "api/duplicates", "api/storage", "api/basket", "api/roots", "api/changes", "api/notes", "api/operations", "api/organize-settings", "api/organized-results"} or route.startswith(("api/operations/", "api/photo-bundles/", "api/movie-bundles/")):
                 try:
@@ -342,7 +353,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 self.send_error(404)
                 return
             try:
-                assets = {"organize.html": "organization.html", "photos.html": "organization.html", "users.html": "media_users.html"}
+                assets = {"organize.html": "organization.html", "photos.html": "organization.html", "users.html": "media_users.html", "center.html": "media_center.html"}
                 page_dir = Path(__file__).resolve().parent if route in assets else report_dir
                 stream = _open_report_file(page_dir, (assets[route],) if route in assets else parts)
             except (OSError, ValueError):
@@ -350,6 +361,10 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 return
             with stream:
                 body = current_library_page() if route == "library.html" else None
+                if route == 'center.html':
+                    body = stream.read()
+                    with _open_report_file(Path(__file__).resolve().parent, ('media_center.js',)) as script:
+                        body = body.replace(b'@@MEDIA_CENTER@@', script.read())
                 if route == 'users.html':
                     body = stream.read()
                     with _open_report_file(Path(__file__).resolve().parent, ('media_users.js',)) as script:
@@ -371,7 +386,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     if b"@@STORAGE_CLEANUP@@" in body:
                         with _open_report_file(Path(__file__).resolve().parent, ("storage_cleanup.js",)) as script:
                             body = body.replace(b"@@STORAGE_CLEANUP@@", script.read())
-                if route in {"report.html", "library.html"}:
+                if route in {"report.html", "library.html", "center.html"}:
                     if body is None:
                         body = stream.read()
                     # Only loopback-served pages may use their own API/confirmation frame.
@@ -380,7 +395,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     body = body.replace(b"connect-src 'self'\"", b"connect-src 'self'; frame-src 'self'\"")
                     with _open_report_file(Path(__file__).resolve().parent, ("report_actions.js",)) as script:
                         body += b"<script>" + script.read() + b"</script>"
-                if dashboard_link and route in {"report.html", "library.html", "organize.html", "photos.html", "users.html"}:
+                if dashboard_link and route in {"report.html", "library.html", "organize.html", "photos.html", "users.html", "center.html"}:
                     if body is None:
                         body = stream.read()
                     opening = re.search(br"<body(?:\s[^>]*)?>", body, re.IGNORECASE)
@@ -402,13 +417,13 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
 
         def do_POST(self):
             route = self.route()
-            if route not in {"api/users", "api/organize-settings", "api/organized-results/action", "api/tags", "api/tags/toggle", "api/organization", "api/media/action", "api/notes", "api/basket", "api/grouping",
+            if route not in {"api/center", "api/users", "api/organize-settings", "api/organized-results/action", "api/tags", "api/tags/toggle", "api/organization", "api/media/action", "api/notes", "api/basket", "api/grouping",
                              "api/operations/preview", "api/operations/quick-preview", "api/operations/start", "api/operations/stop", "api/operations/destination"}:
                 self.send_error(404)
                 return
             origin = self.headers.get("Origin")
             if ((origin and origin != f"http://127.0.0.1:{self.server.server_port}")
-                    or (route in {"api/users", "api/organize-settings", "api/organized-results/action", "api/media/action", "api/basket", "api/grouping"} or route.startswith("api/operations/")) and origin != f"http://127.0.0.1:{self.server.server_port}"):
+                    or (route in {"api/center", "api/users", "api/organize-settings", "api/organized-results/action", "api/media/action", "api/basket", "api/grouping"} or route.startswith("api/operations/")) and origin != f"http://127.0.0.1:{self.server.server_port}"):
                 self.send_json(403, {"error": "页面来源不匹配"})
                 return
             if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
@@ -421,6 +436,11 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 payload = json.loads(self.rfile.read(length))
                 if not isinstance(payload, dict):
                     raise ValueError("请求内容必须是 JSON 对象")
+                if route == 'api/center':
+                    current = center_snapshot()
+                    result = operations.update_plan(lambda: center_state.update(payload, {item['id'] for item in current['items']}))
+                    self.send_json(200, result)
+                    return
                 if route == 'api/users':
                     action = payload.get('action')
                     if action in {'plan-preview', 'plan-apply'}:

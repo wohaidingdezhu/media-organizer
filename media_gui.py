@@ -28,9 +28,11 @@ MAX_REPORT_BYTES = 128 * 1024 * 1024
 MAX_REPORT_HISTORY = 50
 REPORT_VIEWS = {
     "overview": "report.html", "duplicates": "organize.html#duplicates",
-    "similar": "report.html#similar", "library": "library.html",
+    "similar": "report.html#similar", "library": "center.html#movies",
     "issues": "report.html#issues", "folders": "report.html#folder-groups",
-    "organize": "organize.html", "photos": "photos.html", "users": "users.html",
+    "organize": "organize.html", "photos": "center.html#photos", "users": "users.html",
+    "home": "center.html#home", "videos": "center.html#videos", "collections": "center.html#collections",
+    "favorites": "center.html#favorites", "tags": "center.html#tags", "resources": "center.html#resources",
 }
 
 
@@ -353,8 +355,6 @@ class DashboardState(WorkspaceController):
             raise ValueError("报告视图无效")
         with self.lock:
             report, summary = self._report_summary(report_id)
-            if view == "library" and not summary["has_library"]:
-                raise ValueError("这次扫描没有影片资料库，请查看总览或重新扫描")
             if report_id not in self.report_servers:
                 server, library_url = create_library_server(report, self.output, dashboard_url=self.dashboard_url)
                 self.report_servers[report_id] = (server, library_url)
