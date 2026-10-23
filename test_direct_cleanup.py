@@ -86,19 +86,30 @@ scope.reportActionOpen('delete',[a.id],()=>{refreshed++;});assert.equal(refreshe
         self.node(r"""
 let refreshed=0,attached=0,events={};const body=new E();scope.document={body,createElement:t=>new E(t),querySelector:()=>null};vm.runInContext(fs.readFileSync(root+'/report_actions.js','utf8'),scope);
 function connect(dialog){const frame=dialog.children[1];frame.contentDocument={};frame.contentWindow={addEventListener:(name,fn)=>{events[name]=fn;attached++;},removeEventListener:name=>{delete events[name];}};frame.events.load();return frame;}
-scope.reportActionOpen('delete',[a.id],()=>refreshed++);const dialog=body.children[0];connect(dialog);events['media-operation-finished']({detail:{status:'stopped'}});assert(dialog.open);assert.equal(refreshed,0);events['media-operation-finished']({detail:{status:'complete'}});assert(dialog.removed);assert.equal(refreshed,1);
-scope.reportActionOpen('compare',[a.id,b.id]);connect(body.children[1]);events['media-operation-finished']({detail:{status:'complete'}});assert(body.children[1].open);
+scope.reportActionOpen('delete',[a.id],()=>refreshed++);const dialog=body.children[0];connect(dialog);for(const detail of [{mode:'trash',status:'stopped'},{mode:'trash',status:'failed'},{mode:'copy',status:'complete'},{status:'complete'}]){events['media-operation-finished']({detail});assert(dialog.open);assert.equal(refreshed,0);}events['media-operation-finished']({detail:{mode:'trash',status:'complete'}});assert(dialog.removed);assert.equal(refreshed,1);
+scope.reportActionOpen('compare',[a.id,b.id]);connect(body.children[1]);events['media-operation-finished']({detail:{mode:'trash',status:'complete'}});assert(body.children[1].open);events['media-review-cancelled']({detail:{mode:'trash'}});assert(body.children[1].open);
 const frame=body.children[1].children[1];frame.contentDocument=null;const before=attached;frame.events.load();assert.equal(attached,before);assert.equal(requests.length,0);
 """)
 
     def test_completion_notification_matches_only_the_submitted_job_and_fires_once(self):
         self.node(r"""
 (async()=>{
-let history={jobs:[{id:'other',status:'complete'}],handled:{trash:[],copy:[]},warnings:[],record_count:1},notifications=[];
+let history={jobs:[{id:'other',mode:'trash',status:'complete'}],handled:{trash:[],copy:[]},warnings:[],record_count:1},notifications=[];
 Object.assign(scope,{operationTimer:null,monitorRevision:0,monitorFailures:0,renderOperationCards(){},clearTimeout(){},setTimeout(){return 1;},api:async()=>history,window:{dispatchEvent:event=>notifications.push(event)},CustomEvent:class{constructor(type,options){this.type=type;this.detail=options.detail;}}});
-vm.runInContext(management.slice(management.indexOf('function activeOperation('),management.indexOf('const operationViews=')),scope);vm.runInContext(management.slice(management.indexOf('async function refreshOperations()'),management.indexOf("$('refresh-operations').onclick")),scope);vm.runInContext("submittedOperationId='mine'",scope);
-await scope.refreshOperations();assert.equal(notifications.length,0);history.jobs=[{id:'mine',status:'running'}];await scope.refreshOperations();assert.equal(notifications.length,0);history.jobs[0].status='complete';await scope.refreshOperations();assert.equal(notifications.length,1);assert.equal(notifications[0].type,'media-operation-finished');assert.equal(notifications[0].detail.status,'complete');await scope.refreshOperations();assert.equal(notifications.length,1);
+vm.runInContext(management.slice(management.indexOf('function notifyReview('),management.indexOf("$('execution-start').onclick")),scope);vm.runInContext(management.slice(management.indexOf('function activeOperation('),management.indexOf('const operationViews=')),scope);vm.runInContext(management.slice(management.indexOf('async function refreshOperations()'),management.indexOf("$('refresh-operations').onclick")),scope);vm.runInContext("submittedOperationId='mine'",scope);
+await scope.refreshOperations();assert.equal(notifications.length,0);history.jobs=[{id:'mine',mode:'trash',status:'running'}];await scope.refreshOperations();assert.equal(notifications.length,0);history.jobs[0].status='complete';await scope.refreshOperations();assert.equal(notifications.length,1);assert.equal(notifications[0].type,'media-operation-finished');assert.equal(notifications[0].detail.status,'complete');assert.equal(notifications[0].detail.mode,'trash');await scope.refreshOperations();assert.equal(notifications.length,1);
 })().catch(error=>{console.error(error);process.exitCode=1;});
+""")
+
+    def test_cancel_preview_returns_delete_caller_once_without_starting_and_keeps_comparison(self):
+        self.node(r"""
+let refreshed=0,notifications=[],events={};const body=new E();scope.document={body,createElement:t=>new E(t),querySelector:()=>null};scope.window={addEventListener(){},dispatchEvent:event=>{notifications.push(event);events[event.type]?.(event);}};scope.CustomEvent=class{constructor(type,options){this.type=type;this.detail=options.detail;}};
+vm.runInContext(fs.readFileSync(root+'/report_actions.js','utf8'),scope);vm.runInContext(management.slice(management.indexOf('function notifyReview('),management.indexOf("$('execution-start').onclick")),scope);
+function connect(dialog){const frame=dialog.children.at(-1);frame.contentDocument={};frame.contentWindow={addEventListener:(name,fn)=>events[name]=fn,removeEventListener:name=>delete events[name]};frame.events.load();}
+const summary='将保留：C:\\生成样例\\<保留>.jpg；清理其余2份副本。';scope.reportActionOpen('delete',[a.id],()=>refreshed++,summary);const dialog=body.children[0];connect(dialog);assert.equal(dialog.children[1].textContent,summary);assert.equal(dialog.children.at(-1).src,'organize.html#delete='+a.id);
+scope.executionPreview={mode:'trash',token:'preview-only'};$('execution').showModal();$('execution-cancel').onclick();assert(dialog.removed);assert.equal(refreshed,1);assert(!$('execution').open);assert.equal(scope.executionPreview,null);assert.equal(notifications.length,1);assert.equal(notifications[0].detail.mode,'trash');assert.equal(requests.length,0);
+scope.reportActionOpen('compare',[a.id,b.id]);const compare=body.children[1];connect(compare);scope.executionPreview={mode:'trash'};let prevented=false;scope.operating=true;$('execution').events.cancel({preventDefault(){prevented=true;}});$('execution-cancel').onclick();assert(prevented);assert(scope.executionPreview);assert.equal(notifications.length,1);
+scope.operating=false;$('execution').events.cancel({preventDefault(){throw Error('ESC should cancel while idle');}});assert(compare.open);assert.equal(scope.executionPreview,null);assert.equal(notifications.length,2);assert.equal(requests.length,0);
 """)
 
     def test_direct_entry_waits_for_media_then_previews_once_and_rejects_missing_files(self):

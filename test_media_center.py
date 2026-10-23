@@ -237,6 +237,25 @@ const actions=$('center-content').children[0].children[0].children.find(n=>n.cla
 const refreshed=$('center-content').children[0].children[0].children.find(n=>n.className==='card-actions');await refreshed.children.find(n=>n.textContent==='播放').onclick();assert.equal(calls[1].path,'api/media/action');assert.equal(calls[1].body.action,'open');assert.equal(calls[2].body.action,'recent');assert.equal(operations.length,0);
 """)
 
+    def test_keep_chosen_exact_copy_previews_only_others_and_never_applies_to_similar(self):
+        self.run_ui(r"""
+const copies=[photo,...['1','2'].map((digit,index)=>({...photo,id:digit.repeat(64),title:'Copy '+index,files:[{...photo.files[0],id:(index?'3':'4').repeat(64),path:'C:\\生成样例\\副本'+index+'.jpg'}]}))];items=copies;for(const item of copies)access.ids_by_path[item.files[0].path]=item.files[0].id;
+const files=copies.map(item=>({...item.files[0],name:item.title,kind:'photo',media_kind:'photo',owner:item.id,metadata:item.metadata,preview:item.preview}));review={exact:[{sha256:'5'.repeat(64),files}],similar:[{distance:0,files:files.slice(0,2)}],warnings:[]};location.hash='#review';events.hashchange();await $('center-refresh').onclick();const original=JSON.stringify(review);
+const group=()=>$('center-content').children.find(n=>n.className==='review-group'),cards=()=>group().children.find(n=>n.className==='review-files').children,keep=card=>card.children.find(n=>n.className==='actions').children.find(n=>n.textContent==='保留这份，清理其余…');
+assert(!keep(cards()[1]).disabled);keep(cards()[1]).onclick();assert.equal(operations.length,1);assert.equal(operations[0].action,'delete');assert.deepEqual(Array.from(operations[0].ids),[files[0].id,files[2].id]);assert(operations[0].summary.includes(files[1].path));assert(operations[0].summary.includes('2 份'));assert.equal(JSON.stringify(review),original);assert.equal(calls.length,0);
+operationState={running:true,warnings:[]};await $('center-refresh').onclick();assert(keep(cards()[1]).disabled);keep(cards()[1]).onclick();assert.equal(operations.length,1);
+operationState={running:false,warnings:[]};review.exact=[];items=[copies[1]];hiddenFiles=2;await operations[0].onClose();assert($('center-content').children.some(n=>n.className==='empty'));assert($('center-status').textContent.includes('2 个文件'));assert.equal($('center-title').textContent,'重复与相似');assert.equal(scope.window.scrollY,350);
+$('center-content').children[0].children[1].onclick();assert(cards().every(card=>!keep(card)));assert.equal(calls.length,0);
+""")
+
+    def test_keep_copy_limits_large_groups_and_works_for_movie_files(self):
+        self.run_ui(r"""
+const copies=Array.from({length:202},(_,n)=>({...movie,id:(n+10).toString(16).padStart(64,'0'),files:[{...movie.files[0],id:(n+1000).toString(16).padStart(64,'0'),path:'C:\\生成样例\\影片'+n+'.mp4'}]}));items=copies;for(const item of copies)access.ids_by_path[item.files[0].path]=item.files[0].id;
+const files=copies.map(item=>({...item.files[0],name:item.title,kind:'movie',media_kind:'movie',owner:item.id,metadata:item.metadata}));review={exact:[{sha256:'5'.repeat(64),files}],similar:[],warnings:[]};location.hash='#review';events.hashchange();await $('center-refresh').onclick();const keep=()=>$('center-content').children.find(n=>n.className==='review-group').children.find(n=>n.className==='review-files').children[0].children.find(n=>n.className==='actions').children.find(n=>n.textContent==='保留这份，清理其余…');
+assert(keep().disabled);assert(keep().attrs.title.includes('超过200'));keep().onclick();assert.equal(operations.length,0);
+review.exact[0].files=files.slice(0,201);await $('center-refresh').onclick();assert(!keep().disabled);keep().onclick();assert.equal(operations.length,1);assert.equal(operations[0].ids.length,200);assert(!operations[0].ids.includes(files[0].id));assert.equal(calls.length,0);
+""")
+
     def test_year_genre_size_order_and_recursive_folder_ids_do_not_change_input(self):
         self.run_ui(r"""
 const b=require(process.argv[1]),rows=[{...movie,id:'one',title:'Film10',mtime:10,bytes:100,metadata:{year:'2025',genres:['剧情']}},{...movie,id:'two',title:'Film2',mtime:5,bytes:200,metadata:{year:'2024',genres:['科幻']}},{...photo,id:'three',metadata:{date_original:'2025:10:22 12:00:00'},mtime:2,bytes:50}];
@@ -280,7 +299,7 @@ const photo={...movie,id:'e'.repeat(64),kind:'photo',title:'Photo',files:[{id:'b
 let items=[movie,photo],folders={'C:\\':[movie.id],'/':[photo.id]},directories={};
 let access={available:true,ids_by_path:{'C:\\movie.mp4':'a'.repeat(64),'/photo.jpg':'b'.repeat(64)}},failCenter=false;
 let operationState={running:false,warnings:[]},review={exact:[],similar:[],warnings:[]},hiddenFiles=0,pendingRefresh=null;
-const scope={console,location,clearTimeout(){},setTimeout(fn){pendingRefresh=fn;return 1;},document:{body:new E(),createElement:tag=>new E(tag),getElementById:$},window:{scrollX:0,scrollY:350,scrollTo(x,y){this.scrollX=x;this.scrollY=y;},addEventListener:(k,v)=>events[k]=v},reportActionOpen:(action,ids,onClose)=>operations.push({action,ids,onClose}),fetch:async(path,options)=>{
+const scope={console,location,clearTimeout(){},setTimeout(fn){pendingRefresh=fn;return 1;},document:{body:new E(),createElement:tag=>new E(tag),getElementById:$},window:{scrollX:0,scrollY:350,scrollTo(x,y){this.scrollX=x;this.scrollY=y;},addEventListener:(k,v)=>events[k]=v},reportActionOpen:(action,ids,onClose,summary)=>operations.push({action,ids,onClose,summary}),fetch:async(path,options)=>{
 if(options?.body){const body=JSON.parse(options.body);calls.push({path,body});if(body.action==='favorite')state.favorites[body.id]=body.value;if(body.action==='recent')state.recent=[body.id];return {ok:true,json:async()=>state};}
 if(failCenter&&path==='api/center')return {ok:false,json:async()=>({error:'Disconnected'})};
 return {ok:true,json:async()=>path==='api/media'?access:{items:items.map(i=>({...i,favorite:state.favorites[i.id]||false})),state,folders,directories,review,operation_state:operationState,hidden_files:hiddenFiles,recent:state.recent,restored:false}};

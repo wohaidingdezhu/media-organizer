@@ -37,10 +37,10 @@ async function load(){
   }catch(error){if(ticket===loadTicket){centerStale=true;if(catalog)render();message(error.message);$('center-subtitle').textContent='资料库暂时无法读取，请点击刷新重试。';if(catalog?.operation_state?.running)centerOperationTimer=setTimeout(load,3000);}}
 }
 function canTrash(ids){return !busy&&!centerStale&&mediaAccess.available&&!catalog?.restored&&!catalog?.operation_state?.running&&!catalog?.operation_state?.warnings?.length&&ids.length>0&&ids.length<=200&&ids.every(id=>{const file=byFile.get(id);return file&&mediaAccess.ids_by_path[file.path]===id;});}
-function openFileReview(action,ids){
+function openFileReview(action,ids,summary=''){
   if(busy)return;if(action==='delete'&&!canTrash(ids))return;
   if(action==='compare'&&(ids.length!==2||ids.some(id=>byFile.get(id)?.kind!=='photo')))return;
-  reportActionOpen(action,ids,load);
+  reportActionOpen(action,ids,load,summary);
 }
 async function openOriginal(item,file){
   if(busy||catalog.restored||mediaAccess.ids_by_path[file.path]!==file.id)return;
@@ -90,17 +90,20 @@ function renderDirectoryBreadcrumb(){
 
 function renderReview(){
   const tabs=make('div','actions');for(const [mode,label]of [['exact','精确重复'],['similar','相似照片']]){const control=button(label+' · '+(catalog.review?.[mode]?.length||0),()=>{reviewMode=mode;page=0;render();},reviewMode===mode?'primary':'');control.setAttribute('aria-pressed',String(reviewMode===mode));tabs.append(control);}$('center-content').append(tabs);
-  $('center-content').append(make('p','muted',reviewMode==='exact'?'这些文件经完整 SHA-256 确认内容相同。删除前仍会核对，至少保留一份。':'这些只是视觉相似候选，可能是不同照片。先并排对比，再决定保留或删除。'));
+  $('center-content').append(make('p','muted',reviewMode==='exact'?'这些文件经完整 SHA-256 确认内容相同。可选一份保留，预览清理其余副本；也可逐项删除，至少保留一份。':'这些只是视觉相似候选，可能是不同照片。先并排对比，再决定保留或删除。'));
   if(reviewMode==='similar'&&catalog.review?.similar_note)$('center-content').append(make('p','notice',catalog.review.similar_note));
   for(const warning of catalog.review?.warnings||[])$('center-content').append(make('p','notice',warning));
   const groups=centerReviewGroups(catalog.review,{mode:reviewMode,kind:$('media-kind').value,year:$('filter-year').value,genre:$('filter-genre').value}),pages=Math.max(1,Math.ceil(groups.length/10));page=Math.max(0,Math.min(page,pages-1));$('center-subtitle').textContent=groups.length+' 组 · 显示整组供核对';
   for(const [index,group]of groups.slice(page*10,page*10+10).entries()){
     const section=make('section','review-group');section.append(make('h2','',(reviewMode==='exact'?'精确重复':'相似照片')+' · 第 '+(page*10+index+1)+' 组'));
     const first=group.files[0];if(reviewMode==='exact')section.append(make('p','muted',group.files.length+' 个文件 · 每个 '+size(first.bytes)));
+    if(reviewMode==='exact'&&group.files.length>201)section.append(make('p','muted','其余副本超过200个文件，请先逐项分批清理，再选择保留的一份。'));
+    const canKeep=reviewMode==='exact'&&group.files.length>1&&group.files.length<=201&&group.files.every(file=>canTrash([file.id]));
     if(group.files.length===2&&group.files.every(file=>file.kind==='photo'))section.append(button('对比这两张',()=>openFileReview('compare',group.files.map(file=>file.id))));
     const files=make('div','review-files');for(const file of group.files){
       const card=make('article','review-file'),preview=button('',()=>{const owner=byId.get(file.owner);if(owner)openDetail(owner);},'cover');preview.setAttribute('aria-label','预览 '+file.name);image({title:file.name,preview:file.preview,kind:file.kind},preview);
       const actions=make('div','actions');if(group.files.length>2&&file.kind==='photo'&&first.kind==='photo'&&file.id!==first.id)actions.append(button('与第一张对比',()=>openFileReview('compare',[first.id,file.id])));
+      if(reviewMode==='exact'&&group.files.length>1){const keep=button('保留这份，清理其余…',()=>{const others=group.files.filter(other=>other.id!==file.id).map(other=>other.id);openFileReview('delete',others,'将保留：'+file.path+'；预览清理其余 '+others.length+' 份副本。');});keep.setAttribute('aria-label','保留 '+file.path+'，预览清理其余副本');keep.disabled=!canKeep;if(group.files.length>201)keep.setAttribute('title','其余副本超过200个文件，请使用逐项删除分批清理。');actions.append(keep);}
       const trash=button('删除…',()=>openFileReview('delete',[file.id]),'danger');trash.setAttribute('aria-label','删除 '+file.path);trash.disabled=!canTrash([file.id]);actions.append(trash);card.append(make('h3','',file.name),actions,preview,make('p','muted',file.path));files.append(card);
     }section.append(files);$('center-content').append(section);
   }

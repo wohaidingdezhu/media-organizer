@@ -26,19 +26,22 @@ function focusReportSection(){
   }
   if(section.id==='similar')pageReportPairs(section);
 }
-function reportActionOpen(action,ids,onClose){
+function reportActionOpen(action,ids,onClose,summary=''){
   if(!['delete','compare'].includes(action)||(action==='delete'?(ids.length<1||ids.length>200):ids.length!==2)||ids.some(id=>!/^[0-9a-f]{64}$/.test(id)))return;
   const dialog=document.createElement('dialog'),frame=document.createElement('iframe'),close=document.createElement('button');
   dialog.setAttribute('aria-label',action==='delete'?'删除文件预览':'对比照片');
-  dialog.style.cssText='width:min(1200px,96vw);height:94vh;padding:12px;border:1px solid #adbbb3;border-radius:12px';
+  dialog.style.cssText='width:min(1200px,96vw);height:94vh;max-height:94vh;padding:12px;border:1px solid #adbbb3;border-radius:12px;box-sizing:border-box;display:flex;flex-direction:column;gap:8px;overflow:hidden';
   close.textContent='返回文件列表';close.onclick=()=>dialog.close();
+  close.style.cssText='align-self:flex-start;flex-shrink:0';
   frame.title=action==='delete'?'核对后移到废纸篓 / 回收站':'并排比较并选择删除';
-  frame.style.cssText='display:block;width:100%;height:calc(100% - 48px);border:0;margin-top:8px';
+  frame.style.cssText='display:block;width:100%;flex:1;min-height:0;border:0';
   frame.src='organize.html#'+action+'='+ids.join(',');
-  const finished=event=>{if(action==='delete'&&event.detail?.status==='complete')dialog.close();};
+  const finished=event=>{if(action==='delete'&&event.detail?.mode==='trash'&&event.detail?.status==='complete')dialog.close();};
+  const cancelled=event=>{if(action==='delete'&&event.detail?.mode==='trash')dialog.close();};
   let child=null;
-  frame.addEventListener('load',()=>{child=frame.contentDocument?frame.contentWindow:null;if(child)child.addEventListener('media-operation-finished',finished);});
-  dialog.append(close,frame);dialog.addEventListener('close',()=>{if(child&&frame.contentDocument)child.removeEventListener('media-operation-finished',finished);dialog.remove();if(typeof onClose==='function')onClose();});document.body.append(dialog);dialog.showModal();
+  frame.addEventListener('load',()=>{child=frame.contentDocument?frame.contentWindow:null;if(child){child.addEventListener('media-operation-finished',finished);child.addEventListener('media-review-cancelled',cancelled);}});
+  dialog.append(close);if(summary){const note=document.createElement('p');note.textContent=summary;note.style.cssText='overflow-wrap:anywhere;margin:0;flex-shrink:0;max-height:22vh;overflow:auto';dialog.append(note);}dialog.append(frame);
+  dialog.addEventListener('close',()=>{if(child&&frame.contentDocument){child.removeEventListener('media-operation-finished',finished);child.removeEventListener('media-review-cancelled',cancelled);}dialog.remove();if(typeof onClose==='function')onClose();});document.body.append(dialog);dialog.showModal();
 }
 async function addReportFileActions(){
   if(!document.querySelector('#duplicates')&&!document.querySelector('#similar'))return;

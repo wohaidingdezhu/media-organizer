@@ -167,8 +167,9 @@ $('copy-photo-bundles').onclick=()=>previewOperation('copy',false,true);
 $('quick-preview').onclick=()=>previewOperation('copy',false,false,true);
 $('quick-choose').onclick=async()=>{if(operating||saving)return;saving=true;render();try{const result=await api('api/operations/destination',{});if(result.destination)$('quick-destination').value=result.destination;}catch(err){error(err.message);}finally{saving=false;render();}};
 $('execution-confirm').onchange=()=>$('execution-start').disabled=!$('execution-confirm').checked||!executionPreview?.token||operating;
-function cancelPreview(){executionPreview=null;$('notice').textContent='已取消预览，未执行文件操作。';}
-$('execution-cancel').onclick=()=>{cancelPreview();$('execution').close();};
+function notifyReview(type,detail){if(typeof CustomEvent==='function'&&typeof window!=='undefined'&&typeof window.dispatchEvent==='function')window.dispatchEvent(new CustomEvent(type,{detail}));}
+function cancelPreview(){const mode=executionPreview?.mode;executionPreview=null;$('notice').textContent='已取消预览，未执行文件操作。';if(mode)notifyReview('media-review-cancelled',{mode});}
+$('execution-cancel').onclick=()=>{if(operating)return;cancelPreview();$('execution').close();};
 $('execution').addEventListener('cancel',event=>{if(operating)event.preventDefault();else cancelPreview();});
 let submittedOperationId='';
 $('execution-start').onclick=async()=>{
@@ -303,7 +304,7 @@ async function refreshOperations(){
     const submitted=result.jobs.find(job=>job.id===submittedOperationId);
     if(submitted&&!activeOperation(submitted)){
       submittedOperationId='';
-      if(typeof CustomEvent==='function'&&typeof window?.dispatchEvent==='function')window.dispatchEvent(new CustomEvent('media-operation-finished',{detail:{status:submitted.status}}));
+      notifyReview('media-operation-finished',{status:submitted.status,mode:submitted.mode});
     }
   }catch(err){
     if(revision!==monitorRevision)return;
