@@ -7,6 +7,7 @@ import unicodedata
 from media_actions import media_id
 from movie_grouping import source_path
 from workspace_data import data_lock, read_json, write_json
+from video_metadata import clean_video_metadata
 
 NAME = 'media-center.json'
 LIMIT = 4 * 1024 * 1024
@@ -153,7 +154,8 @@ def center_catalog(document, state, notes=None, handled_trash=()):
     def file_item(path):
         record = records[path]
         return {'id': media_id(path), 'path': path, 'name': source_path(path).name,
-                'bytes': record.get('bytes', 0), 'mtime': record.get('mtime', 0)}
+                'bytes': record.get('bytes', 0), 'mtime': record.get('mtime', 0),
+                'video': clean_video_metadata(record.get('video')) if record.get('kind') == '视频' else {}}
 
     def entry(identifier, kind, title, files, preview='', metadata=None, tags=None, tag_key=''):
         if not files or not valid_id(identifier):

@@ -6,6 +6,12 @@ import sys
 BASE = Path(__file__).resolve().parent
 
 
+def video_metadata_helper():
+    # Native fallback still provides covers; metadata uses the same FFmpeg
+    # worker on both platforms, or remains explicitly unavailable.
+    return BASE / 'portable_video_cover.py'
+
+
 def helper(name):
     if name not in {"image_probe", "video_cover"}:
         raise ValueError("未知媒体组件")

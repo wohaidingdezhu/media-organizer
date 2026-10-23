@@ -422,6 +422,41 @@ def inspect_images(records, helper, issues, enabled, cache=None):
             "note": "使用 ImageIO 或 Pillow；动画仅比较第一帧，支持格式取决于已安装的解码器。"}
 
 
+def inspect_video_metadata(records, issues, enabled=True, cache=None):
+    """Optional bounded header probing, independent of poster presence/count."""
+    from video_metadata import clean_video_metadata
+    helper = media_backend.video_metadata_helper()
+    available = helper_available(helper)
+    summary = {'enabled': enabled, 'available': available, 'inspected': 0,
+               'note': '视频时长与编码尺寸来自 FFmpeg；未知信息不按文件名推测。'}
+    if not enabled or not available:
+        summary['note'] = '视频信息未读取：已关闭视频解析或未安装共用 FFmpeg 依赖；仍可浏览和精确查重。'
+        return summary
+    videos = [record for record in records if record['kind'] == '视频' and record['bytes'] and not record['hardlink_to']]
+    worker = ImageProbeWorker(helper)
+    try:
+        for index, record in enumerate(videos, 1):
+            if index == 1 or index % 50 == 0 or index == len(videos):
+                print(f'读取视频信息 {index}/{len(videos)}…', flush=True)
+            try:
+                if signature(os.stat(record['path'], follow_symlinks=False)) != record['_signature']:
+                    raise ValueError('视频自扫描后发生变化')
+                facts = cache.video_metadata(record) if cache else None
+                if facts is None:
+                    facts = clean_video_metadata(worker.request(record['path'], timeout=12))
+                if signature(os.stat(record['path'], follow_symlinks=False)) != record['_signature']:
+                    raise ValueError('读取视频信息时文件发生变化')
+                if not facts:
+                    raise ValueError('未读取到有效视频时长或尺寸')
+                record['video'] = facts
+                summary['inspected'] += 1
+            except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+                issue(issues, record['path'], f'视频信息未读取，仍保留文件查重结果：{error}')
+    finally:
+        worker.close()
+    return summary
+
+
 def month_for(record):
     metadata = record.get("image", {})
     original = metadata.get("date_original") or ""
@@ -1324,7 +1359,7 @@ def main(argv=None):
     parser.add_argument("--check-video-headers", action="store_true", help="可选：读取少量视频文件头并提示常见容器是否可识别；不验证能否播放")
     parser.add_argument("--no-local-metadata", action="store_true", help="不读取本地 NFO 影片资料和剧照")
     parser.add_argument("--refresh-media", action="store_true", help="重新解析全部媒体，不复用历史解析和小图；查重始终重新完整校验")
-    parser.add_argument("--no-video-covers", action="store_true", help="不从视频截帧生成封面；仍使用本地图片封面")
+    parser.add_argument("--no-video-covers", action="store_true", help="关闭视频信息读取与截帧；仍使用本地图片封面")
     parser.add_argument("--max-video-covers", type=int, default=500, help="视频截帧封面数量上限，默认 500")
     parser.add_argument("--include-hidden", action="store_true", help="包含隐藏文件和目录（仍跳过资料库和系统目录）")
     parser.add_argument("--open", action="store_true", help="扫描完成后打开 HTML 报告")
@@ -1370,6 +1405,7 @@ def main(argv=None):
         duplicates = exact_duplicates(records, issues)
         video_inspection = inspect_video_headers(records, issues, args.check_video_headers)
         image_inspection = inspect_images(records, media_backend.helper("image_probe"), issues, not args.no_image_metadata, cache=cache)
+        video_metadata_inspection = inspect_video_metadata(records, issues, not args.no_image_metadata and not args.no_video_covers, cache=cache)
         classify(records, args.video_rule)
         sidecars = associate_sidecars(found_sidecars, records)
         similarity = similar_images(records, args.distance, args.max_similar, not args.no_similar and not args.no_image_metadata and image_inspection["available"])
@@ -1420,7 +1456,8 @@ def main(argv=None):
                             "video_backend": media_backend.helper("video_cover").name,
                             "check_video_headers": args.check_video_headers, "max_video_covers": args.max_video_covers,
                             "video_covers_enabled": not args.no_video_covers and not args.no_image_metadata},
-                "image_inspection": image_inspection, "video_inspection": video_inspection, "scan_reuse": cache.summary(),
+                "image_inspection": image_inspection, "video_inspection": video_inspection,
+                "video_metadata_inspection": video_metadata_inspection, "scan_reuse": cache.summary(),
                 "files": clean_records, "duplicates": duplicates,
                 "similar": similarity, "previews": previews, "video_groups": video_groups, "sidecars": [{key: value for key, value in item.items() if not key.startswith("_")} for item in sidecars],
                 "folder_groups": folder_groups, "video_library": video_library, "issues": issues, "skipped": skipped}

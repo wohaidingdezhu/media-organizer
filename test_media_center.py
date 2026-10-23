@@ -329,6 +329,36 @@ directories={};for(let n=0;n<61;n++)directories['/sample'+n]={name:'sample'+n,pa
 const pager=$('center-content').children.find(n=>n.className==='pager');pager.children[2].onclick();assert.equal($('center-content').children[0].children.length,11);assert($('center-content').children[0].children.some(card=>card.attrs['aria-label'].includes('/sample60')));const finalPager=$('center-content').children.find(n=>n.className==='pager');assert(finalPager.children[2].disabled);finalPager.children[0].onclick();assert.equal($('center-content').children[0].children.length,50);assert.equal(calls.length,0);assert.equal(operations.length,0);
 """)
 
+    def test_video_facts_filters_apply_to_same_file_and_preserve_complete_movie(self):
+        self.run_ui(r'''
+const second={...movie,id:'f'.repeat(64),title:'Long movie',files:[{...movie.files[0],id:'1'.repeat(64),video:{duration_seconds:3600,width:3840,height:2160}}]};
+movie.files[0].video={duration_seconds:90,width:1920,height:1080};movie.files.push({...movie.files[0],id:'2'.repeat(64),name:'Alternate.mp4',video:{duration_seconds:7200,width:1280,height:720}});items.push(second);await $('center-refresh').onclick();
+$('filter-duration').value='long';$('filter-duration').onchange();$('filter-resolution').value='fhd';$('filter-resolution').onchange();assert.equal($('center-content').children[0].children.length,0);
+$('filter-duration').value='short';$('filter-duration').onchange();const card=$('center-content').children[0].children[0];assert(card.children.some(n=>n.textContent.includes('2 个视频文件')));card.children[0].onclick();
+const files=$('detail-content').children[0].children[1].children.filter(n=>n.className==='file');assert.equal(files.length,2);assert(files[0].children.some(n=>n.textContent.includes('1:30 · 1920 × 1080')));assert(files[1].children.some(n=>n.textContent.includes('2:00:00 · 1280 × 720')));assert.equal(operations.length,0);
+$('media-detail').close();$('reset-filters').onclick();assert.equal($('filter-duration').value,'');assert.equal($('filter-resolution').value,'');assert.equal($('center-content').children[0].children.length,2);
+location.hash='#photos';events.hashchange();assert.equal($('center-content').children[0].children.length,1);
+''')
+
+    def test_unknown_video_information_does_not_treat_photos_as_unknown_videos(self):
+        self.run_ui(r'''
+location.hash='#home';events.hashchange();$('filter-duration').value='unknown';$('filter-duration').onchange();const card=$('center-content').children[0].children[0];assert.equal($('center-content').children[0].children.length,1);assert(card.children.some(n=>n.textContent==='时长未知 · 尺寸未知'));card.children[0].onclick();assert($('detail-content').children[0].children[1].children.some(n=>n.textContent.includes('重新扫描')));$('media-detail').close();
+$('manage-toggle').onclick();$('select-page').onclick();assert($('selected-count').textContent.includes('1'));$('filter-resolution').value='fhd';$('filter-resolution').onchange();assert($('selected-count').textContent.includes('0'));assert.equal($('center-content').children[0].children.length,0);assert.equal(operations.length,0);
+''')
+
+    def test_video_duration_boundaries_and_duplicate_filters_keep_all_group_members(self):
+        self.run_ui(r'''
+assert.equal(scope.centerDuration(59.9),'1:00');assert.equal(scope.centerDuration(.2),'0:01');assert.equal(scope.centerDuration(NaN),'时长未知');
+for(const [duration,expected]of [[599.9,'short'],[600,'medium'],[3599,'medium'],[3600,'long']])for(const filter of ['short','medium','long'])assert.equal(scope.centerVideoMatch({video:{duration_seconds:duration}},filter,''),filter===expected);
+movie.files[0].video={duration_seconds:75,width:1080,height:1920};review.exact=[{files:[{...movie.files[0],owner:movie.id,kind:'video',media_kind:'movie',metadata:movie.metadata},{...movie.files[0],id:'f'.repeat(64),name:'Another.mp4',video:{}}]}];await $('center-refresh').onclick();location.hash='#review';events.hashchange();$('filter-duration').value='short';$('filter-resolution').value='fhd';$('filter-duration').onchange();const section=$('center-content').children.find(n=>n.className==='review-group');assert.equal(section.children.find(n=>n.className==='review-files').children.length,2);assert.equal(operations.length,0);
+''')
+
+    def test_video_filters_keep_folder_collection_and_search_context(self):
+        self.run_ui(r'''
+movie.files[0].video={duration_seconds:75,width:1920,height:1080};directories={'C:\\':{name:'Movies',parent:'',children:[],ids:[movie.id]},'/':{name:'Photos',parent:'',children:[],ids:[photo.id]}};await $('center-refresh').onclick();location.hash='#resources';events.hashchange();$('filter-duration').value='short';$('filter-duration').onchange();const wall=$('center-content').children[0];assert.equal(wall.children.length,1);wall.children[0].onclick();assert.equal($('center-title').textContent,'C:');$('query').value='Film';$('center-search').onsubmit({preventDefault(){}});assert.equal($('center-content').children[0].children.length,1);await $('center-refresh').onclick();assert.equal($('filter-duration').value,'short');
+state.collections['1'.repeat(32)]={name:'Collection',ids:[movie.id,photo.id]};location.hash='#collections';events.hashchange();$('filter-duration').value='long';$('filter-duration').onchange();assert.equal($('center-content').children[0].children.length,0);$('reset-filters').onclick();assert($('center-content').children[0].children.length>0);assert.equal(operations.length,0);
+''')
+
     def run_ui(self, assertions):
         node=shutil.which('node');self.assertIsNotNone(node)
         code=r'''

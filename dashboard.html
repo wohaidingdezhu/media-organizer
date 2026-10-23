@@ -61,7 +61,7 @@
     <section class="panel"><h2>1. 选择扫描文件夹</h2><ul id="folders" class="folder-list"><li class="empty">尚未选择文件夹</li></ul><button id="add-folder" class="ghost">＋ 添加文件夹…</button><p class="sub">Mac 可一次选择多个文件夹；Windows 可多次添加。首次建议先试一个较小目录。</p></section>
     <section class="panel"><h2>2. 扫描选项</h2>
       <label class="option"><input id="images" type="checkbox" checked><span>解析照片日期与相似候选<small>同时生成本地图片封面；完整 SHA-256 查重始终开启。</small></span></label>
-      <label class="option"><input id="covers" type="checkbox" checked><span>无本地封面时截取视频画面<small>封面只保存在报告目录。</small></span></label>
+      <label class="option"><input id="covers" type="checkbox" checked><span>读取视频时长、尺寸与封面<small>无本地封面时截帧；信息与封面只保存在资料库。</small></span></label>
       <label class="option"><input id="headers" type="checkbox"><span>检查常见视频文件头<small>只提示容器类型，不保证能播放。</small></span></label>
       <label class="option"><input id="refresh-media" type="checkbox"><span>重新解析全部媒体<small>默认复用身份未变化的照片信息和小图，加快再次扫描；精确查重每次仍完整校验。</small></span></label>
       <label class="field">视频分类建议<select id="rule"><option value="auto">自动识别</option><option value="name">按名称</option><option value="folder">保留原目录</option></select></label>

@@ -64,6 +64,8 @@ def run():
             raise AssertionError('Packaged scan failed')
         report = next(output.glob('scan-*/report.json'))
         document = json.loads(report.read_text(encoding='utf-8'))
+        video_facts = next(item['video'] for item in document['files'] if item['path'] == str(video))
+        assert video_facts['duration_seconds'] > 0 and video_facts['width'] > 0 and video_facts['height'] > 0
         group, = document['video_library']['groups']
         assert group['metadata']['title'] == '样例电影'
         assert group['poster'] and group['stills']
@@ -73,6 +75,7 @@ def run():
         report = max(output.glob('scan-*/report.json'))
         document = json.loads(report.read_text(encoding='utf-8'))
         assert document['scan_reuse']['image_metadata'] == 2
+        assert document['scan_reuse']['video_metadata'] == 1
         assert document['video_library']['groups'][0]['edition'] == '本机版本'
         destination = base / '副本'
         destination.mkdir()
