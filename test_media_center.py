@@ -132,7 +132,7 @@ class MediaCenterTests(unittest.TestCase):
         node=shutil.which('node');self.assertIsNotNone(node,'Both CI platforms install Node for UI tests')
         code=r'''
 const assert=require('assert/strict'),b=require(process.argv[1]);const items=[{id:'a',kind:'movie',title:'Movie',tags:['旅行'],files:[{id:'one',path:'C:\\movie.mp4'},{id:'two',path:'C:\\movie2.mp4'}],metadata:{actors:['演员']},personal:{note:'观影'},folder:'C:\\',mtime:1,favorite:true},{id:'b',kind:'photo',title:'photo.jpg',tags:[],files:[{id:'three',path:'/photo.jpg'}],metadata:{camera:'Camera'},personal:{note:''},folder:'/',mtime:2,favorite:false}];
-const before=JSON.stringify(items);assert.equal(b.centerFilter(items,{view:'movies'}).length,1);assert.equal(b.centerFilter(items,{view:'photos'}).length,1);assert.equal(b.centerFilter(items,{view:'favorites'}).length,1);assert.equal(b.centerFilter(items,{view:'movies',query:'Camera'})[0].id,'b');assert.equal(b.centerFilter(items,{query:'演员'})[0].id,'a');assert.equal(b.centerFilter(items,{folder:'C:\\'})[0].id,'a');assert.equal(b.centerFilter(items,{tag:'旅行'})[0].id,'a');assert.deepEqual(b.centerMediaIds([items[0],items[0]]),['one','two']);assert.equal(b.centerArt('https://evil/image.png'),'');assert.equal(b.centerArt('../previews/a.png'),'');assert.equal(b.centerArt('previews/a.png'),'previews/a.png');assert.equal(JSON.stringify(items),before);
+const before=JSON.stringify(items);assert.equal(b.centerFilter(items,{view:'movies'}).length,1);assert.equal(b.centerFilter(items,{view:'photos'}).length,1);assert.equal(b.centerFilter(items,{view:'favorites'}).length,1);assert.equal(b.centerFilter(items,{view:'movies',query:'Camera',global:true})[0].id,'b');assert.equal(b.centerFilter(items,{query:'演员'})[0].id,'a');assert.equal(b.centerFilter(items,{folder:'C:\\'})[0].id,'a');assert.equal(b.centerFilter(items,{tag:'旅行'})[0].id,'a');assert.deepEqual(b.centerMediaIds([items[0],items[0]]),['one','two']);assert.equal(b.centerArt('https://evil/image.png'),'');assert.equal(b.centerArt('../previews/a.png'),'');assert.equal(b.centerArt('previews/a.png'),'previews/a.png');assert.equal(JSON.stringify(items),before);
 '''
         result=subprocess.run([node,'-e',code,str(Path(__file__).with_name('media_center.js'))],capture_output=True,text=True,encoding='utf-8',timeout=15)
         self.assertEqual(result.returncode,0,result.stderr)
@@ -149,7 +149,7 @@ location.hash='#photos';events.hashchange();assert($('manage-bar').hidden);asser
 
     def test_actual_search_crosses_media_types_and_favorite_rpc_never_starts_file_operations(self):
         self.run_ui(r'''
-$('query').value='Sample Camera';$('center-search').onsubmit({preventDefault(){}});assert.equal($('center-title').textContent,'搜索结果');const card=$('center-content').children[0].children[0];assert(card.children.some(n=>n.textContent==='Photo'));
+$('search-scope').value='all';$('query').value='Sample Camera';$('center-search').onsubmit({preventDefault(){}});assert.equal($('center-title').textContent,'全部媒体 · 搜索结果');const card=$('center-content').children[0].children[0];assert(card.children.some(n=>n.textContent==='Photo'));
 card.children[0].onclick();const favorite=$('detail-actions').children.find(n=>n.textContent==='☆ 收藏');await favorite.onclick();assert.equal(calls.length,1);assert.equal(calls[0].path,'api/center');assert.equal(calls[0].body.action,'favorite');assert.equal(operations.length,0);
 ''')
 
@@ -160,6 +160,47 @@ const info=$('detail-content').children[0].children[1],file=info.children.find(n
 await file.children.find(n=>n.textContent==='播放').onclick();assert.equal(calls[0].path,'api/media/action');assert.equal(calls[0].body.action,'open');assert.equal(calls[1].path,'api/center');assert.equal(calls[1].body.action,'recent');assert.equal(operations.length,0);
 $('media-detail').close();location.hash='#home';events.hashchange();assert($('center-content').children.some(n=>n.textContent==='最近打开'));
 ''')
+
+    def test_current_page_search_keeps_media_kind_and_favorites_until_explicit_global_search(self):
+        self.run_ui(r"""
+movie.title=photo.title='共同标题';location.hash='#photos';events.hashchange();await $('center-refresh').onclick();
+$('query').value='共同标题';$('center-search').onsubmit({preventDefault(){}});assert.equal($('center-title').textContent,'照片 · 搜索结果');assert.equal($('center-content').children[0].children.length,1);
+$('search-scope').value='all';$('search-scope').onchange();assert.equal($('center-content').children[0].children.length,2);assert($('center-subtitle').textContent.includes('全局搜索'));$('media-kind').value='photo';$('media-kind').onchange();assert.equal($('center-content').children[0].children.length,1);
+$('clear-search').onclick();assert.equal($('center-title').textContent,'照片');location.hash='#favorites';events.hashchange();state.favorites[movie.id]=true;await $('center-refresh').onclick();$('query').value='共同标题';$('center-search').onsubmit({preventDefault(){}});assert.equal($('center-content').children[0].children.length,1);assert($('center-content').children[0].children[0].children.some(n=>n.textContent===movie.title));assert.equal(calls.length,0);assert.equal(operations.length,0);
+""")
+
+    def test_folder_search_preserves_path_subfolder_choice_and_returns_from_global_without_operations(self):
+        self.run_ui(r"""
+photo.title='旅行照片';photo.folder='/samples/旅行';photo.files[0].path='/samples/旅行/photo.jpg';const nested={...photo,id:'1'.repeat(64),folder:'/samples/旅行/子目录',files:[{...photo.files[0],id:'2'.repeat(64),path:'/samples/旅行/子目录/nested.jpg'}]},outside={...photo,id:'3'.repeat(64),folder:'/other/旅行',files:[{...photo.files[0],id:'4'.repeat(64),path:'/other/旅行/outside.jpg'}]};items=[photo,nested,outside];directories={'/samples/旅行':{name:'旅行',parent:'',ids:[photo.id],children:['/samples/旅行/子目录']},'/samples/旅行/子目录':{name:'子目录',parent:'/samples/旅行',ids:[nested.id],children:[]},'/other/旅行':{name:'旅行',parent:'',ids:[outside.id],children:[]}};
+location.hash='#resources';events.hashchange();await $('center-refresh').onclick();$('center-content').children[0].children.find(card=>card.attrs['aria-label'].includes('/samples/旅行')).onclick();
+$('query').value='旅行照片';$('center-search').onsubmit({preventDefault(){}});const wall=()=>$('center-content').children.find(n=>n.className.startsWith('wall'));assert.equal(wall().children.length,1);assert($('center-breadcrumb').children.some(n=>n.textContent==='/samples/旅行'));assert(!$('recursive-label').hidden);
+$('include-subfolders').checked=true;$('include-subfolders').onchange();assert.equal(wall().children.length,2);await $('center-refresh').onclick();assert.equal(wall().children.length,2);assert.equal($('query').value,'旅行照片');
+$('search-scope').value='all';$('search-scope').onchange();assert.equal(wall().children.length,3);assert(wall().children.every(card=>card.children.some(n=>n.className==='meta search-path'&&n.attrs.title)));assert(wall().children.some(card=>card.children[0].attrs['aria-label'].includes('/other/旅行')));assert($('recursive-label').hidden);$('center-breadcrumb').children[0].onclick();assert.equal($('query').value,'');assert.equal($('center-title').textContent,'旅行');assert($('include-subfolders').checked);assert($('center-breadcrumb').children.some(n=>n.textContent==='/samples/旅行'));assert.equal(calls.length,0);assert.equal(operations.length,0);
+""")
+
+    def test_search_keeps_collection_and_tag_context_but_global_results_cannot_remove_collection_members(self):
+        self.run_ui(r"""
+state.collections['1'.repeat(32)]={name:'我的相册',ids:[photo.id]};movie.tags=photo.tags=['旅行'];movie.title=photo.title='周末';location.hash='#collections';events.hashchange();await $('center-refresh').onclick();$('center-content').children[0].children.find(card=>card.children.some(n=>n.textContent==='我的相册')).onclick();
+$('query').value='周末';$('center-search').onsubmit({preventDefault(){}});assert.equal($('center-title').textContent,'我的相册 · 搜索结果');assert.equal($('center-content').children[0].children.length,1);$('manage-toggle').onclick();const pick=$('center-content').children[0].children[0].children.find(n=>n.className==='pick').children[0];pick.checked=true;pick.onchange();assert($('selected-count').textContent.includes('1'));
+$('search-scope').value='all';$('search-scope').onchange();assert($('selected-count').textContent.includes('0'));assert($('remove-collection').hidden);await $('remove-collection').onclick();assert.equal(calls.length,0);$('clear-search').onclick();assert.equal($('center-title').textContent,'我的相册');assert(!$('remove-collection').hidden);
+location.hash='#tags';events.hashchange();await $('center-refresh').onclick();$('center-content').children[0].children[0].onclick();$('query').value='周末';$('center-search').onsubmit({preventDefault(){}});assert($('center-subtitle').textContent.includes('标签：旅行'));$('clear-search').onclick();assert($('center-subtitle').textContent.includes('标签：旅行'));assert.equal(operations.length,0);
+""")
+
+    def test_review_search_retains_whole_group_actions_and_similar_mode_on_return(self):
+        self.run_ui(r"""
+const second={...photo,id:'1'.repeat(64),title:'Second',files:[{...photo.files[0],id:'2'.repeat(64),path:'C:\\Copies\\archive.jpg'}]};photo.files[0].path='/trips/Café.jpg';items=[photo,second];access.ids_by_path[photo.files[0].path]=photo.files[0].id;access.ids_by_path[second.files[0].path]=second.files[0].id;photo.tags=['旅行'];
+const files=items.map(item=>({...item.files[0],name:item.title,kind:'photo',media_kind:'photo',owner:item.id,metadata:item.metadata,preview:item.preview}));review={exact:[{sha256:'3'.repeat(64),files}],similar:[{distance:3,files}],warnings:[]};location.hash='#review';events.hashchange();await $('center-refresh').onclick();
+$('query').value='CAFE\u0301';$('center-search').onsubmit({preventDefault(){}});const group=()=>$('center-content').children.find(n=>n.className==='review-group'),cards=()=>group().children.find(n=>n.className==='review-files').children;assert.equal(cards().length,2);assert.equal($('center-title').textContent,'重复与相似');assert($('center-subtitle').textContent.includes('1 组'));cards()[0].children.find(n=>n.className==='actions').children.find(n=>n.textContent==='保留这份，清理其余…').onclick();assert.deepEqual(Array.from(operations[0].ids),[second.files[0].id]);assert.equal(calls.length,0);
+$('query').value='旅行';$('center-search').onsubmit({preventDefault(){}});assert.equal(cards().length,2);$('center-content').children[0].children[1].onclick();assert($('center-content').children.some(n=>n.textContent.includes('视觉相似候选')));assert.equal(cards().length,2);
+$('search-scope').value='all';$('search-scope').onchange();assert(!group());assert(!$('manage-toggle').hidden);$('center-breadcrumb').children[0].onclick();assert(group());assert($('manage-toggle').hidden);assert($('center-content').children.some(n=>n.textContent.includes('视觉相似候选')));assert.equal(calls.length,0);
+""")
+
+    def test_review_group_search_combines_filters_per_file_and_sorts_without_mutation(self):
+        self.run_ui(r"""
+const b=require(process.argv[1]),file=(id,name,bytes,mtime,year,kind='photo')=>({id,name,path:'C:\\Generated\\'+name,bytes,mtime,media_kind:kind,metadata:{year,genres:['旅行']}});
+const first={files:[file('a','Photo10.jpg',10,1,'2024'),file('b','KEEP.jpg',10,4,'2025')]},second={files:[file('c','Photo2.jpg',20,8,'2025')]},third={files:[file('d','电影.mp4',30,2,'2025','movie')]},review={exact:[first,second,third],similar:[]},before=JSON.stringify(review);
+assert.deepEqual(b.centerReviewGroups(review,{query:'keep',year:'2024'}),[]);assert.equal(b.centerReviewGroups(review,{query:'keep',year:'2025'})[0],first);assert.equal(b.centerReviewGroups(review,{query:'C:\\Generated',kind:'movie'})[0],third);assert.deepEqual(b.centerReviewGroups(review,{order:'size'}),[third,second,first]);assert.deepEqual(b.centerReviewGroups(review,{order:'recent'}),[second,first,third]);assert.equal(b.centerReviewGroups(review,{order:'oldest'})[0],first);assert.equal(b.centerReviewGroups(review,{order:'name',kind:'photo'})[0],second);assert.equal(JSON.stringify(review),before);
+""")
 
     def test_review_keeps_full_hash_and_visual_candidates_distinct_and_projects_success_records(self):
         paths=['/generated/a.jpg','/generated/b.jpg','/generated/c.jpg'];digest='a'*64
