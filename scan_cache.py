@@ -9,7 +9,7 @@ import struct
 import zlib
 
 import portable_fs as fs
-from media_actions import checked_stat, file_signature
+from media_actions import checked_stat, file_signature, media_id
 
 
 def valid_thumbnail(body):
@@ -64,7 +64,7 @@ class ScanCache:
         self.output = Path(output)
         self.report = None
         self.files, self.pictures = {}, {}
-        self.reused_metadata = self.reused_previews = self.reused_covers = 0
+        self.reused_metadata = self.reused_previews = self.reused_covers = self.reused_video_metadata = 0
         self.enabled = enabled
         if not enabled or not self.output.exists():
             return
@@ -88,6 +88,11 @@ class ScanCache:
                     source = source.removeprefix('视频截帧：')
                     if source and group.get('poster'):
                         self.pictures.setdefault((role, source), group['poster'])
+                for path, record in self.files.items():
+                    if record.get('kind') == '视频':
+                        # A manually repaired cover is reusable only after the
+                        # normal full source-signature and PNG checks below.
+                        self.pictures.setdefault(('video', path), 'covers/repair-' + media_id(path) + '.png')
                 break
             except (OSError, ValueError, KeyError, TypeError, AttributeError):
                 self.files, self.pictures, self.report = {}, {}, None
@@ -119,6 +124,18 @@ class ScanCache:
         except (OSError, ValueError, TypeError):
             return None
 
+    def video_metadata(self, record):
+        from video_metadata import clean_video_metadata
+        try:
+            if self.unchanged(record):
+                value = clean_video_metadata(self.files[record['path']].get('video'))
+                if value:
+                    self.reused_video_metadata += 1
+                    return value
+        except (OSError, ValueError, TypeError):
+            pass
+        return None
+
     def thumbnail(self, record, destination, role='image'):
         relative = self.pictures.get((role, record['path']))
         if not isinstance(relative, str) or not re.fullmatch(r'(previews|covers)/[A-Za-z0-9_-]+\.png', relative):
@@ -149,5 +166,5 @@ class ScanCache:
     def summary(self):
         return {'enabled': self.enabled, 'previous_report': self.report or '',
                 'image_metadata': self.reused_metadata, 'image_previews': self.reused_previews,
-                'video_covers': self.reused_covers,
+                'video_covers': self.reused_covers, 'video_metadata': self.reused_video_metadata,
                 'note': '已重新遍历来源并核对文件身份；仅复用未变化文件的解析和小图，同大小查重候选仍重新完整读取 SHA-256。'}

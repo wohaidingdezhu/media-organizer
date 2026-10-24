@@ -144,6 +144,8 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
         raise ValueError("报告内容无效")
     organization = None
     media = MediaActions(document)
+    from preview_repair import PreviewRepair
+    preview_repair = PreviewRepair(report_dir, media, document)
     organization_lock = threading.Lock()
 
     def get_organization():
@@ -190,6 +192,15 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
     note_path = output_dir / "library-notes.json"
     from organize_settings import OrganizeSettings
     organize_settings = OrganizeSettings(output_dir, current_document)
+    from media_center import CenterState, center_catalog
+    center_state = CenterState(output_dir)
+    def center_snapshot():
+        history = operations.history()
+        with data_lock(output_dir):
+            result = center_catalog(current_document(), center_state.snapshot(), load_notes(note_path), history['handled']['trash'])
+        result['operation_state'] = {'running': any(job['status'] in {'running', 'external_running'} for job in history['jobs']),
+                                     'warnings': history['warnings']}
+        return preview_repair.apply(result)
     operations = FileOperations(report_dir, media, get_organization, document=current_document, options=organize_settings.snapshot)
     from media_users import UserCatalog
     users = UserCatalog(output_dir, current_document)
@@ -249,6 +260,57 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
             self.end_headers()
             self.wfile.write(body)
 
+        def send_video(self, identifier):
+            """Stream only a verified scanned file; no path-based public endpoint."""
+            from media_actions import file_signature
+            sent = False
+            try:
+                record, expected = media.validate_for_view(identifier)
+                if record['kind'] != '视频':
+                    raise ValueError('请选择本库的视频文件')
+                types = {'.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm'}
+                content_type = types.get(Path(record['path']).suffix.lower())
+                if not content_type:
+                    raise ValueError('此格式请用系统播放器打开')
+                with os.pinned_source(record['path']) as (descriptor, _, __):
+                    info = os.fstat(descriptor)
+                    if file_signature(info) != file_signature(expected):
+                        raise ValueError('视频已变化，请重新扫描')
+                    total = info.st_size
+                    start, end = 0, total - 1
+                    requested = self.headers.get('Range')
+                    if requested:
+                        match = re.fullmatch(r'bytes=(\d*)-(\d*)', requested)
+                        if not match or not any(match.groups()) or max(map(len, match.groups())) > 20:
+                            self.send_error(416); return
+                        left, right = match.groups()
+                        if left:
+                            start = int(left); end = min(int(right), total-1) if right else total-1
+                        else:
+                            start = max(0, total-int(right))
+                    if not total or start > end or start >= total:
+                        self.send_response(416);self.send_header('Content-Range', f'bytes */{total}');self.send_header('Content-Length', '0');self.end_headers();return
+                    self.send_response(206 if requested else 200)
+                    self.send_header('Content-Type', content_type)
+                    self.send_header('Content-Length', str(end-start+1))
+                    self.send_header('Accept-Ranges', 'bytes')
+                    self.send_header('Cache-Control', 'no-store')
+                    self.send_header('X-Content-Type-Options', 'nosniff')
+                    if requested:self.send_header('Content-Range', f'bytes {start}-{end}/{total}')
+                    self.end_headers()
+                    sent = True
+                    os.lseek(descriptor, start, os.SEEK_SET)
+                    remaining = end-start+1
+                    while remaining:
+                        chunk = os.read(descriptor, min(1024*1024, remaining))
+                        if not chunk:break
+                        self.wfile.write(chunk);remaining -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            except (OSError, ValueError) as error:
+                if not sent:self.send_json(400, {'error': str(error)})
+                else:self.close_connection = True
+
         def do_GET(self):
             nonlocal changes, duplicate_data, storage_data
             route = self.route()
@@ -257,6 +319,15 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 return
             if route == "api/media":
                 self.send_json(200, media.snapshot())
+                return
+            if route.startswith('api/video/'):
+                self.send_video(route.removeprefix('api/video/'))
+                return
+            if route == 'api/center':
+                try:
+                    self.send_json(200, center_snapshot())
+                except (OSError, ValueError, KeyError, TypeError) as error:
+                    self.send_json(400, {'error': str(error)})
                 return
             if route in {"api/users", "api/photos", "api/duplicates", "api/storage", "api/basket", "api/roots", "api/changes", "api/notes", "api/operations", "api/organize-settings", "api/organized-results"} or route.startswith(("api/operations/", "api/photo-bundles/", "api/movie-bundles/")):
                 try:
@@ -342,7 +413,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 self.send_error(404)
                 return
             try:
-                assets = {"organize.html": "organization.html", "photos.html": "organization.html", "users.html": "media_users.html"}
+                assets = {"organize.html": "organization.html", "photos.html": "organization.html", "users.html": "media_users.html", "center.html": "media_center.html"}
                 page_dir = Path(__file__).resolve().parent if route in assets else report_dir
                 stream = _open_report_file(page_dir, (assets[route],) if route in assets else parts)
             except (OSError, ValueError):
@@ -350,6 +421,10 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 return
             with stream:
                 body = current_library_page() if route == "library.html" else None
+                if route == 'center.html':
+                    body = stream.read()
+                    with _open_report_file(Path(__file__).resolve().parent, ('media_center.js',)) as script:
+                        body = body.replace(b'@@MEDIA_CENTER@@', script.read())
                 if route == 'users.html':
                     body = stream.read()
                     with _open_report_file(Path(__file__).resolve().parent, ('media_users.js',)) as script:
@@ -371,7 +446,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     if b"@@STORAGE_CLEANUP@@" in body:
                         with _open_report_file(Path(__file__).resolve().parent, ("storage_cleanup.js",)) as script:
                             body = body.replace(b"@@STORAGE_CLEANUP@@", script.read())
-                if route in {"report.html", "library.html"}:
+                if route in {"report.html", "library.html", "center.html"}:
                     if body is None:
                         body = stream.read()
                     # Only loopback-served pages may use their own API/confirmation frame.
@@ -380,7 +455,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     body = body.replace(b"connect-src 'self'\"", b"connect-src 'self'; frame-src 'self'\"")
                     with _open_report_file(Path(__file__).resolve().parent, ("report_actions.js",)) as script:
                         body += b"<script>" + script.read() + b"</script>"
-                if dashboard_link and route in {"report.html", "library.html", "organize.html", "photos.html", "users.html"}:
+                if dashboard_link and route in {"report.html", "library.html", "organize.html", "photos.html", "users.html", "center.html"}:
                     if body is None:
                         body = stream.read()
                     opening = re.search(br"<body(?:\s[^>]*)?>", body, re.IGNORECASE)
@@ -402,13 +477,13 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
 
         def do_POST(self):
             route = self.route()
-            if route not in {"api/users", "api/organize-settings", "api/organized-results/action", "api/tags", "api/tags/toggle", "api/organization", "api/media/action", "api/notes", "api/basket", "api/grouping",
+            if route not in {"api/center", "api/users", "api/organize-settings", "api/organized-results/action", "api/tags", "api/tags/toggle", "api/organization", "api/media/action", "api/media/cover", "api/notes", "api/basket", "api/grouping",
                              "api/operations/preview", "api/operations/quick-preview", "api/operations/start", "api/operations/stop", "api/operations/destination"}:
                 self.send_error(404)
                 return
             origin = self.headers.get("Origin")
             if ((origin and origin != f"http://127.0.0.1:{self.server.server_port}")
-                    or (route in {"api/users", "api/organize-settings", "api/organized-results/action", "api/media/action", "api/basket", "api/grouping"} or route.startswith("api/operations/")) and origin != f"http://127.0.0.1:{self.server.server_port}"):
+                    or (route in {"api/center", "api/users", "api/organize-settings", "api/organized-results/action", "api/media/action", "api/media/cover", "api/basket", "api/grouping"} or route.startswith("api/operations/")) and origin != f"http://127.0.0.1:{self.server.server_port}"):
                 self.send_json(403, {"error": "页面来源不匹配"})
                 return
             if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
@@ -421,6 +496,11 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 payload = json.loads(self.rfile.read(length))
                 if not isinstance(payload, dict):
                     raise ValueError("请求内容必须是 JSON 对象")
+                if route == 'api/center':
+                    current = center_snapshot()
+                    result = operations.update_plan(lambda: center_state.update(payload, {item['id'] for item in current['items']}, current['directories']))
+                    self.send_json(200, result)
+                    return
                 if route == 'api/users':
                     action = payload.get('action')
                     if action in {'plan-preview', 'plan-apply'}:
@@ -432,6 +512,9 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 if route == "api/basket":
                     result = operations.update_plan(lambda: get_basket().update(payload['action'], payload['ids']))
                     self.send_json(200, result)
+                    return
+                if route == "api/media/cover":
+                    self.send_json(200, preview_repair.generate(payload.get("id")))
                     return
                 if route == "api/media/action":
                     self.send_json(200, media.perform(payload["id"], payload["action"]))

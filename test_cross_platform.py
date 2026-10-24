@@ -224,6 +224,10 @@ class CrossPlatformTests(unittest.TestCase):
                     helper = media_backend.helper('video_cover')
                     self.assertEqual(helper.name, 'portable_video_cover.py')
                     issues = []
+                    info = media_scan.inspect_video_metadata([record], issues)
+                    self.assertEqual(info['inspected'], 1, issues)
+                    self.assertEqual((record['video']['width'], record['video']['height']), (80, 60))
+                    self.assertAlmostEqual(record['video']['duration_seconds'], 1, delta=.1)
                     count = media_scan.export_video_frame_covers(report, groups, [record], helper, issues)
                     self.assertEqual(count, 1, issues)
                     self.assertTrue((report / groups[0]['poster']).read_bytes().startswith(b'\x89PNG'))

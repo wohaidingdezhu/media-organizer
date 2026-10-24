@@ -16,7 +16,7 @@ from file_operations import maintenance_when_idle, open_directory
 MAX_ARCHIVE = 64 * 1024 * 1024
 MAX_TOTAL = 512 * 1024 * 1024
 MAX_FILES = 10000
-ROOT_FILES = {'library-tags.json', 'library-notes.json', 'library-index.json', 'workspace-settings.json', 'library-grouping.json', 'media-users.json', 'organize-settings.json'}
+ROOT_FILES = {'media-center.json', 'library-tags.json', 'library-notes.json', 'library-index.json', 'workspace-settings.json', 'library-grouping.json', 'media-users.json', 'organize-settings.json'}
 REPORT_FILES = {'report.json', 'report.html', 'library.html', 'inventory.csv', 'duplicates.csv', 'similar.csv',
                 'video_groups.csv', 'sidecars.csv', 'folder_names.csv', 'classification.csv', 'issues.csv',
                 'library_issues.csv', 'organization-plan.json', 'cleanup-basket.json'}
@@ -138,6 +138,11 @@ def validate_backup(body):
         except (ValueError, KeyError, TypeError, AttributeError) as error:
             raise ValueError(f'{report} 无法安全恢复，请核对备份版本') from error
     files.pop('library-index.json', None)
+    if 'media-center.json' in files:
+        from media_center import validate_state, LIMIT
+        if len(files['media-center.json']) > LIMIT:
+            raise ValueError('媒体中心资料过大')
+        validate_state(json.loads(files['media-center.json']))
     if 'media-users.json' in files:
         from media_users import MAX_BYTES, validate_users
         if len(files['media-users.json']) > MAX_BYTES:

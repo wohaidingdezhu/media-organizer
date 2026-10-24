@@ -136,6 +136,69 @@ def free_bytes(directory):
     return info.f_bavail * info.f_frsize
 
 
+def directory_entry_stat(directory, name):
+    """Read entry metadata without following links, including directory entries."""
+    return _os.stat(name, dir_fd=directory, follow_symlinks=False)
+
+
+def directory_fingerprint(roots, excluded, extensions, skip_dirs, package_ext, stop=None):
+    """Bounded metadata-only traversal through pinned, non-link directories."""
+    import hashlib
+    import json
+    import stat
+    import time
+    from file_operations import open_directory
+    from media_actions import file_signature
+    api = sys.modules[__name__]
+    digest, count, began = hashlib.sha256(), 0, time.monotonic()
+    excluded = private_data_path(excluded)
+
+    def walk(path, descriptor, depth=0):
+        nonlocal count
+        if depth > 128:
+            raise ValueError('目录层级过深，请缩小自动检查范围')
+        directory_info = api.fstat(descriptor)
+        if getattr(directory_info, 'st_flags', 0) & 0x40000000:
+            raise ValueError('目录含云端占位内容，自动检查暂停；请下载后重试')
+        before = file_signature(directory_info)
+        digest.update(json.dumps([str(path), before], ensure_ascii=False).encode('utf-8'))
+        for name in sorted(api.listdir(descriptor)):
+            count += 1
+            if count > 200000 or time.monotonic() - began > 20 or stop and stop.is_set():
+                raise ValueError('目录变化检查已停止或超过范围限制，可改用定时更新')
+            child = path / name
+            if name.startswith('.') or name in skip_dirs or child.suffix.lower() in package_ext or child == excluded:
+                continue
+            info = api.directory_entry_stat(descriptor, name)
+            if stat.S_ISLNK(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400:
+                continue
+            if getattr(info, 'st_flags', 0) & 0x40000000:
+                raise ValueError('目录含云端占位内容，自动检查暂停；请下载后重试')
+            if stat.S_ISDIR(info.st_mode):
+                nested = api.open(name, api.O_RDONLY | api.O_DIRECTORY | api.O_NOFOLLOW, dir_fd=descriptor)
+                try:
+                    if file_signature(api.fstat(nested)) != file_signature(info):
+                        raise ValueError('目录正在变化，稍后重试')
+                    walk(child, nested, depth + 1)
+                finally:
+                    api.close(nested)
+            elif stat.S_ISREG(info.st_mode) and child.suffix.lower().lstrip('.') in extensions:
+                digest.update(json.dumps([name, file_signature(info)], ensure_ascii=False).encode('utf-8'))
+        if file_signature(api.fstat(descriptor)) != before:
+            raise ValueError('目录正在变化，稍后重试')
+
+    for value in sorted(roots):
+        root = private_data_path(value)
+        if not root.is_absolute() or root == excluded or excluded in root.parents:
+            raise ValueError('自动检查目录无效')
+        descriptor = open_directory(root)
+        try:
+            walk(root, descriptor)
+        finally:
+            api.close(descriptor)
+    return digest.hexdigest()
+
+
 @contextmanager
 def pinned_source(path):
     """Keep FFmpeg's path stable on Windows; use an inherited fd on POSIX."""
@@ -180,7 +243,6 @@ if sys.platform == "win32":
     from ctypes import wintypes as w
     import msvcrt
     from pathlib import Path
-    from types import SimpleNamespace
 
     O_NOFOLLOW, O_DIRECTORY, O_NONBLOCK = 1 << 27, 1 << 28, 1 << 26
     _kernel = c.WinDLL("kernel32", use_last_error=True)
@@ -207,6 +269,11 @@ if sys.platform == "win32":
     _kernel.GetFileInformationByHandle.restype = w.BOOL
     _kernel.CloseHandle.argtypes = [w.HANDLE]
     _kernel.CloseHandle.restype = w.BOOL
+    _kernel.GetCurrentProcess.argtypes = []
+    _kernel.GetCurrentProcess.restype = w.HANDLE
+    _kernel.DuplicateHandle.argtypes = [w.HANDLE, w.HANDLE, w.HANDLE, c.POINTER(w.HANDLE),
+                                      w.DWORD, w.BOOL, w.DWORD]
+    _kernel.DuplicateHandle.restype = w.BOOL
     _kernel.GetFinalPathNameByHandleW.argtypes = [w.HANDLE, w.LPWSTR, w.DWORD, w.DWORD]
     _kernel.GetFinalPathNameByHandleW.restype = w.DWORD
     _nt.NtCreateFile.argtypes = [c.POINTER(w.HANDLE), w.DWORD, c.POINTER(_Attributes),
@@ -319,9 +386,26 @@ if sys.platform == "win32":
     def fstat(fd):
         if not isinstance(fd, Directory):
             return _os.fstat(fd)
-        info = _info(fd.handle)
-        return SimpleNamespace(st_dev=info.volume, st_ino=(info.index_high << 32) | info.index_low,
-                               st_mode=0o40700, st_size=0)
+        # Let this Python runtime supply the same identity/timestamp format as
+        # stat(path), including Python 3.12+'s wider Windows volume/file IDs.
+        # A duplicate preserves the pinned directory's lifetime and sharing rules.
+        process, copied = _kernel.GetCurrentProcess(), w.HANDLE()
+        if not _kernel.DuplicateHandle(process, fd.handle, process, c.byref(copied), 0, False, 2):
+            raise c.WinError(c.get_last_error())
+        try:
+            descriptor = msvcrt.open_osfhandle(copied.value, _os.O_RDONLY | _os.O_BINARY)
+        except BaseException:
+            _kernel.CloseHandle(copied)
+            raise
+        try:
+            return _os.fstat(descriptor)
+        finally:
+            _os.close(descriptor)
+
+    def directory_entry_stat(directory, name):
+        # The directory handle denies rename/delete; inspect final links without
+        # opening their targets. Traversal opens/compares each child separately.
+        return _os.stat(Path(_directory_path(directory)) / _component(name), follow_symlinks=False)
 
     def stat(path, *, dir_fd=None, follow_symlinks=True):
         if dir_fd is None:

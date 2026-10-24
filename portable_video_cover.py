@@ -4,11 +4,12 @@ import subprocess
 from pathlib import Path
 from portable_image_probe import batch
 import portable_fs as os
+from video_metadata import parse_video_metadata
 
 
 def probe(path, thumbnail=None):
     import imageio_ffmpeg
-    if not thumbnail or Path(path).absolute() == Path(thumbnail).absolute():
+    if thumbnail and Path(path).absolute() == Path(thumbnail).absolute():
         raise ValueError("视频截帧需要独立的预览路径")
     executable = imageio_ffmpeg.get_ffmpeg_exe()
     # Keep a verified source open throughout probing and frame extraction.
@@ -16,6 +17,14 @@ def probe(path, thumbnail=None):
         before = os.fstat(source)
         metadata = subprocess.run([executable, "-nostdin", "-hide_banner", "-i", input_path],
                                   capture_output=True, timeout=8, **options)
+        facts = parse_video_metadata(metadata.stderr)
+        if not thumbnail:
+            from media_actions import checked_stat, file_signature
+            if file_signature(before) != file_signature(checked_stat(path)):
+                raise ValueError("视频在读取信息时发生变化")
+            if not facts:
+                raise ValueError("无法读取视频时长或尺寸；仍可浏览和查重")
+            return {"path": path, **facts}
         match = re.search(rb"Duration: (\d+):(\d+):(\d+(?:\.\d+)?)", metadata.stderr)
         seek = sum(float(value) * scale for value, scale in zip(match.groups(), (3600, 60, 1))) * .1 if match else 0
         frame = None
