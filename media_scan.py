@@ -982,20 +982,32 @@ def export_video_frame_covers(directory, groups, records, helper, issues, limit=
         return 0
     by_path = {record["path"]: record for record in records if record["kind"] == "视频"}
     pending = []
+    count = 0
+    cover_dir = directory / "covers"
+    cover_dir.mkdir(mode=0o700, exist_ok=True)
     for index, group in enumerate(groups):
         if group["poster"]:
             continue
         options = [by_path[file["path"]] for file in group["files"]
                    if file["extension"] in VIDEO_EXT and not by_path[file["path"]]["hardlink_to"]]
         if options:
+            destination = cover_dir / f"frame-{index + 1:05d}.png"
+            reused = False
+            for record in options if cache else []:
+                if cache.thumbnail(record, destination, 'video'):
+                    group['poster'] = f"covers/{destination.name}"
+                    group['poster_source'] = '视频截帧：' + record['path']
+                    count += 1
+                    reused = True
+                    break
+            if reused:
+                continue
             if len(pending) >= limit:
                 group["poster_status"] = "超过本次视频截帧数量上限"
             else:
                 pending.append((index, options))
     if not pending:
-        return 0
-    cover_dir = directory / "covers"
-    cover_dir.mkdir(mode=0o700, exist_ok=True)
+        return count
     workers = [ImageProbeWorker(helper) for _ in range(2)]
     def export_one(item):
         index, options = item
@@ -1006,8 +1018,7 @@ def export_video_frame_covers(directory, groups, records, helper, issues, limit=
                 before = os.stat(record["path"], follow_symlinks=False)
                 if not stat.S_ISREG(before.st_mode) or signature(before) != record["_signature"]:
                     raise ValueError("视频自扫描后发生变化")
-                if not cache or not cache.thumbnail(record, destination, 'video'):
-                    workers[index % 2].request(record["path"], thumbnail=str(destination), timeout=25)
+                workers[index % 2].request(record["path"], thumbnail=str(destination), timeout=25)
                 after = os.stat(record["path"], follow_symlinks=False)
                 if signature(after) != record["_signature"] or not destination.is_file():
                     raise ValueError("视频截帧时发生变化")
@@ -1019,7 +1030,6 @@ def export_video_frame_covers(directory, groups, records, helper, issues, limit=
                     pass
                 last_error = str(error)
         return index, "", "", last_error
-    count = 0
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:
             for index, relative, source, error in pool.map(export_one, pending):

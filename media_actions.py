@@ -1,6 +1,8 @@
 """Open selected scanned media with native apps; never modify media here."""
 import hashlib
 import math
+import re
+import threading
 import portable_fs as os
 from pathlib import Path
 import stat
@@ -46,6 +48,8 @@ def checked_stat(path):
 class MediaActions:
     def __init__(self, document):
         self.records = {}
+        self.view_signatures = {}
+        self.view_lock = threading.Lock()
         if document.get('restored_snapshot'):
             self.roots = []
             return
@@ -97,17 +101,60 @@ class MediaActions:
             raise ValueError("原文件自扫描后发生变化，请重新扫描")
         return record, info
 
+    def validate_for_view(self, identifier):
+        """Recover attribute-only drift only after proving unchanged full content.
+
+        This cache is private to viewing. Copy/trash continue using validate()
+        against the original scan signature, including its identity timestamp.
+        """
+        try:
+            return self.validate(identifier)
+        except ValueError as failure:
+            if not isinstance(identifier, str) or identifier not in self.records:
+                raise
+            record = self.records[identifier]
+            expected, digest = record.get('source_signature'), record.get('sha256')
+            try:
+                info = checked_stat(record['path'])
+            except (OSError, ValueError):
+                raise failure
+            actual = file_signature(info)
+            if (not isinstance(expected, list) or len(expected) != 5
+                    or any(type(n) is not int for n in expected) or actual[:4] != expected[:4]
+                    or not isinstance(digest, str) or not re.fullmatch(r'[0-9a-f]{64}', digest)
+                    or info.st_size > 64 * 1024 * 1024):
+                raise failure
+            with self.view_lock:
+                if self.view_signatures.get(identifier) == actual:
+                    return record, info
+                with os.pinned_source(record['path']) as (descriptor, _, __):
+                    if file_signature(os.fstat(descriptor)) != actual:
+                        raise failure
+                    calculated = hashlib.sha256()
+                    remaining = info.st_size
+                    while remaining:
+                        block = os.read(descriptor, min(1024 * 1024, remaining))
+                        if not block:
+                            raise failure
+                        remaining -= len(block)
+                        calculated.update(block)
+                    if (calculated.hexdigest() != digest or file_signature(os.fstat(descriptor)) != actual
+                            or file_signature(checked_stat(record['path'])) != actual):
+                        raise failure
+                self.view_signatures[identifier] = actual
+                return record, info
+
     def perform(self, identifier, action):
         if not isinstance(action, str) or action not in {"open", "reveal"}:
             raise ValueError("仅支持打开媒体或在文件管理器定位")
         if sys.platform == "win32":
             from system_integration import open_path
-            record, _ = self.validate(identifier)
+            record, _ = self.validate_for_view(identifier)
             open_path(record["path"], reveal=action == "reveal")
             return {"ok": True, "action": action, "message": "已交给系统默认程序打开。" if action == "open" else "已在资源管理器定位原文件。"}
         if sys.platform != "darwin":
             raise ValueError("打开与定位功能目前需要 macOS")
-        record, _ = self.validate(identifier)
+        record, _ = self.validate_for_view(identifier)
         command = ["/usr/bin/open"]
         if action == "reveal":
             command.append("-R")

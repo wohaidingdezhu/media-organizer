@@ -234,7 +234,8 @@ class DashboardState(WorkspaceController):
             return {"folders": list(self.folders), "running": self.running,
                     "status": self.status, "logs": list(self.logs),
                     "latest_report": report.name if report else None, "monitor": dict(self.monitor),
-                    "workspace": self.output.name, "next_update_seconds": max(0, int(self.next_scan - __import__("time").monotonic())) if self.next_scan else None}
+                    "workspace": self.output.name, "watch_status": self.watch_status, "scan_origin": self.scan_origin,
+                    "next_update_seconds": max(0, int(self.next_scan - __import__("time").monotonic())) if self.next_scan else None}
 
     def add_folders(self):
         choices = scan.choose_folders()
@@ -263,7 +264,21 @@ class DashboardState(WorkspaceController):
             self.save_settings()
         return self.snapshot()
 
-    def start_scan(self, options):
+    def rescan_report(self, identifier):
+        from workspace_data import read_json
+        with self.lock:
+            report = selected_report(self.output, identifier)
+            document = read_json(report, 'report.json')
+            if document.get('restored_snapshot'):
+                raise ValueError('恢复快照需先重新选择本机目录')
+            folders = document.get('roots')
+            if not isinstance(folders, list) or not folders or not all(isinstance(path, str) and Path(path).is_absolute() for path in folders):
+                raise ValueError('扫描来源无效，请重新选择目录')
+            self.start_scan(self.scan_options, folders=folders)
+            self.scan_origin = 'recovery'
+            return self.snapshot()
+
+    def start_scan(self, options, folders=None):
         if not isinstance(options, dict):
             raise ValueError("扫描选项无效")
         for key in ("image_analysis", "video_covers", "video_headers", "refresh_media"):
@@ -276,10 +291,11 @@ class DashboardState(WorkspaceController):
         with self.lock:
             if self.running:
                 raise ValueError("已有扫描正在进行")
-            args = scan_arguments(self.folders, output=self.output, image_analysis=image_analysis,
+            args = scan_arguments(self.folders if folders is None else folders, output=self.output, image_analysis=image_analysis,
                                   video_covers=video_covers, video_headers=video_headers, refresh_media=options.get('refresh_media', False),
                                   video_rule=video_rule)
             self.scan_options = dict(options)
+            self.scan_origin = 'manual'
             self.running = True
             self.cancel_requested.clear()
             self.logs.clear()
@@ -445,7 +461,7 @@ def create_dashboard_server(output=REPORTS):
 
         def do_POST(self):
             route = self.route()
-            if route not in {"api/folders/add", "api/folders/remove", "api/scan/start",
+            if route not in {"api/folders/add", "api/folders/remove", "api/scan/start", "api/reports/rescan",
                              "api/scan/cancel", "api/library/open", "api/reports/open", "api/reports/view", "api/quit", "api/catalog", "api/monitor", "api/restore/preview", "api/restore/confirm"}:
                 self.send_error(404)
                 return
@@ -484,6 +500,8 @@ def create_dashboard_server(output=REPORTS):
                     result = state.remove_folder(data["index"])
                 elif route == "api/scan/start":
                     result = state.start_scan(data)
+                elif route == "api/reports/rescan":
+                    result = state.rescan_report(data.get('report_id'))
                 elif route == "api/scan/cancel":
                     result = state.cancel_scan()
                 elif route == "api/library/open":

@@ -136,6 +136,64 @@ def free_bytes(directory):
     return info.f_bavail * info.f_frsize
 
 
+def directory_fingerprint(roots, excluded, extensions, skip_dirs, package_ext, stop=None):
+    """Bounded metadata-only traversal through pinned, non-link directories."""
+    import hashlib
+    import json
+    import stat
+    import time
+    from file_operations import open_directory
+    from media_actions import file_signature
+    api = sys.modules[__name__]
+    digest, count, began = hashlib.sha256(), 0, time.monotonic()
+    excluded = private_data_path(excluded)
+
+    def walk(path, descriptor, depth=0):
+        nonlocal count
+        if depth > 128:
+            raise ValueError('目录层级过深，请缩小自动检查范围')
+        directory_info = api.fstat(descriptor)
+        if getattr(directory_info, 'st_flags', 0) & 0x40000000:
+            raise ValueError('目录含云端占位内容，自动检查暂停；请下载后重试')
+        before = file_signature(directory_info)
+        digest.update(json.dumps([str(path), before], ensure_ascii=False).encode('utf-8'))
+        for name in sorted(api.listdir(descriptor)):
+            count += 1
+            if count > 200000 or time.monotonic() - began > 20 or stop and stop.is_set():
+                raise ValueError('目录变化检查已停止或超过范围限制，可改用定时更新')
+            child = path / name
+            if name.startswith('.') or name in skip_dirs or child.suffix.lower() in package_ext or child == excluded:
+                continue
+            info = api.stat(name, dir_fd=descriptor, follow_symlinks=False)
+            if stat.S_ISLNK(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400:
+                continue
+            if getattr(info, 'st_flags', 0) & 0x40000000:
+                raise ValueError('目录含云端占位内容，自动检查暂停；请下载后重试')
+            if stat.S_ISDIR(info.st_mode):
+                nested = api.open(name, api.O_RDONLY | api.O_DIRECTORY | api.O_NOFOLLOW, dir_fd=descriptor)
+                try:
+                    if file_signature(api.fstat(nested)) != file_signature(info):
+                        raise ValueError('目录正在变化，稍后重试')
+                    walk(child, nested, depth + 1)
+                finally:
+                    api.close(nested)
+            elif stat.S_ISREG(info.st_mode) and child.suffix.lower().lstrip('.') in extensions:
+                digest.update(json.dumps([name, file_signature(info)], ensure_ascii=False).encode('utf-8'))
+        if file_signature(api.fstat(descriptor)) != before:
+            raise ValueError('目录正在变化，稍后重试')
+
+    for value in sorted(roots):
+        root = private_data_path(value)
+        if not root.is_absolute() or root == excluded or excluded in root.parents:
+            raise ValueError('自动检查目录无效')
+        descriptor = open_directory(root)
+        try:
+            walk(root, descriptor)
+        finally:
+            api.close(descriptor)
+    return digest.hexdigest()
+
+
 @contextmanager
 def pinned_source(path):
     """Keep FFmpeg's path stable on Windows; use an inherited fd on POSIX."""

@@ -144,6 +144,8 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
         raise ValueError("报告内容无效")
     organization = None
     media = MediaActions(document)
+    from preview_repair import PreviewRepair
+    preview_repair = PreviewRepair(report_dir, media, document)
     organization_lock = threading.Lock()
 
     def get_organization():
@@ -198,7 +200,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
             result = center_catalog(current_document(), center_state.snapshot(), load_notes(note_path), history['handled']['trash'])
         result['operation_state'] = {'running': any(job['status'] in {'running', 'external_running'} for job in history['jobs']),
                                      'warnings': history['warnings']}
-        return result
+        return preview_repair.apply(result)
     operations = FileOperations(report_dir, media, get_organization, document=current_document, options=organize_settings.snapshot)
     from media_users import UserCatalog
     users = UserCatalog(output_dir, current_document)
@@ -263,7 +265,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
             from media_actions import file_signature
             sent = False
             try:
-                record, expected = media.validate(identifier)
+                record, expected = media.validate_for_view(identifier)
                 if record['kind'] != '视频':
                     raise ValueError('请选择本库的视频文件')
                 types = {'.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm'}
@@ -475,13 +477,13 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
 
         def do_POST(self):
             route = self.route()
-            if route not in {"api/center", "api/users", "api/organize-settings", "api/organized-results/action", "api/tags", "api/tags/toggle", "api/organization", "api/media/action", "api/notes", "api/basket", "api/grouping",
+            if route not in {"api/center", "api/users", "api/organize-settings", "api/organized-results/action", "api/tags", "api/tags/toggle", "api/organization", "api/media/action", "api/media/cover", "api/notes", "api/basket", "api/grouping",
                              "api/operations/preview", "api/operations/quick-preview", "api/operations/start", "api/operations/stop", "api/operations/destination"}:
                 self.send_error(404)
                 return
             origin = self.headers.get("Origin")
             if ((origin and origin != f"http://127.0.0.1:{self.server.server_port}")
-                    or (route in {"api/center", "api/users", "api/organize-settings", "api/organized-results/action", "api/media/action", "api/basket", "api/grouping"} or route.startswith("api/operations/")) and origin != f"http://127.0.0.1:{self.server.server_port}"):
+                    or (route in {"api/center", "api/users", "api/organize-settings", "api/organized-results/action", "api/media/action", "api/media/cover", "api/basket", "api/grouping"} or route.startswith("api/operations/")) and origin != f"http://127.0.0.1:{self.server.server_port}"):
                 self.send_json(403, {"error": "页面来源不匹配"})
                 return
             if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
@@ -510,6 +512,9 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 if route == "api/basket":
                     result = operations.update_plan(lambda: get_basket().update(payload['action'], payload['ids']))
                     self.send_json(200, result)
+                    return
+                if route == "api/media/cover":
+                    self.send_json(200, preview_repair.generate(payload.get("id")))
                     return
                 if route == "api/media/action":
                     self.send_json(200, media.perform(payload["id"], payload["action"]))

@@ -9,7 +9,7 @@ import struct
 import zlib
 
 import portable_fs as fs
-from media_actions import checked_stat, file_signature
+from media_actions import checked_stat, file_signature, media_id
 
 
 def valid_thumbnail(body):
@@ -88,6 +88,11 @@ class ScanCache:
                     source = source.removeprefix('视频截帧：')
                     if source and group.get('poster'):
                         self.pictures.setdefault((role, source), group['poster'])
+                for path, record in self.files.items():
+                    if record.get('kind') == '视频':
+                        # A manually repaired cover is reusable only after the
+                        # normal full source-signature and PNG checks below.
+                        self.pictures.setdefault(('video', path), 'covers/repair-' + media_id(path) + '.png')
                 break
             except (OSError, ValueError, KeyError, TypeError, AttributeError):
                 self.files, self.pictures, self.report = {}, {}, None
