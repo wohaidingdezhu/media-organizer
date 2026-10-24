@@ -108,3 +108,42 @@ const cards=()=>$('center-content').children.find(n=>n.className==='review-group
         self.assertEqual(center_catalog(doc, state)['items'][0]['preview_status'], '达到封面生成数量上限')
         doc['options'] = {'video_covers_enabled': False}
         self.assertIn('未启用', center_catalog(doc, state)['items'][0]['preview_status'])
+
+    def test_saving_favorite_and_tags_preserves_preview_and_unsaved_input(self):
+        self.run_ui(r"""
+$('center-content').children[0].children[0].children[0].onclick();
+const info=$('detail-content').children[0].children[1],tags=info.children.find(n=>n.className==='actions detail-controls').children[0],file=info.children.find(n=>n.className==='file');
+file.children.find(n=>n.className==='actions').children.find(n=>n.textContent==='页内预览').onclick();
+const player=file.children.find(n=>n.tagName==='VIDEO');let stopped=0;player.pause=()=>stopped++;player.removeAttribute=()=>stopped++;player.load=()=>stopped++;player.currentTime=5;
+$('detail-content').querySelectorAll=()=>[player];tags.value='Unfinished tag';
+await $('detail-actions').children[0].onclick();assert.equal(stopped,0);assert.equal($('detail-content').children[0].children[1],info);assert.equal(tags.value,'Unfinished tag');assert.equal(player.currentTime,5);assert($('detail-feedback').textContent.includes('加入收藏'));
+await $('detail-actions').children[0].onclick();assert.equal(stopped,0);assert($('detail-feedback').textContent.includes('取消收藏'));assert.equal(calls.filter(c=>c.body.action==='favorite').at(-1).body.value,false);
+const originalFetch=scope.fetch;scope.fetch=async(path,options)=>{if(options?.body){const body=JSON.parse(options.body);if(body.action==='labels'){movie.local_tags=body.tags;movie.tags=body.tags;}}return originalFetch(path,options);};
+await info.children.find(n=>n.className==='actions detail-controls').children[1].onclick();assert.equal(stopped,0);assert.equal(tags.value,'Unfinished tag');assert($('detail-feedback').textContent.includes('标签已保存'));assert(info.children.find(n=>n.className==='chips').children.some(n=>n.textContent==='Unfinished tag'));
+$('media-detail').events.close();assert(stopped>0);
+""")
+
+    def test_favorite_keeps_movie_rating_and_note_drafts(self):
+        self.run_ui(r"""
+$('center-content').children[0].children[0].children[0].onclick();const info=$('detail-content').children[0].children[1],rating=info.children.find(n=>n.tagName==='SELECT'),note=info.children.find(n=>n.tagName==='TEXTAREA');rating.value='4';note.value='Unfinished note';await $('detail-actions').children[0].onclick();assert.equal($('detail-content').children[0].children[1],info);assert.equal(rating.value,'4');assert.equal(note.value,'Unfinished note');assert.equal(calls.filter(c=>c.path==='api/notes').length,0);
+""")
+
+    def test_first_add_opens_chooser_and_cancel_never_starts_scan(self):
+        import subprocess,shutil
+        node=shutil.which('node');self.assertIsNotNone(node)
+        code=r"""
+const fs=require('fs'),vm=require('vm'),assert=require('assert/strict'),html=fs.readFileSync(process.argv[1]+'/dashboard.html','utf8');let panes=[],choices=0,scans=0;const nodes={'add-folder':{onclick:async()=>{choices++;return null;}},scan:{onclick:()=>scans++}};const scope={$:id=>nodes[id],showPane:name=>panes.push(name)};vm.createContext(scope);vm.runInContext(html.slice(html.indexOf('async function beginFirstScan('),html.indexOf("$('nav-scan').onclick")),scope);(async()=>{await scope.beginFirstScan();assert.deepEqual(panes,['scan']);assert.equal(choices,1);assert.equal(scans,0);})().catch(e=>{console.error(e);process.exitCode=1;});
+"""
+        result=subprocess.run([node,'-e',code,str(Path(__file__).parent)],text=True,encoding='utf-8',capture_output=True,timeout=20)
+        self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_folder_selection_explains_next_action_and_cancel_keeps_state(self):
+        import media_gui
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary).resolve();source=root/'generated';source.mkdir()
+            state=media_gui.DashboardState(root/'reports');self.addCleanup(state.close)
+            with mock.patch.object(media_gui.scan,'choose_folders',return_value=[str(source)]),mock.patch.object(state,'start_scan') as start:
+                selected=state.add_folders();self.assertIn('已选择 1 个文件夹',selected['status']);self.assertIn('开始只读扫描',selected['status']);start.assert_not_called()
+            with mock.patch.object(media_gui.scan,'choose_folders',return_value=[]):
+                self.assertEqual(state.add_folders()['status'],selected['status']);self.assertEqual(state.folders,[str(source)])
+            self.assertIn('请先添加',state.remove_folder(0)['status'])

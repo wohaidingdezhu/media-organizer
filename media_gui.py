@@ -248,6 +248,8 @@ class DashboardState(WorkspaceController):
                     raise ValueError("请选择实际存在的普通文件夹，不要选择符号链接")
                 if str(path) not in self.folders:
                     self.folders.append(str(path))
+            if choices:
+                self.status = f"已选择 {len(self.folders)} 个文件夹，点击“开始只读扫描”建立或更新资料库。"
             self.save_settings()
         return self.snapshot()
 
@@ -261,6 +263,8 @@ class DashboardState(WorkspaceController):
             if not self.folders:
                 self.monitor["enabled"] = False
                 self.next_scan = None
+            self.status = (f"已选择 {len(self.folders)} 个文件夹，点击“开始只读扫描”更新资料库。"
+                           if self.folders else "请先添加照片或视频文件夹。")
             self.save_settings()
         return self.snapshot()
 
