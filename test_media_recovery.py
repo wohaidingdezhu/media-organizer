@@ -169,6 +169,10 @@ movie.preview='';await $('center-refresh').onclick();const card=$('center-conten
             self.assertTrue(stat.S_ISDIR(fs.directory_entry_stat(descriptor,'nested').st_mode))
             self.assertTrue(stat.S_ISLNK(fs.directory_entry_stat(descriptor,'linked').st_mode))
             self.assertEqual(actions.file_signature(fs.directory_entry_stat(descriptor,'sample.mp4')),self.record['source_signature'])
+            # Reading attributes must not close or transfer ownership of the
+            # pinned directory, including on Windows CRT handle conversion.
+            self.assertIn('nested',fs.listdir(descriptor))
+            self.assertEqual(actions.file_signature(fs.fstat(descriptor)),actions.file_signature(self.source.stat()))
         finally:fs.close(descriptor)
 
     def test_rescan_uses_report_roots_without_replacing_saved_folder_selection(self):

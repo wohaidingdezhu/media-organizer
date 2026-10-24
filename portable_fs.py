@@ -243,7 +243,6 @@ if sys.platform == "win32":
     from ctypes import wintypes as w
     import msvcrt
     from pathlib import Path
-    from types import SimpleNamespace
 
     O_NOFOLLOW, O_DIRECTORY, O_NONBLOCK = 1 << 27, 1 << 28, 1 << 26
     _kernel = c.WinDLL("kernel32", use_last_error=True)
@@ -270,6 +269,11 @@ if sys.platform == "win32":
     _kernel.GetFileInformationByHandle.restype = w.BOOL
     _kernel.CloseHandle.argtypes = [w.HANDLE]
     _kernel.CloseHandle.restype = w.BOOL
+    _kernel.GetCurrentProcess.argtypes = []
+    _kernel.GetCurrentProcess.restype = w.HANDLE
+    _kernel.DuplicateHandle.argtypes = [w.HANDLE, w.HANDLE, w.HANDLE, c.POINTER(w.HANDLE),
+                                      w.DWORD, w.BOOL, w.DWORD]
+    _kernel.DuplicateHandle.restype = w.BOOL
     _kernel.GetFinalPathNameByHandleW.argtypes = [w.HANDLE, w.LPWSTR, w.DWORD, w.DWORD]
     _kernel.GetFinalPathNameByHandleW.restype = w.DWORD
     _nt.NtCreateFile.argtypes = [c.POINTER(w.HANDLE), w.DWORD, c.POINTER(_Attributes),
@@ -382,14 +386,21 @@ if sys.platform == "win32":
     def fstat(fd):
         if not isinstance(fd, Directory):
             return _os.fstat(fd)
-        info = _info(fd.handle)
-        def nanoseconds(value):
-            return (((value.dwHighDateTime << 32) | value.dwLowDateTime) - 116444736000000000) * 100
-        created, modified = nanoseconds(info.created), nanoseconds(info.modified)
-        return SimpleNamespace(st_dev=info.volume, st_ino=(info.index_high << 32) | info.index_low,
-                               st_mode=0o40700, st_size=0, st_file_attributes=info.attributes,
-                               st_mtime_ns=modified, st_mtime=modified / 1e9,
-                               st_birthtime_ns=created, st_ctime_ns=created)
+        # Let this Python runtime supply the same identity/timestamp format as
+        # stat(path), including Python 3.12+'s wider Windows volume/file IDs.
+        # A duplicate preserves the pinned directory's lifetime and sharing rules.
+        process, copied = _kernel.GetCurrentProcess(), w.HANDLE()
+        if not _kernel.DuplicateHandle(process, fd.handle, process, c.byref(copied), 0, False, 2):
+            raise c.WinError(c.get_last_error())
+        try:
+            descriptor = msvcrt.open_osfhandle(copied.value, _os.O_RDONLY | _os.O_BINARY)
+        except BaseException:
+            _kernel.CloseHandle(copied)
+            raise
+        try:
+            return _os.fstat(descriptor)
+        finally:
+            _os.close(descriptor)
 
     def directory_entry_stat(directory, name):
         # The directory handle denies rename/delete; inspect final links without
