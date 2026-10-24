@@ -23,7 +23,7 @@ class MemoryServer:
         self.handler = handler
 
 
-def request(server, path, method="GET", payload=None, host=None, origin=None):
+def request(server, path, method="GET", payload=None, host=None, origin=None, extra_headers=None):
     handler = object.__new__(server.handler)
     handler.server = server
     handler.path = path
@@ -32,6 +32,8 @@ def request(server, path, method="GET", payload=None, host=None, origin=None):
     handler.requestline = f"{method} {path} HTTP/1.1"
     handler.headers = Message()
     handler.headers["Host"] = host or f"127.0.0.1:{server.server_port}"
+    for key, value in (extra_headers or {}).items():
+        handler.headers[key] = value
     if origin is not None:
         handler.headers["Origin"] = origin
     body = b"" if payload is None else json.dumps(payload).encode("utf-8")

@@ -26,6 +26,14 @@ def validate_state(value):
     if not isinstance(recent, list) or len(recent) > 100 or any(not valid_id(key) for key in recent):
         raise ValueError('最近打开记录无效')
     labels = value.setdefault('labels', {})
+    folder_labels = value.setdefault('folder_labels', {})
+    if not isinstance(folder_labels, dict) or len(folder_labels) > 500:
+        raise ValueError('目录标签数量无效')
+    for path, label in folder_labels.items():
+        if (not isinstance(path, str) or len(path) > 4096 or not source_path(path).is_absolute()
+                or '..' in source_path(path).parts or not isinstance(label, str) or not label.strip()
+                or len(label) > 50 or any(ord(char) < 32 for char in path + label)):
+            raise ValueError('目录标签格式无效')
     if not isinstance(labels, dict) or len(labels) > 20000:
         raise ValueError('标签资料无效')
     for key, tags in labels.items():
@@ -58,12 +66,22 @@ class CenterState:
         with data_lock(self.root):
             return validate_state(read_json(self.root, NAME, {'version': 1, 'favorites': {}, 'collections': {}, 'recent': []}, LIMIT))
 
-    def update(self, payload, allowed):
+    def update(self, payload, allowed, directories=()):
         with data_lock(self.root):
             value = self.snapshot()
             action = payload.get('action')
             identifier = payload.get('id')
-            if action in {'favorite', 'recent', 'labels'}:
+            if action == 'folder_label':
+                path = payload.get('path')
+                label = payload.get('label')
+                if not isinstance(path, str) or path not in directories or not isinstance(label, str):
+                    raise ValueError('请选择本次扫描中的目录和标签')
+                label = unicodedata.normalize('NFC', label).strip()
+                if label:
+                    value['folder_labels'][path] = label
+                else:
+                    value['folder_labels'].pop(path, None)
+            elif action in {'favorite', 'recent', 'labels'}:
                 if not valid_id(identifier) or identifier not in allowed:
                     raise ValueError('媒体不属于当前资料库')
                 if action == 'favorite':
@@ -148,7 +166,7 @@ def center_catalog(document, state, notes=None, handled_trash=()):
     hidden = set(handled_trash)
     records = {item['path']: item for item in document.get('files', []) if isinstance(item, dict) and isinstance(item.get('path'), str) and item['path'] not in hidden}
     previews = document.get('previews', {})
-    result, covered, video_art = [], set(), {}
+    result, covered, video_art, video_status = [], set(), {}, {}
     notes = notes or {}
 
     def file_item(path):
@@ -161,7 +179,11 @@ def center_catalog(document, state, notes=None, handled_trash=()):
         if not files or not valid_id(identifier):
             return
         metadata = metadata or {}
-        tags = tags or []
+        tags = list(tags or [])
+        for directory, label in state.get('folder_labels', {}).items():
+            parent = source_path(directory)
+            if any(type(source_path(file['path'])) is type(parent) and source_path(file['path']).parts[:len(parent.parts)] == parent.parts for file in files):
+                tags.append(label)
         stamp = max((file['mtime'] for file in files if type(file['mtime']) in {int, float} and math.isfinite(file['mtime'])), default=0)
         result.append({'id': identifier, 'kind': kind, 'title': title, 'files': files, 'preview': preview,
                        'folder': str(source_path(files[0]['path']).parent), 'mtime': stamp,
@@ -177,6 +199,7 @@ def center_catalog(document, state, notes=None, handled_trash=()):
         metadata = group.get('metadata') or {}
         for file in files:
             video_art[file['path']] = group.get('poster', '')
+            video_status[file['path']] = group.get('poster_status', '')
         camera = all(re.match(r'^(IMG|VID|MOV|DSC|PXL|MVI|GOPR|VIDEO)[-_ ]?\d', source_path(file['path']).stem, re.I) for file in files)
         movie = bool(metadata or group.get('type') == '编号' and not camera or re.search(r'电影|movies|films', str(source_path(files[0]['path']).parent), re.I))
         if movie:
@@ -187,10 +210,19 @@ def center_catalog(document, state, notes=None, handled_trash=()):
     for path, record in records.items():
         if path in covered or record.get('kind') not in {'照片', '视频'}:
             continue
-        image = record.get('image') if isinstance(record.get('image'), dict) else {}
+        image = dict(record.get('image')) if isinstance(record.get('image'), dict) else {}
+        if record['kind'] == '照片':
+            month = re.search(r'(?:^|/)((?:19|20)\d{2})/(0[1-9]|1[0-2])/', record.get('suggested_path', ''))
+            image['timeline_month'] = month[1] + '-' + month[2] if month else ''
+            image['timeline_source'] = record.get('date_source', '')
         entry(media_id(path), 'photo' if record['kind'] == '照片' else 'video', source_path(path).name,
               [file_item(path)], previews.get(path, '') if record['kind'] == '照片' else video_art.get(path, ''), image)
     by_id = {item['id']: item for item in result}
+    for item in result:
+        if item['kind'] != 'photo' and not item['preview']:
+            item['preview_status'] = ('本次扫描未启用视频封面，开启视频解析后重扫。'
+                                      if document.get('options', {}).get('video_covers_enabled') is False
+                                      else video_status.get(item['files'][0]['path']) or '尚未生成封面；可尝试页内预览或系统播放，重扫可更新。')
     owners = {file['path']: item for item in result for file in item['files']}
 
     def review_file(path):

@@ -258,6 +258,57 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
             self.end_headers()
             self.wfile.write(body)
 
+        def send_video(self, identifier):
+            """Stream only a verified scanned file; no path-based public endpoint."""
+            from media_actions import file_signature
+            sent = False
+            try:
+                record, expected = media.validate(identifier)
+                if record['kind'] != '视频':
+                    raise ValueError('请选择本库的视频文件')
+                types = {'.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm'}
+                content_type = types.get(Path(record['path']).suffix.lower())
+                if not content_type:
+                    raise ValueError('此格式请用系统播放器打开')
+                with os.pinned_source(record['path']) as (descriptor, _, __):
+                    info = os.fstat(descriptor)
+                    if file_signature(info) != file_signature(expected):
+                        raise ValueError('视频已变化，请重新扫描')
+                    total = info.st_size
+                    start, end = 0, total - 1
+                    requested = self.headers.get('Range')
+                    if requested:
+                        match = re.fullmatch(r'bytes=(\d*)-(\d*)', requested)
+                        if not match or not any(match.groups()) or max(map(len, match.groups())) > 20:
+                            self.send_error(416); return
+                        left, right = match.groups()
+                        if left:
+                            start = int(left); end = min(int(right), total-1) if right else total-1
+                        else:
+                            start = max(0, total-int(right))
+                    if not total or start > end or start >= total:
+                        self.send_response(416);self.send_header('Content-Range', f'bytes */{total}');self.send_header('Content-Length', '0');self.end_headers();return
+                    self.send_response(206 if requested else 200)
+                    self.send_header('Content-Type', content_type)
+                    self.send_header('Content-Length', str(end-start+1))
+                    self.send_header('Accept-Ranges', 'bytes')
+                    self.send_header('Cache-Control', 'no-store')
+                    self.send_header('X-Content-Type-Options', 'nosniff')
+                    if requested:self.send_header('Content-Range', f'bytes {start}-{end}/{total}')
+                    self.end_headers()
+                    sent = True
+                    os.lseek(descriptor, start, os.SEEK_SET)
+                    remaining = end-start+1
+                    while remaining:
+                        chunk = os.read(descriptor, min(1024*1024, remaining))
+                        if not chunk:break
+                        self.wfile.write(chunk);remaining -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            except (OSError, ValueError) as error:
+                if not sent:self.send_json(400, {'error': str(error)})
+                else:self.close_connection = True
+
         def do_GET(self):
             nonlocal changes, duplicate_data, storage_data
             route = self.route()
@@ -266,6 +317,9 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 return
             if route == "api/media":
                 self.send_json(200, media.snapshot())
+                return
+            if route.startswith('api/video/'):
+                self.send_video(route.removeprefix('api/video/'))
                 return
             if route == 'api/center':
                 try:
@@ -442,7 +496,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     raise ValueError("请求内容必须是 JSON 对象")
                 if route == 'api/center':
                     current = center_snapshot()
-                    result = operations.update_plan(lambda: center_state.update(payload, {item['id'] for item in current['items']}))
+                    result = operations.update_plan(lambda: center_state.update(payload, {item['id'] for item in current['items']}, current['directories']))
                     self.send_json(200, result)
                     return
                 if route == 'api/users':

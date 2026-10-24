@@ -1,5 +1,35 @@
 // Reports reuse the same preview and confirmation as photo/file browsing.
 let reportFocusReady=false;
+function reportTrashOpen(ids,onClose,summary=''){
+  if(!Array.isArray(ids)||ids.length<1||ids.length>200||new Set(ids).size!==ids.length||ids.some(id=>!/^[0-9a-f]{64}$/.test(id)))return;
+  const make=(tag,text)=>{const n=document.createElement(tag);if(text)n.textContent=text;return n;};
+  const dialog=make('dialog'),title=make('h2','移到废纸篓 / 回收站？'),message=make('p','正在检查所选文件…'),list=make('ul'),actions=make('div'),cancel=make('button','取消'),confirm=make('button','确认删除'),stop=make('button','停止处理');
+  dialog.setAttribute('aria-label','确认移到废纸篓 / 回收站');
+  dialog.style.cssText='width:min(680px,92vw);max-height:85vh;overflow:auto;padding:24px;border:1px solid #d7d3e3;border-radius:16px;background:#fcfcfe;color:#272a36';
+  list.style.cssText='max-height:38vh;overflow:auto;padding-left:24px;overflow-wrap:anywhere';
+  actions.style.cssText='display:flex;gap:12px;justify-content:flex-end;flex-wrap:wrap;position:sticky;bottom:-24px;background:#fcfcfe;padding:14px 0';
+  for(const b of [cancel,confirm,stop]){b.type='button';b.style.cssText='padding:10px 16px;border:1px solid #d7d3e3;border-radius:8px;cursor:pointer';}confirm.style.color='#a33b4a';confirm.disabled=true;stop.hidden=true;
+  message.setAttribute('role','status');actions.append(cancel,stop,confirm);dialog.append(title,message);if(summary)dialog.append(make('p',summary));dialog.append(list,actions);
+  let preview=null,running=false,closed=false,jobId='',timer=null;
+  const api=async(path,body)=>{const response=await fetch(path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const result=await response.json();if(!response.ok)throw Error(result.error||'请求未完成');return result;};
+  const finish=()=>{running=false;stop.hidden=true;cancel.disabled=false;cancel.textContent='返回列表';};
+  const poll=async()=>{if(closed)return;try{const job=await api('api/operations/'+jobId);if(closed)return;if(job.id!==jobId||job.mode!=='trash')throw Error('操作记录不匹配');
+    if(job.status==='complete'){running=false;dialog.close();return;}
+    if(['running','external_running'].includes(job.status)){message.textContent='正在移到回收站，请稍候…';timer=setTimeout(poll,1000);return;}
+    finish();message.textContent='处理已停止。已完成的文件在回收站中，其余文件未自动重试。';list.replaceChildren();
+    for(const item of job.items||[]){const row=make('li',(item.status==='complete'||item.status==='success'?'已完成：':'待核对：')+item.path+(item.error?' · '+item.error:''));list.append(row);}
+  }catch(error){if(closed)return;message.textContent='连接暂时中断，正在核对处理结果，请勿重复删除：'+error.message;timer=setTimeout(poll,3000);}};
+  cancel.onclick=()=>{if(!running)dialog.close();};
+  dialog.addEventListener('cancel',event=>{if(running)event.preventDefault();});
+  dialog.addEventListener('close',()=>{closed=true;clearTimeout(timer);dialog.remove();if(typeof onClose==='function')onClose();});
+  stop.onclick=async()=>{if(!jobId)return;stop.disabled=true;try{await api('api/operations/stop',{id:jobId});message.textContent='正在安全停止…';}catch(error){message.textContent='停止请求未确认：'+error.message;stop.disabled=false;}};
+  confirm.onclick=async()=>{if(running||!preview?.token)return;running=true;confirm.disabled=true;cancel.disabled=true;const token=preview.token;preview=null;message.textContent='正在提交…';
+    try{const started=await api('api/operations/start',{token});jobId=started.id;stop.hidden=false;await poll();}
+    catch(error){finish();message.textContent='启动结果未确认，请在整理工具中核对操作记录后再处理：'+error.message;}
+  };
+  document.body.append(dialog);dialog.showModal();
+  api('api/operations/preview',{mode:'trash',ids}).then(result=>{if(closed)return;preview=result;message.textContent=result.items.length+' 个文件将移到系统回收站，可以恢复。';for(const item of result.items)list.append(make('li',item.path));confirm.disabled=!result.token;}).catch(error=>{if(!closed){message.textContent=error.message;cancel.textContent='返回列表';}});
+}
 function pageReportPairs(section,page=0){
   const pairs=[...section.querySelectorAll('.pair')],pages=Math.max(1,Math.ceil(pairs.length/10));page=Math.max(0,Math.min(page,pages-1));
   pairs.forEach((pair,index)=>{pair.hidden=index<page*10||index>=(page+1)*10;});
@@ -27,21 +57,18 @@ function focusReportSection(){
   if(section.id==='similar')pageReportPairs(section);
 }
 function reportActionOpen(action,ids,onClose,summary=''){
-  if(!['delete','compare'].includes(action)||(action==='delete'?(ids.length<1||ids.length>200):ids.length!==2)||ids.some(id=>!/^[0-9a-f]{64}$/.test(id)))return;
-  const dialog=document.createElement('dialog'),frame=document.createElement('iframe'),close=document.createElement('button');
-  dialog.setAttribute('aria-label',action==='delete'?'删除文件预览':'对比照片');
-  dialog.style.cssText='width:min(1200px,96vw);height:94vh;max-height:94vh;padding:12px;border:1px solid #adbbb3;border-radius:12px;box-sizing:border-box;display:flex;flex-direction:column;gap:8px;overflow:hidden';
-  close.textContent='返回文件列表';close.onclick=()=>dialog.close();
-  close.style.cssText='align-self:flex-start;flex-shrink:0';
-  frame.title=action==='delete'?'核对后移到废纸篓 / 回收站':'并排比较并选择删除';
-  frame.style.cssText='display:block;width:100%;flex:1;min-height:0;border:0';
-  frame.src='organize.html#'+action+'='+ids.join(',');
-  const finished=event=>{if(action==='delete'&&event.detail?.mode==='trash'&&event.detail?.status==='complete')dialog.close();};
-  const cancelled=event=>{if(action==='delete'&&event.detail?.mode==='trash')dialog.close();};
-  let child=null;
-  frame.addEventListener('load',()=>{child=frame.contentDocument?frame.contentWindow:null;if(child){child.addEventListener('media-operation-finished',finished);child.addEventListener('media-review-cancelled',cancelled);}});
-  dialog.append(close);if(summary){const note=document.createElement('p');note.textContent=summary;note.style.cssText='overflow-wrap:anywhere;margin:0;flex-shrink:0;max-height:22vh;overflow:auto';dialog.append(note);}dialog.append(frame);
-  dialog.addEventListener('close',()=>{if(child&&frame.contentDocument){child.removeEventListener('media-operation-finished',finished);child.removeEventListener('media-review-cancelled',cancelled);}dialog.remove();if(typeof onClose==='function')onClose();});document.body.append(dialog);dialog.showModal();
+  if(action==='delete')return reportTrashOpen(ids,onClose,summary);
+  if(action!=='compare'||!Array.isArray(ids)||ids.length!==2||ids[0]===ids[1]||ids.some(id=>!/^[0-9a-f]{64}$/.test(id)))return;
+  const make=(tag,text)=>{const node=document.createElement(tag);if(text)node.textContent=text;return node;},dialog=make('dialog'),title=make('h2','对比照片'),status=make('p','正在读取照片…'),grid=make('div'),close=make('button','返回列表');
+  dialog.setAttribute('aria-label','对比照片');dialog.style.cssText='width:min(1100px,94vw);max-height:90vh;overflow:auto;padding:24px;border:1px solid #d7d3e3;border-radius:16px;background:#fcfcfe;color:#272a36';grid.style.cssText='display:grid;grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr));gap:20px';close.style.cssText='margin:16px 0;padding:10px 16px';close.onclick=()=>dialog.close();let closed=false,handoff=false;
+  dialog.append(title,status,grid,close);dialog.addEventListener('close',()=>{closed=true;dialog.remove();if(!handoff&&typeof onClose==='function')onClose();});document.body.append(dialog);dialog.showModal();
+  Promise.all(['api/center','api/media'].map(async path=>{const response=await fetch(path),value=await response.json();if(!response.ok)throw Error(value.error||'读取失败');return value;})).then(([data,access])=>{
+    if(closed)return;const photos=data.items.filter(item=>item.kind==='photo').flatMap(item=>item.files.map(file=>({...file,preview:item.preview,metadata:item.metadata})));const chosen=ids.map(id=>photos.find(file=>file.id===id));if(chosen.some(file=>!file))throw Error('照片已不在当前清单，请刷新列表。');status.textContent='并排核对后选择要删除的照片。相似不代表内容完全相同。';
+    for(const file of chosen){const card=make('section');card.append(make('h3',file.name));if(/^(previews|covers)\/[A-Za-z0-9_-]+\.png$/.test(file.preview||'')){const image=make('img');image.src=file.preview;image.alt=file.name;image.style.cssText='display:block;width:100%;height:45vh;object-fit:contain;background:#eeebf4';card.append(image);}else card.append(make('p','尚未生成图片预览'));
+      const path=make('p',file.path);path.style.cssText='overflow-wrap:anywhere;font-size:12px';card.append(path);const trash=make('button','删除这张…');trash.style.cssText='margin:8px 0;padding:10px 16px';trash.disabled=!access.available||data.restored||data.operation_state?.running||data.operation_state?.warnings?.length||access.ids_by_path[file.path]!==file.id;
+      trash.onclick=()=>{if(trash.disabled)return;handoff=true;dialog.close();reportTrashOpen([file.id],onClose);};card.append(trash);grid.append(card);
+    }
+  }).catch(error=>{if(!closed)status.textContent=error.message;});
 }
 async function addReportFileActions(){
   if(!document.querySelector('#duplicates')&&!document.querySelector('#similar'))return;

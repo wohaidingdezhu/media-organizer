@@ -92,7 +92,7 @@ def apply_grouping(library, assignments, art_library=None):
         if len(contributors) == 1:
             old = contributors[0]
             group['needs_review'] |= bool(old.get('needs_review'))
-            for name in ('poster', 'poster_source', 'stills', 'metadata'):
+            for name in ('poster', 'poster_source', 'poster_status', 'stills', 'metadata'):
                 if name in old:
                     group[name] = copy.deepcopy(old[name])
         elif len(contributors) > 1:

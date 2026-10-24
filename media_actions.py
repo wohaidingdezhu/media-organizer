@@ -89,7 +89,10 @@ class MediaActions:
             if (not isinstance(expected, list) or len(expected) != 5
                     or any(type(value) is not int for value in expected)
                     or file_signature(info) != expected):
-                raise ValueError("原文件自扫描后发生变化，请重新扫描")
+                actual = file_signature(info)
+                if isinstance(expected, list) and len(expected) == 5 and actual[:4] == expected[:4]:
+                    raise ValueError("文件属性自扫描后已更新（大小和修改时间未变），请重新扫描后再操作；播放器或系统可能更新文件属性")
+                raise ValueError("原文件的内容或身份自扫描后发生变化，请重新扫描后再操作")
         elif info.st_size != record["bytes"] or info.st_mtime != record["mtime"]:
             raise ValueError("原文件自扫描后发生变化，请重新扫描")
         return record, info
