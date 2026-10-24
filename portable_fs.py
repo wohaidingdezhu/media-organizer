@@ -136,6 +136,11 @@ def free_bytes(directory):
     return info.f_bavail * info.f_frsize
 
 
+def directory_entry_stat(directory, name):
+    """Read entry metadata without following links, including directory entries."""
+    return _os.stat(name, dir_fd=directory, follow_symlinks=False)
+
+
 def directory_fingerprint(roots, excluded, extensions, skip_dirs, package_ext, stop=None):
     """Bounded metadata-only traversal through pinned, non-link directories."""
     import hashlib
@@ -164,7 +169,7 @@ def directory_fingerprint(roots, excluded, extensions, skip_dirs, package_ext, s
             child = path / name
             if name.startswith('.') or name in skip_dirs or child.suffix.lower() in package_ext or child == excluded:
                 continue
-            info = api.stat(name, dir_fd=descriptor, follow_symlinks=False)
+            info = api.directory_entry_stat(descriptor, name)
             if stat.S_ISLNK(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400:
                 continue
             if getattr(info, 'st_flags', 0) & 0x40000000:
@@ -378,8 +383,18 @@ if sys.platform == "win32":
         if not isinstance(fd, Directory):
             return _os.fstat(fd)
         info = _info(fd.handle)
+        def nanoseconds(value):
+            return (((value.dwHighDateTime << 32) | value.dwLowDateTime) - 116444736000000000) * 100
+        created, modified = nanoseconds(info.created), nanoseconds(info.modified)
         return SimpleNamespace(st_dev=info.volume, st_ino=(info.index_high << 32) | info.index_low,
-                               st_mode=0o40700, st_size=0)
+                               st_mode=0o40700, st_size=0, st_file_attributes=info.attributes,
+                               st_mtime_ns=modified, st_mtime=modified / 1e9,
+                               st_birthtime_ns=created, st_ctime_ns=created)
+
+    def directory_entry_stat(directory, name):
+        # The directory handle denies rename/delete; inspect final links without
+        # opening their targets. Traversal opens/compares each child separately.
+        return _os.stat(Path(_directory_path(directory)) / _component(name), follow_symlinks=False)
 
     def stat(path, *, dir_fd=None, follow_symlinks=True):
         if dir_fd is None:

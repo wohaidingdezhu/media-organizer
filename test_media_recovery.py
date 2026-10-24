@@ -158,6 +158,19 @@ movie.preview='';await $('center-refresh').onclick();const card=$('center-conten
         self.assertEqual(fingerprint(),before)
         with mock.patch.object(Path,'read_bytes',side_effect=AssertionError('Never reads media contents')):fingerprint()
 
+    def test_pinned_directory_metadata_matches_path_and_inspects_links_without_following(self):
+        import stat
+        from file_operations import open_directory
+        child=self.source/'nested';child.mkdir()
+        linked=self.source/'linked';make_symlink(linked,child,target_is_directory=True)
+        descriptor=open_directory(self.source)
+        try:
+            self.assertEqual(actions.file_signature(fs.fstat(descriptor)),actions.file_signature(self.source.stat()))
+            self.assertTrue(stat.S_ISDIR(fs.directory_entry_stat(descriptor,'nested').st_mode))
+            self.assertTrue(stat.S_ISLNK(fs.directory_entry_stat(descriptor,'linked').st_mode))
+            self.assertEqual(actions.file_signature(fs.directory_entry_stat(descriptor,'sample.mp4')),self.record['source_signature'])
+        finally:fs.close(descriptor)
+
     def test_rescan_uses_report_roots_without_replacing_saved_folder_selection(self):
         (self.report/'report.json').write_text(json.dumps(self.doc),encoding='utf-8')
         state=media_gui.DashboardState(self.output);self.addCleanup(state.close)
