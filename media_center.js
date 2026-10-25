@@ -37,7 +37,7 @@ const size=value=>value>=1073741824?(value/1073741824).toFixed(1)+' GB':value>=1
 const labels={movie:'电影',video:'视频',photo:'照片'};
 function message(value){$('center-error').textContent=value||'';}
 function globalSearch(){return !!$('query').value.trim()&&$('search-scope').value==='all';}
-async function request(path,body){const response=await fetch(path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const result=await response.json();if(!response.ok)throw Error(result.error||'操作未完成');return result;}
+async function request(path,body){const response=await fetch(path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const result=await response.json();if(!response.ok){const error=Error(result.error||'操作未完成');error.status=response.status;throw error;}return result;}
 async function load(){
   clearTimeout(centerOperationTimer);const ticket=++loadTicket;
   try{const [data,access]=await Promise.all([request('api/center'),request('api/media')]);if(ticket!==loadTicket)return null;
@@ -68,6 +68,7 @@ const previewWork=new Map();
 function previewStatus(){const jobs=[...previewWork.values()];previewTotal=jobs.length;previewDone=jobs.filter(job=>job.state!=='queued').length;previewFailed=jobs.filter(job=>job.state==='failed').length;const active=previewWorking||previewQueue.length;const label=$('preview-progress-label'),meter=$('preview-progress');label.hidden=meter.hidden=!previewTotal;label.textContent=active?'正在补充预览 '+previewDone+'/'+previewTotal+'（'+Math.floor(previewDone*100/previewTotal)+'%）':'预览处理完成 '+previewDone+'/'+previewTotal+(previewFailed?' · '+previewFailed+' 项未生成，可点击补预览重试':'');meter.value=previewTotal?previewDone*100/previewTotal:0;}
 function previewFile(item){return item.files?.[0]||byFile.get(item.id);}
 function previewAllowed(item){const file=previewFile(item);return file&&mediaAccess.available&&!catalog.restored&&mediaAccess.ids_by_path[file.path]===file.id;}
+function previewUnavailable(item){return catalog.restored?'备份中没有预览，需重新扫描本机原文件':!mediaAccess.available?'原文件暂时无法访问，请检查磁盘连接后刷新':'原文件不在当前可访问列表，请重新扫描来源目录';}
 function previewPlaceholder(item,parent,text){parent.replaceChildren();const block=make('div','placeholder');block.append(make('span','',item.kind==='photo'?'▧':'▷'),make('small','',text));parent.append(block);}
 function previewControl(parent,state){const control=parent.previewRepairControl;if(!control)return;control.hidden=state==='done';control.disabled=!control.previewAllowed||state==='queued';control.textContent=state==='queued'?'正在生成…':state==='failed'?'重试补预览':control.previewLabel;}
 function queuePreview(item,parent,manual=false){
@@ -82,12 +83,18 @@ function queuePreview(item,parent,manual=false){
   previewControl(parent,'queued');previewPlaceholder(item,parent,'正在排队生成预览…');previewStatus();runPreviewQueue();return job.promise;
 }
 function observePreview(item,parent){
-  if(!previewAllowed(item))return;
+  if(!previewAllowed(item)){previewPlaceholder(item,parent,previewUnavailable(item));return;}
   if(catalog.preview_policy?.[item.kind==='photo'?'images':'videos']===false){previewPlaceholder(item,parent,'本次未启用解析，可点击补预览单独生成');return;}
   const previous=previewWork.get(previewFile(item).id);if(previous?.state==='failed'){previewPlaceholder(item,parent,'预览未生成：'+previous.error);previewControl(parent,'failed');return;}
-  if(typeof IntersectionObserver==='undefined')return;
+  if(typeof IntersectionObserver==='undefined'){Promise.resolve().then(()=>{if(parent.isConnected!==false)queuePreview(item,parent);});return;}
   if(!previewObserver)previewObserver=new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting){previewObserver.unobserve(entry.target);if(entry.target.isConnected!==false)entry.target.previewEnqueue?.();}},{rootMargin:'160px'});
   parent.previewEnqueue=()=>queuePreview(item,parent);previewObserver.observe(parent);
+}
+async function requestPreview(id){
+  for(let attempt=0;attempt<2;attempt++){
+    try{return await request('api/media/cover',{id});}
+    catch(error){const temporary=error.name==='TypeError'||error.status>=500||error.message==='正在补充另一张预览，请稍候再试';if(!temporary||attempt)throw error;await new Promise(resolve=>setTimeout(resolve,500));}
+  }
 }
 async function runPreviewQueue(){
   if(previewWorking)return;previewWorking=true;
@@ -98,7 +105,7 @@ async function runPreviewQueue(){
     if(!job.targets.length){previewWork.delete(job.id);job.resolve(false);previewStatus();continue;}
     previewStatus();
     try{
-      const result=await request('api/media/cover',{id:job.id});if(!centerArt(result.preview))throw Error('预览地址无效');job.state='done';job.preview=result.preview;
+      const result=await requestPreview(job.id);if(!centerArt(result.preview))throw Error('预览地址无效');job.state='done';job.preview=result.preview;
       for(const item of catalog.items)if(item.files.some(file=>file.id===job.id)){item.preview=result.preview;delete item.preview_status;}
       for(const key of ['exact','similar','dismissed_similar'])for(const group of catalog.review?.[key]||[])for(const file of group.files)if(file.id===job.id)file.preview=result.preview;
       for(const target of job.targets)if(target.parent.isConnected!==false){target.parent.replaceChildren();image({...target.item,preview:result.preview},target.parent);previewControl(target.parent,'done');target.parent.closest?.('.card,.review-file')?.querySelector('.preview-status')?.remove();}
@@ -137,7 +144,12 @@ function showRows(rows,parent,kind=''){const wall=make('div','wall'+(kind==='pho
   if(manage){const ids=centerMediaIds([item]),trash=button('删除…',()=>openFileReview('delete',ids),'danger');trackAvailability(trash,()=>canTrash(ids));actions.append(trash);}card.append(actions);wall.append(card);
 }parent.append(wall);}
 function sourceFolder(path){return path.split(/[\\/]/).filter(Boolean).pop()||path;}
-function collectionCard(name,ids,handler,preview,path=''){const card=button('',handler,'collection');if(preview){const art=centerArt(preview);if(art){const img=make('img');img.src=art;img.alt='';img.style.cssText='width:100%;height:110px;object-fit:cover;border-radius:8px;margin-bottom:8px';card.append(img);}}card.append(make('strong','',name),make('span','muted',ids.length+' 项媒体'));if(path){const location=make('div','muted album-path',path);location.setAttribute('title',path);card.append(location);card.setAttribute('aria-label',name+' · '+path+' · '+ids.length+' 项媒体');}return card;}
+function collectionCard(name,ids,handler,preview,path=''){
+  const card=button('',handler,'collection'),items=ids.map(id=>byId.get(id)).filter(Boolean),representative=items.find(item=>centerArt(item.preview))||items.find(previewAllowed)||items[0];
+  if(representative){const art=make('div','collection-art');image(representative,art);card.append(art);}
+  card.append(make('strong','',name),make('span','muted',ids.length+' 项媒体'));if(path){const location=make('div','muted album-path',path);location.setAttribute('title',path);card.append(location);card.setAttribute('aria-label',name+' · '+path+' · '+ids.length+' 项媒体');}return card;
+}
+
 const availabilityControls=new Map();
 function trackAvailability(control,allowed){availabilityControls.set(control,allowed);control.disabled=!allowed();}
 function syncAvailability(){for(const [control,allowed]of availabilityControls){if(control.isConnected===false)availabilityControls.delete(control);else control.disabled=!allowed();}}

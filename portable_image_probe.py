@@ -51,13 +51,14 @@ def probe(path, thumbnail=None):
         result.update(dhash=f"{value:016x}", low_detail=variance < 64 or max(pixels) - min(pixels) < 20
                       or value in {0, (1 << 64) - 1})
         if thumbnail:
-            image.thumbnail((512, 512))
+            preview = canvas.convert("RGB")
+            preview.thumbnail((512, 512))
             destination = Path(thumbnail)
             if destination.absolute() == Path(path).absolute():
                 raise ValueError("预览路径不能与原图片相同")
             output = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(output, "wb") as target:
-                image.convert("RGB").save(target, format="PNG")
+                preview.save(target, format="PNG")
             result["thumbnail"] = str(destination)
     return result
 
