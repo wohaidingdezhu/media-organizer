@@ -86,7 +86,10 @@ class PreviewRepair:
             name = 'repair-' + identifier + '.png'
             # Only this application-generated report image can be replaced.
             # The shared private-file writer rejects links and pins the parent.
-            fs.write_private_file(covers, name, body)
+            try:
+                fs.write_private_file(covers, name, body)
+            except (OSError, ValueError) as error:
+                raise ValueError('预览无法保存，请检查报告目录权限及同名文件是否为普通文件') from error
             self.previews[identifier] = 'covers/' + name
             return {'preview': self.previews[identifier]}
         finally:

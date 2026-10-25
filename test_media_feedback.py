@@ -139,8 +139,16 @@ class MediaFeedbackTests(unittest.TestCase):
     def test_repair_refuses_non_file_destination_and_cleans_temporary(self):
         manager = PreviewRepair(self.report,MediaActions(self.doc),self.doc);identifier=media_id(str(self.photos[0]))
         target=self.report/'covers'/('repair-'+identifier+'.png');target.mkdir(parents=True)
-        with self.assertRaisesRegex(ValueError,'非普通'):manager.generate(identifier)
+        with self.assertRaisesRegex(ValueError,'预览无法保存'):manager.generate(identifier)
         self.assertTrue(target.is_dir());self.assertEqual(list(target.parent.iterdir()),[target]);self.assert_unchanged()
+
+    def test_report_write_failure_is_explained_and_keeps_existing_preview(self):
+        manager = PreviewRepair(self.report,MediaActions(self.doc),self.doc);identifier=media_id(str(self.photos[0]))
+        target=self.report/'covers'/('repair-'+identifier+'.png');target.parent.mkdir();target.write_bytes(b'old damaged report image')
+        with mock.patch('preview_repair.fs.write_private_file',side_effect=PermissionError('Generated permission failure')):
+            with self.assertRaisesRegex(ValueError,'预览无法保存'):manager.generate(identifier)
+        self.assertEqual(target.read_bytes(),b'old damaged report image')
+        self.assertFalse(list(target.parent.glob('.repair-tmp-*')));self.assertNotIn(identifier,manager.previews);self.assert_unchanged()
 
     def test_navigation_skips_detached_queued_previews_and_revisiting_requeues(self):
         self.run_ui(r'''
