@@ -130,7 +130,11 @@ movie.preview='';await $('center-refresh').onclick();const card=$('center-conten
 
     def test_changes_wait_for_stability_and_detect_nested_add_edit_remove(self):
         state=media_gui.DashboardState(self.output);self.addCleanup(state.close);state.folders=[str(self.source)]
-        state.set_monitor({'enabled':True,'minutes':15,'mode':'changes'});now=state.next_scan
+        # Use exact scheduled instants: repeated fractional +15 additions can
+        # differ by one float ULP from the independently calculated offsets.
+        with mock.patch('workspace_controller.time.monotonic',return_value=1000.0):
+            state.set_monitor({'enabled':True,'minutes':15,'mode':'changes'})
+        now=state.next_scan
         with mock.patch.object(state,'start_scan') as start:
             self.assertFalse(state.monitor_tick(now));self.assertTrue(state.monitor_tick(now+15));self.assertEqual(start.call_count,1)
             self.assertFalse(state.monitor_tick(now+30));self.assertEqual(start.call_count,1)
