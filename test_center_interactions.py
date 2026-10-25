@@ -79,3 +79,40 @@ const saving=$('collection-save').onsubmit({preventDefault(){}});$('collection-c
 items=Array.from({length:201},(_,index)=>({...photo,id:(index+1).toString(16).padStart(64,'0'),title:'Photo '+index,mtime:201-index,files:[{...photo.files[0],id:(index+1).toString(16).padStart(64,'0'),path:'/generated/'+index+'.jpg'}]}));access.ids_by_path=Object.fromEntries(items.map(item=>[item.files[0].path,item.files[0].id]));await $('center-refresh').onclick();location.hash='#photos';events.hashchange();$('manage-toggle').onclick();
 for(let page=0;page<4;page++){if(page)$('center-next').onclick();$('select-page').onclick();}assert($('selected-count').textContent.includes('200'));for(let page=0;page<3;page++)$('center-prev').onclick();const check=$('center-content').children[0].children[1].children.find(n=>n.className==='pick').children[0];check.checked=false;check.onchange();assert($('selected-count').textContent.includes('199'));$('select-page').onclick();assert($('selected-count').textContent.includes('200'));assert($('center-content').children[0].children[1].children.find(n=>n.className==='pick').children[0].checked);assert.equal(operations.length,0);
 ''')
+
+    def test_sort_and_photo_layout_preserve_selection_but_filter_changes_clear_it(self):
+        self.run_ui(r'''
+location.hash='#photos';events.hashchange();$('manage-toggle').onclick();$('select-page').onclick();assert($('selected-count').textContent.includes('1'));
+$('media-order').value='name';$('media-order').onchange();assert($('selected-count').textContent.includes('1'));
+$('photo-layout').value='timeline';$('photo-layout').onchange();assert($('selected-count').textContent.includes('1'));
+$('delete-selected').onclick();assert.deepEqual(Array.from(operations[0].ids),[photo.files[0].id]);
+$('filter-year').value='2020';$('filter-year').onchange();assert($('selected-count').textContent.includes('0'));assert($('delete-selected').disabled);
+''')
+
+    def test_unfavorited_item_is_removed_from_batch_selection(self):
+        self.run_ui(r'''
+state.favorites[movie.id]=state.favorites[photo.id]=true;await $('center-refresh').onclick();location.hash='#favorites';events.hashchange();$('manage-toggle').onclick();$('select-page').onclick();assert($('selected-count').textContent.includes('2'));
+const card=$('center-content').children[0].children.find(n=>n.children.some(c=>c.tagName==='H3'&&c.textContent==='Film'));
+await card.children.find(n=>n.className==='card-actions').children.find(n=>n.textContent==='★ 已收藏').onclick();assert($('selected-count').textContent.includes('1'));$('delete-selected').onclick();assert.deepEqual(Array.from(operations[0].ids),[photo.files[0].id]);
+''')
+
+    def test_refresh_prunes_members_removed_from_collection_selection(self):
+        self.run_ui(r'''
+state.collections.sample={name:'Sample',ids:[movie.id,photo.id]};location.hash='#collections';events.hashchange();$('center-content').children[0].children.find(n=>n.children.some(c=>c.tagName==='STRONG'&&c.textContent==='Sample')).onclick();$('manage-toggle').onclick();$('select-page').onclick();assert($('selected-count').textContent.includes('2'));
+state.collections.sample.ids=[movie.id];await $('center-refresh').onclick();assert($('selected-count').textContent.includes('1'));$('delete-selected').onclick();assert.deepEqual(Array.from(operations[0].ids),[movie.files[0].id]);
+''')
+
+    def test_review_refresh_removes_selection_from_disappeared_groups(self):
+        self.run_ui(r'''
+const f={...photo.files[0],kind:'photo',media_kind:'photo',owner:photo.id,metadata:photo.metadata};review.similar=[{id:'g1',files:[f,{...f,id:movie.files[0].id,path:movie.files[0].path}]}];await $('center-refresh').onclick();location.hash='#review';events.hashchange();$('center-content').children[0].children[1].onclick();
+const section=$('center-content').children.find(n=>n.className==='review-group'),check=section.children.find(n=>n.className==='review-files').children[0].children[0].children[0];check.checked=true;check.onchange();
+review.similar=[];await $('center-refresh').onclick();const batch=$('center-content').children.find(n=>n.className==='actions review-batch');assert(batch.children[0].textContent.includes('0'));assert(batch.children.find(n=>n.textContent==='删除所选…').disabled);assert.equal(operations.length,0);
+''')
+
+    def test_similarity_confirmation_keeps_selection_in_other_groups_and_restores_batch_button(self):
+        self.run_ui(r'''
+const second={...photo,id:'6'.repeat(64),files:[{...photo.files[0],id:'5'.repeat(64),name:'Second.jpg',path:'/generated/second.jpg'}]};items.push(second);access.ids_by_path[second.files[0].path]=second.files[0].id;const f={...photo.files[0],kind:'photo',media_kind:'photo',owner:photo.id,metadata:photo.metadata},m={...second.files[0],kind:'photo',media_kind:'photo',owner:second.id,metadata:second.metadata};const extra={...photo,id:'8'.repeat(64),files:[{...photo.files[0],id:'7'.repeat(64),path:'/generated/extra.jpg'}]};items.push(extra);access.ids_by_path[extra.files[0].path]=extra.files[0].id;const e={...extra.files[0],kind:'photo',media_kind:'photo',owner:extra.id,metadata:extra.metadata};review.similar=[{id:'g1',files:[f,e]},{id:'g2',files:[m,e]}];await $('center-refresh').onclick();location.hash='#review';events.hashchange();$('center-content').children[0].children[1].onclick();
+let sections=()=>$('center-content').children.filter(n=>n.className==='review-group');const containsSecond=section=>section.children.find(n=>n.className==='review-files').children.some(card=>card.children.some(n=>n.tagName==='H3'&&n.textContent==='Second.jpg'));const check=sections().find(containsSecond).children.find(n=>n.className==='review-files').children[0].children[0].children[0];check.checked=true;check.onchange();
+const originalFetch=scope.fetch;scope.fetch=async(path,options)=>{if(options?.body&&JSON.parse(options.body).action==='review_similarity')review.similar=review.similar.filter(g=>g.id!=='g1');return originalFetch(path,options);};
+await sections().find(section=>!containsSecond(section)).children.find(n=>n.className==='actions review-group-actions').children.find(n=>n.textContent==='确认不相似').onclick();const batch=$('center-content').children.find(n=>n.className==='actions review-batch');assert(batch.children[0].textContent.includes('1'));const trash=batch.children.find(n=>n.textContent==='删除所选…');assert(!trash.disabled);trash.onclick();assert.deepEqual(Array.from(operations[0].ids),[second.files[0].id]);
+''')
