@@ -17,7 +17,7 @@ class PreviewRepair:
         self.report, self.media = Path(report), media
         self.previews = {}
         allowed = {media_id(file['path']) for file in document.get('files', [])
-                   if isinstance(file, dict) and isinstance(file.get('path'), str) and file.get('kind') == '视频'}
+                   if isinstance(file, dict) and isinstance(file.get('path'), str) and file.get('kind') in {'照片', '视频'}}
         try:
             from file_operations import open_directory
             directory = open_directory(self.report / 'covers')
@@ -38,12 +38,12 @@ class PreviewRepair:
 
     def apply(self, catalog):
         for item in catalog['items']:
-            if item['kind'] != 'photo' and not item['preview']:
+            if not item['preview']:
                 preview = next((self.previews[file['id']] for file in item['files'] if file['id'] in self.previews), '')
                 if preview:
                     item['preview'] = preview
                     item.pop('preview_status', None)
-        for group in catalog.get('review', {}).get('exact', []):
+        for group in (group for key in ('exact', 'similar', 'dismissed_similar') for group in catalog.get('review', {}).get(key, [])):
             for file in group['files']:
                 if not file.get('preview') and file['id'] in self.previews:
                     file['preview'] = self.previews[file['id']]
@@ -58,23 +58,23 @@ class PreviewRepair:
         worker, temporary = None, None
         try:
             record, info = self.media.validate_for_view(identifier)
-            if record['kind'] != '视频':
-                raise ValueError('补封面只支持视频')
+            if record['kind'] not in {'照片', '视频'}:
+                raise ValueError('请选择本库的照片或视频')
             if identifier in self.previews:
                 return {'preview': self.previews[identifier]}
-            helper = media_backend.helper('video_cover')
+            helper = media_backend.helper('image_probe' if record['kind'] == '照片' else 'video_cover')
             if not helper_available(helper):
-                raise ValueError('视频解码组件未安装，请先安装项目声明的媒体依赖')
+                raise ValueError('媒体解码组件未安装，请先安装项目声明的媒体依赖')
             covers = fs.ensure_private_directory(self.report / 'covers')
             temporary = covers / ('.repair-tmp-' + secrets.token_hex(12) + '.png')
             worker = ImageProbeWorker(helper)
             try:
                 worker.request(record['path'], thumbnail=str(temporary), timeout=25)
             except subprocess.TimeoutExpired as error:
-                raise ValueError('视频截帧超时，可稍后重试或用系统播放器查看') from error
+                raise ValueError('媒体预览生成超时，可稍后重试或打开原文件查看') from error
             _, after = self.media.validate_for_view(identifier)
             if file_signature(info) != file_signature(after):
-                raise ValueError('视频在生成封面时发生变化，请重新扫描')
+                raise ValueError('媒体在生成预览时发生变化，请重新扫描')
             body = fs.read_private_file(covers, (temporary.name,), 2*1024*1024)
             if not valid_thumbnail(body):
                 raise ValueError('未能生成有效封面，可使用系统播放器查看')

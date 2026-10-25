@@ -23,6 +23,7 @@ import unicodedata
 import webbrowser
 from library_server import load_tags, serve_library
 import media_backend
+from scan_progress import emit as scan_progress
 
 BASE = Path(__file__).resolve().parent
 IMAGE_EXT = set("jpg jpeg png heic heif tif tiff gif bmp webp avif dng cr2 cr3 nef arw raf orf rw2 pef srw".split())
@@ -81,6 +82,7 @@ def normalize_roots(paths, output):
 
 
 def discover(roots, output, include_hidden, issues, folders=None, sidecars=None):
+    scan_progress('discover')
     records, identities = [], {}
     skipped = collections.Counter()
     for root in roots:
@@ -144,6 +146,8 @@ def discover(roots, output, include_hidden, issues, folders=None, sidecars=None)
                     }
                     identities.setdefault(identity, str(path))
                     records.append(record)
+                    if len(records) == 1 or len(records) % 50 == 0:
+                        scan_progress('discover', len(records), current=name)
                     if len(records) % 1000 == 0:
                         print(f"已发现 {len(records):,} 个媒体文件…", flush=True)
                 except OSError as error:
@@ -151,7 +155,7 @@ def discover(roots, output, include_hidden, issues, folders=None, sidecars=None)
     return records, dict(skipped)
 
 
-def full_hash(record):
+def full_hash(record, progress=None):
     """Always read full bytes; reject files changed since discovery or during reading."""
     descriptor = os.open(record["path"], os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     with os.fdopen(descriptor, "rb") as source:
@@ -166,6 +170,8 @@ def full_hash(record):
                 break
             digest.update(chunk)
             amount += len(chunk)
+            if progress is not None and (amount == initial.st_size or time.monotonic() - last_update > 3):
+                progress(amount, initial.st_size)
             if time.monotonic() - last_update > 3:
                 print(f"  {record['name']}：已读取 {size_text(amount)} / {size_text(initial.st_size)}", flush=True)
                 last_update = time.monotonic()
@@ -187,6 +193,7 @@ def exact_duplicates(records, issues):
         else:
             by_size[record["bytes"]].append(record)
     candidates = [r for group in by_size.values() if len(group) > 1 for r in group]
+    scan_progress('hash', 0, len(candidates))
     print(f"媒体清单 {len(records):,} 项；需完整校验 {len(candidates):,} 个同大小文件（共 {size_text(sum(r['bytes'] for r in candidates))}）。", flush=True)
     for group in by_size.values():
         if len(group) == 1:
@@ -194,12 +201,13 @@ def exact_duplicates(records, issues):
     for index, record in enumerate(candidates, 1):
         print(f"内容校验 {index}/{len(candidates)}：{record['name']}", flush=True)
         try:
-            record["sha256"] = full_hash(record)
+            record["sha256"] = full_hash(record, lambda amount, total: scan_progress('hash_file', amount, total, record['name']))
             record["hash_status"] = "完整 SHA-256 已校验"
             by_digest[(record["bytes"], record["sha256"])].append(record)
         except (OSError, ValueError) as error:
             record["hash_status"] = "读取失败或文件变化：未确认"
             issue(issues, record["path"], str(error))
+        scan_progress('hash', index, len(candidates), record['name'])
     return [{"sha256": key[1], "bytes_each": key[0], "paths": [r["path"] for r in group],
              "redundant_logical_bytes": key[0] * (len(group) - 1)}
             for key, group in by_digest.items() if len(group) > 1]
@@ -384,6 +392,7 @@ def inspect_images(records, helper, issues, enabled, cache=None):
         return {"available": available, "enabled": enabled, "inspected": 0,
                 "note": "照片日期使用文件名或修改时间；图片相似检测未运行。"}
     images = [r for r in records if r["kind"] == "照片" and not r["hardlink_to"] and r["bytes"]]
+    scan_progress('photos', 0, len(images))
     success = 0
     workers = [ImageProbeWorker(helper) for _ in range(2)]
     def inspect_one(item):
@@ -408,6 +417,7 @@ def inspect_images(records, helper, issues, enabled, cache=None):
                 batch = images[start:start + 4]
                 assignments = [(workers[(start + offset) % 2], record) for offset, record in enumerate(batch)]
                 for index, (record, (metadata, error)) in enumerate(zip(batch, pool.map(inspect_one, assignments)), start + 1):
+                    scan_progress('photos', index, len(images), record['name'])
                     if index == 1 or index % 50 == 0 or index == len(images):
                         print(f"读取照片信息 {index}/{len(images)}…", flush=True)
                     if error:
@@ -433,6 +443,7 @@ def inspect_video_metadata(records, issues, enabled=True, cache=None):
         summary['note'] = '视频信息未读取：已关闭视频解析或未安装共用 FFmpeg 依赖；仍可浏览和精确查重。'
         return summary
     videos = [record for record in records if record['kind'] == '视频' and record['bytes'] and not record['hardlink_to']]
+    scan_progress('videos', 0, len(videos))
     worker = ImageProbeWorker(helper)
     try:
         for index, record in enumerate(videos, 1):
@@ -452,6 +463,7 @@ def inspect_video_metadata(records, issues, enabled=True, cache=None):
                 summary['inspected'] += 1
             except (OSError, ValueError, subprocess.TimeoutExpired) as error:
                 issue(issues, record['path'], f'视频信息未读取，仍保留文件查重结果：{error}')
+            scan_progress('videos', index, len(videos), record['name'])
     finally:
         worker.close()
     return summary
@@ -844,7 +856,8 @@ def similar_images(records, threshold, limit, enabled):
                 and not r["image"].get("low_detail") and r["image"].get("width") and r["image"].get("height")]
     if not enabled:
         return {"pairs": [], "eligible": len(eligible), "enabled": False, "truncated": False}
-    for record in eligible:
+    scan_progress('similar', 0, len(eligible))
+    for index, record in enumerate(eligible, 1):
         value = int(record["image"]["dhash"], 16)
         ratio = record["image"]["width"] / record["image"]["height"]
         for distance, other in tree.query(value, threshold):
@@ -857,6 +870,8 @@ def similar_images(records, threshold, limit, enabled):
                 return {"pairs": pairs, "eligible": len(eligible), "enabled": True, "truncated": True}
             pairs.append({"left": other["path"], "right": record["path"], "distance": distance})
         tree.add(value, record)
+        if index == 1 or index % 50 == 0 or index == len(eligible):
+            scan_progress('similar', index, len(eligible))
     return {"pairs": pairs, "eligible": len(eligible), "enabled": True, "truncated": False}
 
 
@@ -881,6 +896,10 @@ def export_previews(directory, records, similarity, helper, issues, displayed_pa
                           for path in (pair["left"], pair["right"]))
     paths.update(dict.fromkeys(record["path"] for record in records if record.get("kind") == "照片") if photo_limit is None else
                  dict.fromkeys([record["path"] for record in records if record.get("kind") == "照片"][:photo_limit]))
+    scheduled = set(paths)
+    if cache and photo_limit != 0:
+        # Keep previews repaired while browsing, even beyond the initial budget.
+        paths.update(dict.fromkeys(record['path'] for record in records if record.get('kind') == '照片'))
     if not paths:
         return {}
     by_path = {record["path"]: record for record in records}
@@ -897,6 +916,8 @@ def export_previews(directory, records, similarity, helper, issues, displayed_pa
             if not stat.S_ISREG(before.st_mode) or signature(before) != record["_signature"]:
                 raise ValueError("图片已变化，未生成预览")
             if not cache or not cache.thumbnail(record, destination):
+                if path not in scheduled:
+                    return path, '', ''
                 workers[(index - 1) % 2].request(path, thumbnail=str(destination))
             after = os.stat(path, follow_symlinks=False)
             if signature(after) != record["_signature"] or not destination.is_file():
@@ -909,13 +930,17 @@ def export_previews(directory, records, similarity, helper, issues, displayed_pa
                 pass
             return path, "", str(error)
     items = list(enumerate(paths, 1))
+    completed = 0
+    scan_progress('previews', 0, len(items))
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:
             for start in range(0, len(items), 4):
                 for path, relative, error in pool.map(export_one, items[start:start + 4]):
+                    completed += 1
+                    scan_progress('previews', completed, len(items), Path(path).name)
                     if error:
                         issue(issues, path, f"图片浏览预览未生成：{error}")
-                    else:
+                    elif relative:
                         previews[path] = relative
     finally:
         for worker in workers:
@@ -934,6 +959,7 @@ def export_local_covers(directory, groups, records, helper, issues, enabled=True
         group["poster"] = ""
         group["poster_source"] = ""
     candidates = local_cover_candidates(groups, records)
+    scan_progress('posters', 0, len(candidates))
     if not enabled or not any(candidates) or not helper_available(helper):
         return 0
     cover_dir = directory / "covers"
@@ -963,7 +989,8 @@ def export_local_covers(directory, groups, records, helper, issues, enabled=True
         return index, "", "", last_error if options else ""
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:
-            for index, relative, source, error in pool.map(export_one, enumerate(candidates)):
+            for completed, (index, relative, source, error) in enumerate(pool.map(export_one, enumerate(candidates)), 1):
+                scan_progress('posters', completed, len(candidates))
                 groups[index]["poster"] = relative
                 groups[index]["poster_source"] = source
                 if relative:
@@ -1008,6 +1035,7 @@ def export_video_frame_covers(directory, groups, records, helper, issues, limit=
                 pending.append((index, options))
     if not pending:
         return count
+    scan_progress('frames', 0, len(pending))
     workers = [ImageProbeWorker(helper) for _ in range(2)]
     def export_one(item):
         index, options = item
@@ -1032,7 +1060,8 @@ def export_video_frame_covers(directory, groups, records, helper, issues, limit=
         return index, "", "", last_error
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:
-            for index, relative, source, error in pool.map(export_one, pending):
+            for completed, (index, relative, source, error) in enumerate(pool.map(export_one, pending), 1):
+                scan_progress('frames', completed, len(pending))
                 if relative:
                     groups[index]["poster"] = relative
                     groups[index]["poster_source"] = "视频截帧：" + source
@@ -1436,6 +1465,7 @@ def main(argv=None):
             group['tags'] = saved_tags.get(group['tag_key'], [])
         from local_movie_metadata import enrich_library, export_stills
         metadata_issue_start = len(issues)
+        scan_progress('metadata')
         if not args.no_local_metadata:
             enrich_library(video_library["groups"], sidecars, issues)
         video_library["issues"].extend({"path": item["path"], "reason": item["reason"], "type": "影片资料"} for item in issues[metadata_issue_start:])
@@ -1473,7 +1503,9 @@ def main(argv=None):
                 "folder_groups": folder_groups, "video_library": video_library, "issues": issues, "skipped": skipped}
         from movie_attachments import attach_summaries
         attach_summaries(data)
+        scan_progress('export')
         write_reports(directory, data)
+        scan_progress('index')
         print('变化更新：复用照片信息 {} 项、小图 {} 项、视频封面 {} 项；精确查重已重新校验。'.format(
             cache.reused_metadata, cache.reused_previews, cache.reused_covers), flush=True)
         try:

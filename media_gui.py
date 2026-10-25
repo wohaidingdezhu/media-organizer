@@ -180,6 +180,7 @@ class DashboardState(WorkspaceController):
         self.logs = deque(maxlen=300)
         self.running = False
         self.status = "准备就绪。请先添加照片或视频文件夹。"
+        self.progress = None
         self.process = None
         self.cancel_requested = threading.Event()
         self.cancel_file = self.output / (".scan-cancel-" + secrets.token_hex(12))
@@ -194,6 +195,11 @@ class DashboardState(WorkspaceController):
 
     def log(self, line):
         with self.lock:
+            from scan_progress import parse
+            update = parse(str(line))
+            if update is not None:
+                self.progress = update
+                return
             self.logs.append(str(line).rstrip())
 
     def _report_summary(self, report_id):
@@ -232,7 +238,7 @@ class DashboardState(WorkspaceController):
         with self.lock:
             report = latest_library(self.output)
             return {"folders": list(self.folders), "running": self.running,
-                    "status": self.status, "logs": list(self.logs),
+                    "status": self.status, "logs": list(self.logs), "progress": self.progress,
                     "latest_report": report.name if report else None, "monitor": dict(self.monitor),
                     "workspace": self.output.name, "watch_status": self.watch_status, "scan_origin": self.scan_origin,
                     "next_update_seconds": max(0, int(self.next_scan - __import__("time").monotonic())) if self.next_scan else None}
@@ -303,6 +309,8 @@ class DashboardState(WorkspaceController):
             self.running = True
             self.cancel_requested.clear()
             self.logs.clear()
+            from scan_progress import progress
+            self.progress = progress('prepare')
             self.status = "正在准备组件并扫描；原始媒体不会被修改。"
         self.scan_thread = threading.Thread(target=self._run_scan, args=(args, image_analysis, video_covers), daemon=True)
         self.scan_thread.start()
@@ -314,7 +322,7 @@ class DashboardState(WorkspaceController):
             if self.cancel_requested.is_set():
                 code = 130
             else:
-                environment = dict(os.environ, PYTHONUTF8="1")
+                environment = dict(os.environ, PYTHONUTF8="1", MEDIA_ORGANIZER_PROGRESS="1")
                 if sys.platform == "win32":
                     environment["MEDIA_ORGANIZER_CANCEL_FILE"] = str(self.cancel_file.absolute())
                 command = [sys.executable, "--scan", *args[1:]] if getattr(sys, "frozen", False) else [sys.executable, "-X", "utf8", "-u", *args]
@@ -330,6 +338,8 @@ class DashboardState(WorkspaceController):
                 code = process.wait()
             with self.lock:
                 if code == 0:
+                    from scan_progress import progress
+                    self.progress = progress('done', 1, 1)
                     history = self.report_history()["reports"]
                     if history:
                         summary = history[0]["summary"]

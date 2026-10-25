@@ -498,7 +498,9 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     raise ValueError("请求内容必须是 JSON 对象")
                 if route == 'api/center':
                     current = center_snapshot()
-                    result = operations.update_plan(lambda: center_state.update(payload, {item['id'] for item in current['items']}, current['directories']))
+                    pairs = {pair['id'] for key in ('similar', 'dismissed_similar') for pair in current['review'][key]}
+                    videos = {file['id'] for item in current['items'] if item['kind'] != 'photo' for file in item['files']}
+                    result = operations.update_plan(lambda: center_state.update(payload, {item['id'] for item in current['items']}, current['directories'], pairs, videos))
                     self.send_json(200, result)
                     return
                 if route == 'api/users':

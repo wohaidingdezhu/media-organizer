@@ -89,10 +89,10 @@ class ScanCache:
                     if source and group.get('poster'):
                         self.pictures.setdefault((role, source), group['poster'])
                 for path, record in self.files.items():
-                    if record.get('kind') == '视频':
+                    if record.get('kind') in {'照片', '视频'}:
                         # A manually repaired cover is reusable only after the
                         # normal full source-signature and PNG checks below.
-                        self.pictures.setdefault(('video', path), 'covers/repair-' + media_id(path) + '.png')
+                        self.pictures.setdefault(('video' if record['kind'] == '视频' else 'image', path), 'covers/repair-' + media_id(path) + '.png')
                 break
             except (OSError, ValueError, KeyError, TypeError, AttributeError):
                 self.files, self.pictures, self.report = {}, {}, None
