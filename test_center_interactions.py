@@ -1,0 +1,81 @@
+"""Deferred user actions stay attached to their original media or dialog."""
+import unittest
+import test_media_center as center_tests
+
+
+class CenterInteractionTests(unittest.TestCase):
+    run_ui = center_tests.MediaCenterTests.run_ui
+
+    def test_photo_detail_uses_full_width_controls_while_movie_keeps_poster_layout(self):
+        self.run_ui(r'''
+$('center-content').children[0].children[0].children[0].onclick();assert.equal($('detail-content').children[0].className,'detail-grid');$('detail-close').onclick();location.hash='#photos';events.hashchange();$('center-content').children[0].children[0].children[0].onclick();assert.equal($('detail-content').children[0].className,'detail-grid photo-detail');assert($('detail-content').children[0].children[1].children.some(n=>n.className==='actions detail-controls'));assert.equal(operations.length,0);
+''')
+
+    def test_tag_save_keeps_text_entered_after_submission(self):
+        self.run_ui(r'''
+$('center-content').children[0].children[0].children[0].onclick();
+const info=$('detail-content').children[0].children[1],controls=info.children.find(n=>n.className==='actions detail-controls'),tags=controls.children[0];
+let finish;const originalFetch=scope.fetch;scope.fetch=async(path,options)=>{const body=options?.body&&JSON.parse(options.body);if(body?.action==='labels')return new Promise(resolve=>finish=()=>{movie.local_tags=movie.tags=body.tags;resolve({ok:true,json:async()=>state});});return originalFetch(path,options);};
+tags.value='Saved tag';const saving=controls.children[1].onclick();assert(controls.children[1].disabled);tags.value='Saved tag, New unsaved tag';finish();await saving;
+assert(!controls.children[1].disabled);assert.equal(tags.value,'Saved tag, New unsaved tag');assert.deepEqual(movie.local_tags,['Saved tag']);assert.equal($('detail-content').children[0].children[1],info);assert($('detail-feedback').textContent.includes('尚未保存'));assert.equal(operations.length,0);
+''')
+
+    def test_newer_manual_refresh_supersedes_save_refresh_without_false_error(self):
+        self.run_ui(r'''
+$('center-content').children[0].children[0].children[0].onclick();const controls=$('detail-content').children[0].children[1].children.find(n=>n.className==='actions detail-controls');let saved=false,finish,delayed=false;const originalFetch=scope.fetch;scope.fetch=async(path,options)=>{if(options?.body&&JSON.parse(options.body).action==='labels'){saved=true;movie.local_tags=movie.tags=JSON.parse(options.body).tags;}const response=await originalFetch(path,options);if(path==='api/center'&&!options?.body&&saved&&!delayed){delayed=true;return new Promise(resolve=>finish=()=>resolve(response));}return response;};controls.children[0].value='Saved';const saving=controls.children[1].onclick();await new Promise(r=>setImmediate(r));assert(finish);await $('center-refresh').onclick();finish();await saving;assert.equal($('center-error').textContent,'');assert.equal($('detail-status').textContent,'');assert.equal(controls.children[0].value,'Saved');assert.equal(operations.length,0);
+''')
+
+    def test_successful_tag_write_with_failed_refresh_keeps_input_and_explains_result(self):
+        self.run_ui(r'''
+$('center-content').children[0].children[0].children[0].onclick();const info=$('detail-content').children[0].children[1],controls=info.children.find(n=>n.className==='actions detail-controls'),tags=controls.children[0];tags.value='Submitted tag';const originalFetch=scope.fetch;scope.fetch=async(path,options)=>{const response=await originalFetch(path,options);if(options?.body&&JSON.parse(options.body).action==='labels')failCenter=true;return response;};await controls.children[1].onclick();assert.equal(tags.value,'Submitted tag');assert.equal($('detail-feedback').textContent,'');assert($('detail-status').textContent.includes('已保存'));assert($('detail-status').textContent.includes('刷新失败'));assert.equal(operations.length,0);
+''')
+
+    def test_successful_note_write_with_failed_refresh_does_not_claim_fully_refreshed(self):
+        self.run_ui(r'''
+$('center-content').children[0].children[0].children[0].onclick();const info=$('detail-content').children[0].children[1],note=info.children.find(n=>n.tagName==='TEXTAREA');note.value='Submitted note';const originalFetch=scope.fetch;scope.fetch=async(path,options)=>{const response=await originalFetch(path,options);if(path==='api/notes')failCenter=true;return response;};await info.children.find(n=>n.textContent==='保存评分与备注').onclick();assert.equal(note.value,'Submitted note');assert.equal($('detail-feedback').textContent,'');assert($('detail-status').textContent.includes('刷新失败'));assert.equal(operations.length,0);
+''')
+
+    def test_save_then_next_photo_never_jumps_back_or_shows_previous_feedback(self):
+        self.run_ui(r'''
+const second={...photo,id:'f'.repeat(64),title:'Second',mtime:1,files:[{...photo.files[0],id:'9'.repeat(64),path:'/second.jpg'}]};items=[photo,second];await $('center-refresh').onclick();location.hash='#photos';events.hashchange();$('center-content').children[0].children[0].children[0].onclick();
+let finish;const originalFetch=scope.fetch;scope.fetch=async(path,options)=>{if(options?.body&&JSON.parse(options.body).action==='labels')return new Promise(resolve=>finish=()=>resolve({ok:true,json:async()=>state}));return originalFetch(path,options);};
+const controls=$('detail-content').children[0].children[1].children.find(n=>n.className==='actions detail-controls');controls.children[0].value='First tag';const saving=controls.children[1].onclick();$('detail-actions').children.find(n=>n.textContent==='下一张').onclick();const nextGrid=$('detail-content').children[0];finish();await saving;
+assert.equal($('detail-title').textContent,'Second');assert.equal($('detail-content').children[0],nextGrid);assert.equal($('detail-feedback').textContent,'');assert.equal($('detail-status').textContent,'');assert.equal(operations.length,0);
+''')
+
+    def test_favorite_response_after_close_and_reopen_same_media_does_not_claim_new_action(self):
+        self.run_ui(r'''
+const cover=$('center-content').children[0].children[0].children[0];cover.onclick();let finish;const originalFetch=scope.fetch;scope.fetch=async(path,options)=>{if(options?.body&&JSON.parse(options.body).action==='favorite')return new Promise(resolve=>finish=()=>resolve({ok:true,json:async()=>state}));return originalFetch(path,options);};
+const saving=$('detail-actions').children[0].onclick();$('detail-close').onclick();cover.onclick();const newGrid=$('detail-content').children[0];finish();await saving;assert($('media-detail').open);assert.equal($('detail-content').children[0],newGrid);assert.equal($('detail-feedback').textContent,'');assert.equal(operations.length,0);
+''')
+
+    def test_late_save_and_player_errors_do_not_pollute_another_detail(self):
+        self.run_ui(r'''
+$('center-content').children[0].children[0].children[0].onclick();const info=$('detail-content').children[0].children[1],file=info.children.find(n=>n.className==='file');file.children.find(n=>n.className==='actions').children.find(n=>n.textContent==='页内预览').onclick();const player=file.children.find(n=>n.tagName==='VIDEO');
+let finish;const originalFetch=scope.fetch;scope.fetch=async(path,options)=>{if(options?.body&&JSON.parse(options.body).action==='favorite')return new Promise(resolve=>finish=()=>resolve({ok:false,json:async()=>({error:'Old movie save failed'})}));return originalFetch(path,options);};
+const saving=$('detail-actions').children[0].onclick();$('detail-close').onclick();location.hash='#photos';events.hashchange();$('center-content').children[0].children[0].children[0].onclick();player.onerror();finish();await saving;assert.equal($('detail-title').textContent,'Photo');assert.equal($('detail-status').textContent,'');assert.equal($('detail-feedback').textContent,'');assert.equal(operations.length,0);
+''')
+
+    def test_manage_delete_controls_recover_after_favorite_without_an_extra_refresh(self):
+        self.run_ui(r'''
+$('manage-toggle').onclick();const currentCard=()=>$('center-content').children[0].children[0],actions=()=>currentCard().children.find(n=>n.className==='card-actions');assert(!actions().children.find(n=>n.textContent==='删除…').disabled);
+await actions().children.find(n=>n.textContent==='☆ 收藏').onclick();const trash=actions().children.find(n=>n.textContent==='删除…');assert(!trash.disabled);trash.onclick();assert.equal(operations.length,1);assert.equal(operations[0].action,'delete');
+''')
+
+    def test_detail_delete_control_recovers_after_rating_save_and_keeps_player(self):
+        self.run_ui(r'''
+$('manage-toggle').onclick();$('center-content').children[0].children[0].children[0].onclick();const grid=$('detail-content').children[0],info=grid.children[1],file=info.children.find(n=>n.className==='file'),trash=file.children.find(n=>n.className==='actions').children.find(n=>n.textContent==='删除此文件…');
+await info.children.find(n=>n.textContent==='保存评分与备注').onclick();assert.equal($('detail-content').children[0],grid);assert(!trash.disabled);assert.equal(operations.length,0);
+''')
+
+    def test_old_collection_save_does_not_close_reopened_form(self):
+        self.run_ui(r'''
+location.hash='#collections';events.hashchange();$('create-collection').onclick();$('collection-name').value='First collection';let finish;const originalFetch=scope.fetch;scope.fetch=async(path,options)=>{if(options?.body&&JSON.parse(options.body).action==='create')return new Promise(resolve=>finish=()=>resolve({ok:true,json:async()=>state}));return originalFetch(path,options);};
+const saving=$('collection-save').onsubmit({preventDefault(){}});$('collection-cancel').onclick();$('create-collection').onclick();$('collection-name').value='New form draft';finish();await saving;assert($('collection-form').open);assert.equal($('collection-name').value,'New form draft');assert.equal($('collection-error').textContent,'');assert.equal(operations.length,0);
+''')
+
+    def test_select_page_fills_remaining_capacity_from_unselected_items(self):
+        self.run_ui(r'''
+items=Array.from({length:201},(_,index)=>({...photo,id:(index+1).toString(16).padStart(64,'0'),title:'Photo '+index,mtime:201-index,files:[{...photo.files[0],id:(index+1).toString(16).padStart(64,'0'),path:'/generated/'+index+'.jpg'}]}));access.ids_by_path=Object.fromEntries(items.map(item=>[item.files[0].path,item.files[0].id]));await $('center-refresh').onclick();location.hash='#photos';events.hashchange();$('manage-toggle').onclick();
+for(let page=0;page<4;page++){if(page)$('center-next').onclick();$('select-page').onclick();}assert($('selected-count').textContent.includes('200'));for(let page=0;page<3;page++)$('center-prev').onclick();const check=$('center-content').children[0].children[1].children.find(n=>n.className==='pick').children[0];check.checked=false;check.onchange();assert($('selected-count').textContent.includes('199'));$('select-page').onclick();assert($('selected-count').textContent.includes('200'));assert($('center-content').children[0].children[1].children.find(n=>n.className==='pick').children[0].checked);assert.equal(operations.length,0);
+''')
