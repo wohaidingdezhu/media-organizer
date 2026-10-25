@@ -267,7 +267,7 @@ failCenter=false;await $('center-refresh').onclick();trash().onclick();assert.eq
 const second={...photo,id:'f'.repeat(64),title:'Second',files:[{...photo.files[0],id:'1'.repeat(64),path:'/second.jpg'}]};items.push(second);access.ids_by_path['/second.jpg']='1'.repeat(64);
 const files=[photo,second].map(item=>({...item.files[0],name:item.title,kind:'photo',media_kind:'photo',owner:item.id,metadata:item.metadata,preview:item.preview}));review={exact:[{sha256:'2'.repeat(64),files}],similar:[{distance:2,files}],warnings:[]};location.hash='#review';events.hashchange();await $('center-refresh').onclick();
 const group=()=>$('center-content').children.find(n=>n.className==='review-group');assert($('manage-toggle').hidden);assert($('center-content').children.some(n=>n.textContent.includes('SHA-256')));
-group().children.find(n=>n.textContent==='对比这两张').onclick();assert.equal(operations[0].action,'compare');assert.equal(operations[0].ids.length,2);
+group().children.find(n=>n.className==='actions review-group-actions').children.find(n=>n.textContent==='对比这两张').onclick();assert.equal(operations[0].action,'compare');assert.equal(operations[0].ids.length,2);
 const first=group().children.find(n=>n.className==='review-files').children[0];first.children.find(n=>n.className==='actions').children.find(n=>n.textContent==='删除…').onclick();assert.equal(operations[1].action,'delete');assert.deepEqual(Array.from(operations[1].ids),[photo.files[0].id]);
 $('center-content').children[0].children[1].onclick();assert($('center-content').children.some(n=>n.textContent.includes('视觉相似候选')));assert.equal(calls.length,0);
 """)

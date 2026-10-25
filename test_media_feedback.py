@@ -17,7 +17,7 @@ from media_actions import MediaActions, file_signature, media_id
 from media_center import CenterState, center_catalog, validate_state
 from preview_repair import PreviewRepair
 from scan_progress import PREFIX, parse, progress
-from scan_cache import ScanCache
+from scan_cache import ScanCache, valid_thumbnail
 from test_library_server import MemoryServer, request
 import test_media_center as center_tests
 
@@ -109,6 +109,63 @@ class MediaFeedbackTests(unittest.TestCase):
             previews=media_scan.export_previews(destination,records,{'pairs':[]},Path('generated-helper'),[],photo_limit=1,cache=cache)
         self.assertEqual(set(previews),{str(self.photos[0]),str(self.photos[2])});self.assertEqual(worker.return_value.request.call_count,1);self.assert_unchanged()
 
+    def test_broken_scan_preview_uses_repair_after_restart_and_next_scan(self):
+        path = str(self.photos[0]);identifier = media_id(path)
+        self.doc['previews'][path] = 'previews/broken.png'
+        (self.report/'previews').mkdir();(self.report/'previews'/'broken.png').write_bytes(b'truncated png')
+        self.doc['options'] = {'analysis_fingerprint':'generated'}
+        (self.report/'report.json').write_text(json.dumps(self.doc),encoding='utf-8')
+        (self.report/'report.html').write_text('Generated')
+        relative = PreviewRepair(self.report,MediaActions(self.doc),self.doc).generate(identifier)['preview']
+        catalog = PreviewRepair(self.report,MediaActions(self.doc),self.doc).apply(self.catalog())
+        self.assertEqual(next(item for item in catalog['items'] if item['id']==identifier)['preview'],relative)
+        self.assertEqual(catalog['review']['similar'][0]['files'][0]['preview'],relative)
+        cache = ScanCache(self.output,[str(self.source)],'generated');target = self.root/'reused.png'
+        self.assertTrue(cache.thumbnail({**self.records[0],'_signature':tuple(self.records[0]['source_signature'])},target))
+        self.assertTrue(valid_thumbnail(target.read_bytes()));self.assert_unchanged()
+
+    def test_missing_and_corrupt_repair_can_regenerate_without_touching_originals(self):
+        manager = PreviewRepair(self.report,MediaActions(self.doc),self.doc);identifier = media_id(str(self.photos[0]))
+        target = self.report/manager.generate(identifier)['preview']
+        for damage in ('missing','corrupt','restart'):
+            if damage=='missing':target.unlink()
+            else:target.write_bytes(b'broken generated cache')
+            if damage=='restart':manager=PreviewRepair(self.report,MediaActions(self.doc),self.doc)
+            with self.subTest(damage=damage):
+                self.assertEqual(self.report/manager.generate(identifier)['preview'],target)
+                self.assertTrue(valid_thumbnail(target.read_bytes()))
+        self.assertFalse(list(target.parent.glob('.repair-tmp-*')));self.assert_unchanged()
+
+    def test_repair_refuses_non_file_destination_and_cleans_temporary(self):
+        manager = PreviewRepair(self.report,MediaActions(self.doc),self.doc);identifier=media_id(str(self.photos[0]))
+        target=self.report/'covers'/('repair-'+identifier+'.png');target.mkdir(parents=True)
+        with self.assertRaisesRegex(ValueError,'非普通'):manager.generate(identifier)
+        self.assertTrue(target.is_dir());self.assertEqual(list(target.parent.iterdir()),[target]);self.assert_unchanged()
+
+    def test_navigation_skips_detached_queued_previews_and_revisiting_requeues(self):
+        self.run_ui(r'''
+const observers=[];scope.IntersectionObserver=class{constructor(callback){this.callback=callback;this.nodes=[];observers.push(this);}observe(n){this.nodes.push(n);}unobserve(){}disconnect(){}};
+const pending=[];const originalFetch=scope.fetch;scope.fetch=async(path,options)=>{if(path==='api/media/cover'){calls.push({path,body:JSON.parse(options.body)});return new Promise(resolve=>pending.push(()=>resolve({ok:true,json:async()=>({preview:'covers/generated.png'})})));}return originalFetch(path,options);};
+photo.preview='';const other={...photo,id:'f'.repeat(64),files:[{...photo.files[0],id:'9'.repeat(64),path:'/other.jpg'}]};items=[photo,other];access.ids_by_path['/other.jpg']=other.files[0].id;location.hash='#photos';events.hashchange();await $('center-refresh').onclick();
+const cards=$('center-content').children[0].children,first=cards[0].children[0],second=cards[1].children[0],observer=observers[0];observer.callback([{target:first,isIntersecting:true},{target:second,isIntersecting:true}]);assert.equal(calls.length,1);assert($('preview-progress-label').textContent.includes('0/2'));second.isConnected=false;pending.shift()();await new Promise(r=>setImmediate(r));assert.equal(calls.length,1);assert.equal($('preview-progress').value,100);assert($('preview-progress-label').textContent.includes('1/1'));
+second.isConnected=true;observer.callback([{target:second,isIntersecting:true}]);assert.equal(calls.length,2);pending.shift()();await new Promise(r=>setImmediate(r));assert.equal(second.children[0].tagName,'IMG');assert.equal(operations.length,0);
+''')
+
+    def test_manual_and_automatic_preview_share_queue_and_preserve_detail_draft(self):
+        self.run_ui(r'''
+const observers=[];scope.IntersectionObserver=class{constructor(callback){this.callback=callback;this.nodes=[];observers.push(this);}observe(n){this.nodes.push(n);}unobserve(){}disconnect(){}};
+let finish;const originalFetch=scope.fetch;scope.fetch=async(path,options)=>{if(path==='api/media/cover'){calls.push({path,body:JSON.parse(options.body)});return new Promise(resolve=>finish=()=>resolve({ok:true,json:async()=>({preview:'covers/generated.png'})}));}return originalFetch(path,options);};
+movie.preview='';await $('center-refresh').onclick();const card=$('center-content').children[0].children[0],cover=card.children[0];observers[0].callback([{target:cover,isIntersecting:true}]);cover.onclick();const grid=$('detail-content').children[0],art=grid.children[0],info=grid.children[1],tags=info.children.find(n=>n.className==='actions detail-controls').children[0];tags.value='Unsaved draft';const repair=info.children.at(-1).children[0];const waiting=repair.onclick();assert.equal(calls.filter(c=>c.path==='api/media/cover').length,1);finish();await waiting;await new Promise(r=>setImmediate(r));assert.equal($('detail-content').children[0],grid);assert.equal(tags.value,'Unsaved draft');assert.equal(art.children[0].tagName,'IMG');assert(repair.hidden);assert.equal(operations.length,0);
+''')
+
+    def test_broken_existing_preview_exposes_retry_and_manual_success_clears_failure(self):
+        self.run_ui(r'''
+const observers=[];scope.IntersectionObserver=class{constructor(callback){this.callback=callback;this.nodes=[];observers.push(this);}observe(n){this.nodes.push(n);}unobserve(){}disconnect(){}};
+let fail=true;const originalFetch=scope.fetch;scope.fetch=async(path,options)=>path==='api/media/cover'?{ok:!fail,json:async()=>fail?{error:'Decoder unavailable'}:{preview:'covers/fixed.png'}}:originalFetch(path,options);
+location.hash='#photos';events.hashchange();const card=$('center-content').children[0].children[0],cover=card.children[0],repair=card.children.find(n=>n.className==='card-actions').children[0];assert(repair.hidden);cover.children[0].onerror();observers[0].callback([{target:cover,isIntersecting:true}]);await new Promise(r=>setImmediate(r));assert(!repair.hidden&&!repair.disabled);assert(repair.textContent.includes('重试'));assert($('preview-progress-label').textContent.includes('1 项未生成'));
+fail=false;await repair.onclick();await new Promise(r=>setImmediate(r));assert.equal(cover.children[0].src,'covers/fixed.png');assert(repair.hidden);assert(!$('preview-progress-label').textContent.includes('未生成'));assert.equal($('preview-progress').value,100);assert.equal(operations.length,0);
+''')
+
     def test_progress_reports_measured_phases_and_rejects_invalid_messages(self):
         text=io.StringIO()
         with mock.patch.dict('os.environ',{'MEDIA_ORGANIZER_PROGRESS':'1'}),contextlib.redirect_stdout(text):
@@ -148,7 +205,7 @@ scope.IntersectionObserver=class{constructor(){throw Error('Disabled analysis mu
 const other={...photo,id:'f'.repeat(64),files:[{...photo.files[0],id:'9'.repeat(64),path:'/other.jpg'}]};items.push(other);access.ids_by_path['/other.jpg']=other.files[0].id;
 const pair={id:'1'.repeat(64),files:[photo,other].map(p=>({...p.files[0],kind:'photo',media_kind:'photo',owner:p.id,metadata:p.metadata})),distance:3};review.similar=[pair];review.dismissed_similar=[];
 const originalFetch=scope.fetch;scope.fetch=async(path,options)=>{if(options?.body){const body=JSON.parse(options.body);if(body.action==='review_similarity'){review.similar=body.dismissed?[]:[pair];review.dismissed_similar=body.dismissed?[pair]:[];}}return originalFetch(path,options);};
-location.hash='#review';events.hashchange();await $('center-refresh').onclick();$('center-content').children[0].children[1].onclick();const section=()=>$('center-content').children.find(n=>n.className==='review-group');await section().children.find(n=>n.textContent==='确认不相似').onclick();assert(!section());assert.equal(operations.length,0);$('center-content').children[0].children.find(n=>n.textContent.startsWith('已确认不相似')).onclick();await section().children.find(n=>n.textContent==='恢复到待核对').onclick();assert.equal(review.similar.length,1);assert.equal(operations.length,0);
+location.hash='#review';events.hashchange();await $('center-refresh').onclick();$('center-content').children[0].children[1].onclick();const section=()=>$('center-content').children.find(n=>n.className==='review-group');await section().children.find(n=>n.className==='actions review-group-actions').children.find(n=>n.textContent==='确认不相似').onclick();assert(!section());assert.equal(operations.length,0);$('center-content').children[0].children.find(n=>n.textContent.startsWith('已确认不相似')).onclick();await section().children.find(n=>n.className==='actions review-group-actions').children.find(n=>n.textContent==='恢复到待核对').onclick();assert.equal(review.similar.length,1);assert.equal(operations.length,0);
 ''')
 
     def test_ui_empty_tags_and_movies_have_actions_without_rescan(self):
@@ -168,7 +225,7 @@ photo.preview='';items=[photo];location.hash='#photos';events.hashchange();await
         self.run_ui(r'''
 const observers=[];scope.IntersectionObserver=class{constructor(callback){this.callback=callback;this.nodes=[];observers.push(this);}observe(n){this.nodes.push(n);}unobserve(){}disconnect(){}};
 const originalFetch=scope.fetch;scope.fetch=async(path,options)=>path==='api/media/cover'?{ok:false,json:async()=>({error:'Unsupported generated sample'})}:originalFetch(path,options);
-photo.preview='';items=[photo];location.hash='#photos';events.hashchange();await $('center-refresh').onclick();const observer=observers[0],target=observer.nodes.at(-1);observer.callback([{target,isIntersecting:true}]);await new Promise(r=>setImmediate(r));assert($('preview-progress-label').textContent.includes('1 项未生成'));assert(target.children[0].children[1].textContent.includes('Unsupported'));assert.equal(operations.length,0);assert($('center-content').children[0].children[0].children.find(n=>n.className==='card-actions').children.some(n=>n.textContent==='补预览'));
+photo.preview='';items=[photo];location.hash='#photos';events.hashchange();await $('center-refresh').onclick();const observer=observers[0],target=observer.nodes.at(-1);observer.callback([{target,isIntersecting:true}]);await new Promise(r=>setImmediate(r));assert($('preview-progress-label').textContent.includes('1 项未生成'));assert(target.children[0].children[1].textContent.includes('Unsupported'));assert.equal(operations.length,0);assert($('center-content').children[0].children[0].children.find(n=>n.className==='card-actions').children.some(n=>n.textContent==='重试补预览'&&!n.disabled&&!n.hidden));
 ''')
 
     def test_dashboard_progress_uses_measured_percent_and_unknown_total_is_indeterminate(self):

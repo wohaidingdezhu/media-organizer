@@ -138,14 +138,28 @@ class ScanCache:
 
     def thumbnail(self, record, destination, role='image'):
         relative = self.pictures.get((role, record['path']))
-        if not isinstance(relative, str) or not re.fullmatch(r'(previews|covers)/[A-Za-z0-9_-]+\.png', relative):
+        candidates = [relative]
+        kind = self.files.get(record['path'], {}).get('kind')
+        if (role, kind) in {('image', '照片'), ('video', '视频')}:
+            candidates.append('covers/repair-' + media_id(record['path']) + '.png')
+        if not self.report:
             return False
         created = False
         try:
             if not self.unchanged(record):
                 return False
-            body = fs.read_private_file(self.output, (self.report, *PurePosixPath(relative).parts), 2 * 1024 * 1024)
-            if not valid_thumbnail(body):
+            body = None
+            for candidate in dict.fromkeys(value for value in candidates if isinstance(value, str)):
+                if not re.fullmatch(r'(previews|covers)/[A-Za-z0-9_-]+\.png', candidate):
+                    continue
+                try:
+                    content = fs.read_private_file(self.output, (self.report, *PurePosixPath(candidate).parts), 2 * 1024 * 1024)
+                except (OSError, ValueError):
+                    continue
+                if valid_thumbnail(content):
+                    body = content
+                    break
+            if body is None:
                 return False
             descriptor = fs.open(destination, fs.O_WRONLY | fs.O_CREAT | fs.O_EXCL | fs.O_NOFOLLOW, 0o600)
             created = True
