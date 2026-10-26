@@ -500,7 +500,13 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     current = center_snapshot()
                     pairs = {pair['id'] for key in ('similar', 'dismissed_similar') for pair in current['review'][key]}
                     videos = {file['id'] for item in current['items'] if item['kind'] != 'photo' for file in item['files']}
-                    result = operations.update_plan(lambda: center_state.update(payload, {item['id'] for item in current['items']}, current['directories'], pairs, videos))
+                    classification_document = None
+                    if payload.get('action') in {'media_kind', 'folder_kind'}:
+                        visible_paths = {file['path'] for item in current['items'] for file in item['files']}
+                        source = current_document()
+                        classification_document = {**source, 'files': [file for file in source.get('files', [])
+                                                                       if file.get('path') in visible_paths]}
+                    result = operations.update_plan(lambda: center_state.update(payload, {item['id'] for item in current['items']}, current['directories'], pairs, videos, document=classification_document))
                     self.send_json(200, result)
                     return
                 if route == 'api/users':

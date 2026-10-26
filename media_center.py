@@ -73,6 +73,33 @@ def validate_state(value):
     return value
 
 
+def preserve_browsing_records(value, before, after):
+    """Carry records through category-driven splits/merges using file identities."""
+    old_owner = {file['id']: item for item in before for file in item['files']}
+    new_owner = {file['id']: item['id'] for item in after for file in item['files']}
+    replacements = {item['id']: list(dict.fromkeys(new_owner[file['id']] for file in item['files']
+                                                  if file['id'] in new_owner)) for item in before}
+    for item in after:
+        parents = {old_owner[file['id']]['id']: old_owner[file['id']] for file in item['files'] if file['id'] in old_owner}
+        if not parents:
+            continue
+        if len(parents) == 1 and item['id'] in parents and replacements[item['id']] == [item['id']]:
+            continue
+        # Current visible choices win over stale records from an earlier category.
+        value['favorites'][item['id']] = any(parent['favorite'] for parent in parents.values())
+        tags = list(dict.fromkeys(tag for parent in parents.values() for tag in parent['local_tags']))
+        if len(tags) > 20:
+            raise ValueError('合并分类后同一作品将超过20个本地标签，请先精简标签；本次分类未保存')
+        value['labels'][item['id']] = tags
+
+    def remap(ids):
+        return list(dict.fromkeys(target for identifier in ids for target in replacements.get(identifier, [identifier])))
+
+    for collection in value['collections'].values():
+        collection['ids'] = remap(collection['ids'])
+    value['recent'] = remap(value['recent'])[:100]
+
+
 class CenterState:
     def __init__(self, root):
         self.root = root
@@ -81,11 +108,13 @@ class CenterState:
         with data_lock(self.root):
             return validate_state(read_json(self.root, NAME, {'version': 1, 'favorites': {}, 'collections': {}, 'recent': []}, LIMIT))
 
-    def update(self, payload, allowed, directories=(), pairs=(), videos=()):
+    def update(self, payload, allowed, directories=(), pairs=(), videos=(), document=None):
         with data_lock(self.root):
             value = self.snapshot()
             action = payload.get('action')
             identifier = payload.get('id')
+            previous = (center_catalog(document, value)['items']
+                        if document is not None and action in {'media_kind', 'folder_kind'} else None)
             if action == 'review_similarity':
                 if not valid_id(identifier) or identifier not in pairs or type(payload.get('dismissed')) is not bool:
                     raise ValueError('请选择本次扫描中的相似照片候选')
@@ -156,6 +185,8 @@ class CenterState:
                     value['collections'][identifier]['ids'] = [key for key in before if key not in ids] if payload.get('remove') else list(dict.fromkeys(before + ids))
             else:
                 raise ValueError('媒体中心操作无效')
+            if previous is not None:
+                preserve_browsing_records(value, previous, center_catalog(document, value)['items'])
             validate_state(value)
             import json
             if len(json.dumps(value, ensure_ascii=False).encode('utf-8')) > LIMIT:
