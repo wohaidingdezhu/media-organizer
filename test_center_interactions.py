@@ -135,3 +135,36 @@ location.hash='#videos';events.hashchange();assert(!$('filter-duration').hidden)
         self.run_ui(r'''
 movie.kind='video';await $('center-refresh').onclick();location.hash='#videos';events.hashchange();assert($('manage-bar').hidden);const actions=$('center-content').children[0].children[0].children.find(n=>n.className==='card-actions');const trash=actions.children.find(n=>n.textContent==='删除…');assert(trash&&!trash.disabled);trash.onclick();assert.equal(operations.length,1);assert.equal(operations[0].action,'delete');assert.deepEqual(Array.from(operations[0].ids),[movie.files[0].id]);assert.equal(calls.length,0);
 ''')
+
+    def test_month_view_honors_name_and_size_sort_inside_months_with_unknown_dates_last(self):
+        self.run_ui(r'''
+const b=require(process.argv[1]),sample=(id,month,title,bytes,mtime)=>({...photo,id,title,bytes,mtime,metadata:{timeline_month:month}}),rows=[sample('a','2025-02','Photo10',10,3),sample('b','2025-02','Photo2',20,1),sample('c','2025-01','Before',30,2),sample('d','','Unknown',40,0)];const before=JSON.stringify(rows);
+assert.deepEqual(b.centerTimelineOrder(b.centerFilter(rows,{order:'name'}),'name').map(n=>n.id),['b','a','c','d']);assert.deepEqual(b.centerTimelineOrder(b.centerFilter(rows,{order:'size'}),'size').map(n=>n.id),['b','a','c','d']);assert.deepEqual(b.centerTimelineOrder(b.centerFilter(rows,{order:'oldest'}),'oldest').map(n=>n.id),['c','b','a','d']);assert.equal(JSON.stringify(rows),before);assert.equal(operations.length,0);
+''')
+
+    def test_oldest_month_view_and_continuous_photo_navigation_use_the_same_order(self):
+        self.run_ui(r'''
+items=[{...photo,title:'Newer',metadata:{timeline_month:'2025-02'},mtime:1},{...photo,id:'8'.repeat(64),title:'Earlier',metadata:{timeline_month:'2025-01'},mtime:10,files:[{...photo.files[0],id:'7'.repeat(64),path:'/earlier.jpg'}]},{...photo,id:'6'.repeat(64),title:'Unknown',metadata:{},mtime:0}];await $('center-refresh').onclick();location.hash='#photos';events.hashchange();$('photo-layout').value='timeline';$('photo-layout').onchange();$('media-order').value='oldest';$('media-order').onchange();assert.deepEqual($('center-content').children.filter(n=>n.tagName==='H2').map(n=>n.textContent),['2025-01','2025-02','日期未知']);assert($('center-subtitle').textContent.includes('月份从旧到新'));
+$('center-content').children.find(n=>n.className==='wall photo-wall').children[0].children[0].onclick();assert.equal($('detail-title').textContent,'Earlier');$('detail-actions').children.find(n=>n.textContent==='下一张').onclick();assert.equal($('detail-title').textContent,'Newer');assert.equal(operations.length,0);
+''')
+
+    def test_month_view_name_sort_is_visible_in_cards_and_caption(self):
+        self.run_ui(r'''
+items=[{...photo,title:'Photo10',mtime:10,metadata:{timeline_month:'2025-02'}},{...photo,id:'8'.repeat(64),title:'Photo2',mtime:1,metadata:{timeline_month:'2025-02'},files:[{...photo.files[0],id:'7'.repeat(64),path:'/photo2.jpg'}]}];await $('center-refresh').onclick();location.hash='#photos';events.hashchange();$('photo-layout').value='timeline';$('photo-layout').onchange();$('media-order').value='name';$('media-order').onchange();const cards=$('center-content').children.find(n=>n.className==='wall photo-wall').children;assert.deepEqual(cards.map(card=>card.children.find(n=>n.tagName==='H3').textContent),['Photo2','Photo10']);assert($('center-subtitle').textContent.includes('月内按名称'));assert.equal(operations.length,0);
+''')
+
+    def test_video_detail_delete_opens_one_confirmation_without_manage_mode(self):
+        self.run_ui(r'''
+movie.kind='video';await $('center-refresh').onclick();location.hash='#videos';events.hashchange();$('center-content').children[0].children[0].children[0].onclick();const info=$('detail-content').children[0].children[1],row=info.children.find(n=>n.className==='file'),trash=row.children.find(n=>n.className==='actions').children.find(n=>n.textContent==='删除此文件…');assert(trash&&!trash.disabled);trash.onclick();assert(!$('media-detail').open);assert.equal(operations.length,1);assert.equal(operations[0].action,'delete');assert.deepEqual(Array.from(operations[0].ids),[movie.files[0].id]);assert.equal(calls.length,0);
+''')
+
+    def test_late_collection_delete_does_not_exit_a_different_album(self):
+        self.run_ui(r'''
+state.collections.sample={name:'Sample',ids:[movie.id]};folders['/Other Album']=[photo.id];await $('center-refresh').onclick();location.hash='#collections';events.hashchange();$('center-content').children[0].children.find(card=>card.children.some(n=>n.textContent==='Sample')).onclick();let finish;const originalFetch=scope.fetch;scope.fetch=async(path,options)=>{if(options?.body&&JSON.parse(options.body).action==='delete_collection')return new Promise(resolve=>finish=()=>{delete state.collections.sample;resolve({ok:true,json:async()=>state});});return originalFetch(path,options);};
+const deleting=$('center-breadcrumb').children.find(n=>n.textContent==='删除合集记录').onclick();$('center-breadcrumb').children.find(n=>n.textContent==='← 返回相册与合集').onclick();$('center-content').children[0].children.find(card=>card.children.some(n=>n.className==='muted album-path'&&n.textContent==='/Other Album')).onclick();assert.equal($('center-title').textContent,'Other Album');finish();await deleting;assert.equal($('center-title').textContent,'Other Album');assert($('center-content').children[0].children.some(card=>card.children.some(n=>n.textContent==='Photo')));assert.equal(operations.length,0);
+''')
+
+    def test_collection_delete_returns_to_collection_list_when_still_in_deleted_collection(self):
+        self.run_ui(r'''
+state.collections.sample={name:'Sample',ids:[movie.id]};await $('center-refresh').onclick();location.hash='#collections';events.hashchange();$('center-content').children[0].children.find(card=>card.children.some(n=>n.textContent==='Sample')).onclick();const originalFetch=scope.fetch;scope.fetch=async(path,options)=>{if(options?.body&&JSON.parse(options.body).action==='delete_collection')delete state.collections.sample;return originalFetch(path,options);};await $('center-breadcrumb').children.find(n=>n.textContent==='删除合集记录').onclick();assert.equal($('center-title').textContent,'相册与合集');assert.equal(operations.length,0);
+''')
