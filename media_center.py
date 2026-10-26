@@ -41,6 +41,14 @@ def validate_state(value):
                 or '..' in source_path(path).parts or not isinstance(label, str) or not label.strip()
                 or len(label) > 50 or any(ord(char) < 32 for char in path + label)):
             raise ValueError('目录标签格式无效')
+    folder_kinds = value.setdefault('folder_kinds', {})
+    if not isinstance(folder_kinds, dict) or len(folder_kinds) > 500:
+        raise ValueError('目录分类数量无效')
+    for path, kind in folder_kinds.items():
+        if (not isinstance(path, str) or len(path) > 4096 or not source_path(path).is_absolute()
+                or '..' in source_path(path).parts or any(ord(char) < 32 for char in path)
+                or not isinstance(kind, str) or kind not in {'movie', 'video'}):
+            raise ValueError('目录分类格式无效')
     if not isinstance(labels, dict) or len(labels) > 20000:
         raise ValueError('标签资料无效')
     for key, tags in labels.items():
@@ -87,11 +95,23 @@ class CenterState:
                     value['dismissed_similar'].pop(identifier, None)
             elif action == 'media_kind':
                 ids, kind = payload.get('ids'), payload.get('kind')
-                if (not isinstance(kind, str) or kind not in {'movie', 'video'} or not isinstance(ids, list)
+                if (not isinstance(kind, str) or kind not in {'movie', 'video', 'auto'} or not isinstance(ids, list)
                         or not 1 <= len(ids) <= 200 or any(not valid_id(key) or key not in videos for key in ids)):
                     raise ValueError('请选择本库的视频文件和分类')
                 for key in ids:
-                    value['media_kinds'][key] = kind
+                    if kind == 'auto':
+                        value['media_kinds'].pop(key, None)
+                    else:
+                        value['media_kinds'][key] = kind
+            elif action == 'folder_kind':
+                path, kind = payload.get('path'), payload.get('kind')
+                if (not isinstance(path, str) or path not in directories
+                        or not isinstance(kind, str) or kind not in {'movie', 'video', 'auto'}):
+                    raise ValueError('请选择本次扫描中的目录和视频分类')
+                if kind == 'auto':
+                    value['folder_kinds'].pop(path, None)
+                else:
+                    value['folder_kinds'][path] = kind
             elif action == 'folder_label':
                 path = payload.get('path')
                 label = payload.get('label')
@@ -190,6 +210,16 @@ def center_catalog(document, state, notes=None, handled_trash=()):
     previews = document.get('previews', {})
     result, covered, video_art, video_status, video_details = [], set(), {}, {}, {}
     notes = notes or {}
+    # Match saved lexical paths, including reports restored on the other OS.
+    folder_rules = sorted(((source_path(path), kind) for path, kind in state.get('folder_kinds', {}).items()),
+                          key=lambda pair: len(pair[0].parts), reverse=True)
+    inherited_kinds = {}
+    for path, record in records.items():
+        if record.get('kind') != '视频':
+            continue
+        current = source_path(path).parent
+        inherited_kinds[path] = next((kind for parent, kind in folder_rules
+                                      if type(current) is type(parent) and current.parts[:len(parent.parts)] == parent.parts), '')
 
     def file_item(path):
         record = records[path]
@@ -209,6 +239,7 @@ def center_catalog(document, state, notes=None, handled_trash=()):
         stamp = max((file['mtime'] for file in files if type(file['mtime']) in {int, float} and math.isfinite(file['mtime'])), default=0)
         result.append({'id': identifier, 'kind': kind, 'title': title, 'files': files, 'preview': preview,
                        'manual_kind': identifier in state.get('media_kinds', {}),
+                       'folder_kind': any(inherited_kinds.get(file['path']) for file in files),
                        'folder': str(source_path(files[0]['path']).parent), 'mtime': stamp,
                        'metadata': metadata, 'tags': list(dict.fromkeys(tags + state.get('labels', {}).get(identifier, []))), 'local_tags': state.get('labels', {}).get(identifier, []), 'tag_key': tag_key,
                        'personal': notes.get(tag_key, {'rating': 0, 'note': ''}),
@@ -226,10 +257,11 @@ def center_catalog(document, state, notes=None, handled_trash=()):
             video_details[file['path']] = (metadata, group.get('tags', []), group.get('tag_key', ''))
         camera = all(re.match(r'^(IMG|VID|MOV|DSC|PXL|MVI|GOPR|VIDEO)[-_ ]?\d', source_path(file['path']).stem, re.I) for file in files)
         movie = bool(metadata or group.get('type') == '编号' and not camera or re.search(r'电影|movies|films', str(source_path(files[0]['path']).parent), re.I))
-        if movie:
-            files = [file for file in files if file['id'] not in state.get('media_kinds', {})]
-            if not files:
-                continue
+        movie_files = [file for file in files if file['id'] not in state.get('media_kinds', {})
+                       and inherited_kinds.get(file['path']) != 'video'
+                       and (movie or inherited_kinds.get(file['path']) == 'movie')]
+        if movie_files:
+            files = movie_files
             identifier = group.get('group_key') or group.get('tag_key')
             entry(identifier, 'movie', metadata.get('title') or group.get('title') or files[0]['name'], files,
                   group.get('poster', ''), metadata, group.get('tags', []), group.get('tag_key', ''))
@@ -242,7 +274,7 @@ def center_catalog(document, state, notes=None, handled_trash=()):
             month = re.search(r'(?:^|/)((?:19|20)\d{2})/(0[1-9]|1[0-2])/', record.get('suggested_path', ''))
             image['timeline_month'] = month[1] + '-' + month[2] if month else ''
             image['timeline_source'] = record.get('date_source', '')
-        kind = 'photo' if record['kind'] == '照片' else state.get('media_kinds', {}).get(media_id(path), 'video')
+        kind = 'photo' if record['kind'] == '照片' else state.get('media_kinds', {}).get(media_id(path), inherited_kinds.get(path) or 'video')
         metadata, tags, tag_key = video_details.get(path, ({}, [], ''))
         entry(media_id(path), kind, metadata.get('title') or source_path(path).name if kind == 'movie' else source_path(path).name,
               [file_item(path)], previews.get(path, '') if kind == 'photo' else video_art.get(path, ''),
