@@ -141,7 +141,8 @@ class CenterState:
             if len(json.dumps(value, ensure_ascii=False).encode('utf-8')) > LIMIT:
                 raise ValueError('媒体中心资料过大')
             write_json(self.root, NAME, value)
-            return value
+            # Response-only identity: retries after a failed refresh rename this collection.
+            return {**value, 'created_collection_id': identifier} if action == 'create' else value
 
 
 def directory_catalog(items, roots):

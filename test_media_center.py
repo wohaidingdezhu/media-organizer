@@ -56,6 +56,17 @@ class MediaCenterTests(unittest.TestCase):
         self.state.update({'action':'members','id':collection,'ids':[identifier],'remove':True},ids)
         self.state.update({'action':'delete_collection','id':collection},ids);self.assertEqual(self.state.snapshot()['collections'],{});self.unchanged()
 
+    def test_created_collection_response_identifies_only_the_new_record(self):
+        first=self.state.update({'action':'create','name':'First'},set())
+        second=self.state.update({'action':'create','name':'Second'},set())
+        identifier=second['created_collection_id']
+        self.assertNotEqual(identifier,first['created_collection_id'])
+        self.assertEqual(second['collections'][identifier]['name'],'Second')
+        self.assertNotIn('created_collection_id',self.state.snapshot())
+        self.state.update({'action':'rename','id':identifier,'name':'Second draft'},set())
+        self.assertEqual(len(self.state.snapshot()['collections']),2)
+        self.unchanged()
+
     def test_unknown_ids_invalid_names_and_duplicate_unicode_names_never_overwrite_valid_state(self):
         self.state.update({'action':'create','name':'café'},set());path=self.output/NAME;before=path.read_bytes()
         for payload in ({'action':'favorite','id':'f'*64,'value':True},{'action':'create','name':'CAFE\u0301'},{'action':'create','name':'\n'},{'action':'labels','id':'f'*64,'tags':['a']},{'action':'create','name':'x'*81}):

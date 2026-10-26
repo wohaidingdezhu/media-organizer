@@ -6,6 +6,46 @@ import test_media_center as center_tests
 class CenterInteractionTests(unittest.TestCase):
     run_ui = center_tests.MediaCenterTests.run_ui
 
+    def test_card_play_ignores_repeated_clicks_and_recovers_after_failure(self):
+        self.run_ui(r'''
+const play=()=> $('center-content').children[0].children[0].children.find(n=>n.className==='card-actions').children.find(n=>n.textContent==='播放');
+let finish,count=0;const originalFetch=scope.fetch;scope.fetch=async(path,options)=>{if(path==='api/media/action'){count++;return new Promise(resolve=>finish=()=>resolve({ok:false,json:async()=>({error:'Player unavailable'})}));}return originalFetch(path,options);};
+const opening=play().onclick();assert(play().disabled);await play().onclick();assert.equal(count,1);finish();await opening;assert(!play().disabled);assert($('center-error').textContent.includes('Player unavailable'));assert.equal(operations.length,0);
+''')
+
+    def test_play_record_failure_explains_that_player_already_opened(self):
+        self.run_ui(r'''
+const originalFetch=scope.fetch;scope.fetch=async(path,options)=>{if(options?.body&&JSON.parse(options.body).action==='recent')return {ok:false,json:async()=>({error:'Read only records'})};return originalFetch(path,options);};
+await $('center-content').children[0].children[0].children.find(n=>n.className==='card-actions').children.find(n=>n.textContent==='播放').onclick();assert($('center-error').textContent.includes('已打开'));assert($('center-error').textContent.includes('最近记录'));assert.equal(calls.filter(c=>c.path==='api/media/action').length,1);assert.equal(operations.length,0);
+''')
+
+    def test_note_save_preserves_and_identifies_newer_unsaved_input(self):
+        self.run_ui(r'''
+$('center-content').children[0].children[0].children[0].onclick();const info=$('detail-content').children[0].children[1],note=info.children.find(n=>n.tagName==='TEXTAREA'),rating=info.children.find(n=>n.tagName==='SELECT');note.value='Submitted';rating.value='3';
+let finish;const originalFetch=scope.fetch;scope.fetch=async(path,options)=>{if(path==='api/notes'){const submitted=JSON.parse(options.body);return new Promise(resolve=>finish=()=>{movie.personal={rating:submitted.rating,note:submitted.note};resolve({ok:true,json:async()=>({})});});}return originalFetch(path,options);};
+const saving=info.children.find(n=>n.textContent==='保存评分与备注').onclick();note.value='New draft';rating.value='5';finish();await saving;assert.equal(note.value,'New draft');assert.equal(String(rating.value),'5');assert.equal(movie.personal.note,'Submitted');assert($('detail-feedback').textContent.includes('尚未保存'));assert.equal(operations.length,0);
+''')
+
+    def test_collection_create_keeps_new_draft_and_next_save_renames_same_collection(self):
+        self.run_ui(r'''
+location.hash='#collections';events.hashchange();$('create-collection').onclick();$('collection-name').value='Submitted';let finish;const payloads=[],id='1'.repeat(32),originalFetch=scope.fetch;
+scope.fetch=async(path,options)=>{const body=options?.body&&JSON.parse(options.body);if(body&&['create','rename'].includes(body.action)){payloads.push(body);state.collections[id]={name:body.name,ids:[]};if(body.action==='create')return new Promise(resolve=>finish=()=>resolve({ok:true,json:async()=>({...state,created_collection_id:id})}));return {ok:true,json:async()=>state};}return originalFetch(path,options);};
+const saving=$('collection-save').onsubmit({preventDefault(){}});assert($('collection-submit').disabled);$('collection-name').value='New draft';finish();await saving;assert($('collection-form').open);assert(!$('collection-submit').disabled);assert.equal($('collection-name').value,'New draft');assert($('collection-error').textContent.includes('尚未保存'));await $('collection-save').onsubmit({preventDefault(){}});assert(!$('collection-form').open);assert.equal(payloads[1].action,'rename');assert.equal(payloads[1].id,id);assert.equal(Object.keys(state.collections).length,1);assert.equal(operations.length,0);
+''')
+
+    def test_collection_create_then_refresh_failure_does_not_create_again(self):
+        self.run_ui(r'''
+location.hash='#collections';events.hashchange();$('create-collection').onclick();$('collection-name').value='Submitted';const payloads=[],id='2'.repeat(32),originalFetch=scope.fetch;
+scope.fetch=async(path,options)=>{const body=options?.body&&JSON.parse(options.body);if(body&&['create','rename'].includes(body.action)){payloads.push(body);state.collections[id]={name:body.name,ids:[]};if(body.action==='create')failCenter=true;return {ok:true,json:async()=>({...state,created_collection_id:body.action==='create'?id:undefined})};}return originalFetch(path,options);};
+await $('collection-save').onsubmit({preventDefault(){}});assert($('collection-form').open);assert($('collection-error').textContent.includes('已保存'));failCenter=false;$('collection-name').value='Changed name';await $('collection-save').onsubmit({preventDefault(){}});assert.equal(payloads[1].action,'rename');assert.equal(payloads[1].id,id);assert.equal(Object.keys(state.collections).length,1);assert(!$('collection-form').open);assert.equal(operations.length,0);
+''')
+
+    def test_card_and_detail_share_pending_play_and_completion_releases_both(self):
+        self.run_ui(r'''
+const card=$('center-content').children[0].children[0],cardPlay=card.children.find(n=>n.className==='card-actions').children.find(n=>n.textContent==='播放');let finish,count=0;const originalFetch=scope.fetch;scope.fetch=async(path,options)=>{if(path==='api/media/action'){count++;return new Promise(resolve=>finish=()=>resolve({ok:true,json:async()=>({})}));}return originalFetch(path,options);};
+const opening=cardPlay.onclick();card.children[0].onclick();const detailPlay=()=> $('detail-content').children[0].children[1].children.find(n=>n.className==='file').children.find(n=>n.className==='actions').children.find(n=>n.textContent==='播放');assert(detailPlay().disabled);await detailPlay().onclick();assert.equal(count,1);finish();await opening;assert(!detailPlay().disabled);assert(!cardPlay.disabled);assert.equal(operations.length,0);
+''')
+
     def test_photo_detail_uses_full_width_controls_while_movie_keeps_poster_layout(self):
         self.run_ui(r'''
 $('center-content').children[0].children[0].children[0].onclick();assert.equal($('detail-content').children[0].className,'detail-grid');$('detail-close').onclick();location.hash='#photos';events.hashchange();$('center-content').children[0].children[0].children[0].onclick();assert.equal($('detail-content').children[0].className,'detail-grid photo-detail');assert($('detail-content').children[0].children[1].children.some(n=>n.className==='actions detail-controls'));assert.equal(operations.length,0);
