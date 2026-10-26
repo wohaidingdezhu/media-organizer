@@ -116,3 +116,22 @@ let sections=()=>$('center-content').children.filter(n=>n.className==='review-gr
 const originalFetch=scope.fetch;scope.fetch=async(path,options)=>{if(options?.body&&JSON.parse(options.body).action==='review_similarity')review.similar=review.similar.filter(g=>g.id!=='g1');return originalFetch(path,options);};
 await sections().find(section=>!containsSecond(section)).children.find(n=>n.className==='actions review-group-actions').children.find(n=>n.textContent==='确认不相似').onclick();const batch=$('center-content').children.find(n=>n.className==='actions review-batch');assert(batch.children[0].textContent.includes('1'));const trash=batch.children.find(n=>n.textContent==='删除所选…');assert(!trash.disabled);trash.onclick();assert.deepEqual(Array.from(operations[0].ids),[second.files[0].id]);
 ''')
+
+    def test_review_batch_bar_only_occupies_space_while_files_are_selected(self):
+        self.run_ui(r'''
+const f={...photo.files[0],kind:'photo',media_kind:'photo',owner:photo.id,metadata:photo.metadata};review.exact=[{files:[f,{...f,id:movie.files[0].id,path:movie.files[0].path}]}];await $('center-refresh').onclick();location.hash='#review';events.hashchange();
+const batch=()=>$('center-content').children.find(n=>n.className==='actions review-batch');assert(batch().hidden);
+const check=$('center-content').children.find(n=>n.className==='review-group').children.find(n=>n.className==='review-files').children[0].children[0].children[0];check.checked=true;check.onchange();assert(!batch().hidden);assert(batch().children[0].textContent.includes('1'));batch().children.find(n=>n.textContent==='清空选择').onclick();assert(batch().hidden);assert.equal(operations.length,0);
+''')
+
+    def test_photo_page_and_photo_only_search_hide_and_clear_video_filters(self):
+        self.run_ui(r'''
+$('filter-duration').value='short';$('filter-resolution').value='hd';location.hash='#photos';events.hashchange();assert($('filter-duration').hidden);assert($('filter-resolution').hidden);assert.equal($('filter-duration').value,'');assert($('center-content').children.length);
+$('search-scope').value='all';$('query').value='Photo';$('media-kind').value='photo';$('center-search').onsubmit({preventDefault(){}});assert($('filter-duration').hidden);
+location.hash='#videos';events.hashchange();assert(!$('filter-duration').hidden);assert(!$('filter-resolution').hidden);assert.equal(operations.length,0);
+''')
+
+    def test_video_card_delete_is_available_without_entering_manage_mode(self):
+        self.run_ui(r'''
+movie.kind='video';await $('center-refresh').onclick();location.hash='#videos';events.hashchange();assert($('manage-bar').hidden);const actions=$('center-content').children[0].children[0].children.find(n=>n.className==='card-actions');const trash=actions.children.find(n=>n.textContent==='删除…');assert(trash&&!trash.disabled);trash.onclick();assert.equal(operations.length,1);assert.equal(operations[0].action,'delete');assert.deepEqual(Array.from(operations[0].ids),[movie.files[0].id]);assert.equal(calls.length,0);
+''')

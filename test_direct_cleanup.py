@@ -86,8 +86,8 @@ scope.reportActionOpen('delete',[a.id],()=>refreshed++);await new Promise(setImm
         self.node(r"""
 (async()=>{
 let failPreview=true;const body=new E();Object.assign(scope,{document:{body,createElement:t=>new E(t),querySelector:()=>null},clearTimeout(){},fetch:async(path)=>{requests.push(path);if(path.endsWith('/start'))throw Error('Disconnected');return {ok:!failPreview,json:async()=>failPreview?{error:'至少保留一份'}:{token:'safe',items:[{path:a.path}]}};}});vm.runInContext(fs.readFileSync(root+'/report_actions.js','utf8'),scope);
-scope.reportActionOpen('delete',[a.id]);await new Promise(setImmediate);let dialog=body.children[0],buttons=dialog.children.at(-1).children;assert(buttons[2].disabled);assert(dialog.children[1].textContent.includes('至少保留'));await buttons[2].onclick();assert.equal(requests.length,1);buttons[0].onclick();
-failPreview=false;scope.reportActionOpen('delete',[a.id]);await new Promise(setImmediate);dialog=body.children[1];buttons=dialog.children.at(-1).children;await buttons[2].onclick();assert(dialog.children[1].textContent.includes('启动结果未确认'));await buttons[2].onclick();assert.equal(requests.filter(p=>p.endsWith('/start')).length,1);assert(!buttons[0].disabled);
+scope.reportActionOpen('delete',[a.id]);await new Promise(setImmediate);let dialog=body.children[0],buttons=dialog.children.at(-1).children;assert(buttons[2].disabled);assert(dialog.children[1].children[0].textContent.includes('至少保留'));await buttons[2].onclick();assert.equal(requests.length,1);buttons[0].onclick();
+failPreview=false;scope.reportActionOpen('delete',[a.id]);await new Promise(setImmediate);dialog=body.children[1];buttons=dialog.children.at(-1).children;await buttons[2].onclick();assert(dialog.children[1].children[0].textContent.includes('启动结果未确认'));await buttons[2].onclick();assert.equal(requests.filter(p=>p.endsWith('/start')).length,1);assert(!buttons[0].disabled);
 })().catch(e=>{console.error(e);process.exitCode=1;});
 """)
 
@@ -150,4 +150,9 @@ vm.runInContext(management.slice(management.indexOf('function notifyReview('),ma
  vm.runInContext(source.slice(start,end),scope);const card=new E(),video={path:a.path,name:'movie.mp4'};scope.mediaButtons(video,card);
  const trash=card.children.find(n=>n.textContent==='删除…');assert(trash);trash.onclick();assert.equal(opened.length,1);assert.equal(opened[0].action,'delete');assert.deepEqual(Array.from(opened[0].ids),[a.id]);assert.equal(requests.length,0);
  scope.mediaAvailable=false;const offline=new E();scope.mediaButtons(video,offline);assert.equal(offline.children.length,0);
+''')
+
+    def test_embedded_delete_expands_parent_view_and_cancel_restores_it(self):
+        self.node(r'''
+(async()=>{const body=new E(),rootElement=new E(),messages=[],parent={postMessage:(data,origin)=>messages.push({data,origin})};body.style.overflow='auto';rootElement.style.overflow='scroll';Object.assign(scope,{window:{parent,addEventListener(){}},URL,document:{body,documentElement:rootElement,createElement:t=>new E(t),querySelector:selector=>selector.startsWith('nav[')?{href:'http://127.0.0.1:12345/dashboard/'}:null},clearTimeout(){},fetch:async()=>({ok:true,json:async()=>({token:'safe-preview',items:[{path:'/generated/'+('long-name-'.repeat(40))+'.mp4'}]})})});vm.runInContext(fs.readFileSync(root+'/report_actions.js','utf8'),scope);scope.reportTrashOpen([a.id],null,'将保留：'+a.path);await new Promise(setImmediate);assert.equal(messages[0].data.type,'media-overlay');assert.equal(messages[0].data.open,true);assert.equal(body.style.overflow,'hidden');assert.equal(rootElement.style.overflow,'hidden');assert.equal(messages[0].origin,'http://127.0.0.1:12345');const dialog=body.children[0];dialog.children.at(-1).children[0].onclick();assert.equal(messages.at(-1).data.open,false);assert.equal(body.style.overflow,'auto');assert.equal(rootElement.style.overflow,'scroll');assert.equal(requests.length,0);})().catch(e=>{console.error(e);process.exitCode=1;});
 ''')

@@ -282,3 +282,20 @@ class WorkspaceTests(unittest.TestCase):
         check=self.base/'ui-check.js'
         check.write_text('new (require("vm").Script)('+json.dumps(script)+');\nconst {browseMovies}=require('+json.dumps(str(Path(__file__).parent/'library_browse.js'))+');\nif(browseMovies([{title:"X",metadata:{actors:["Sample Actor"]},files:[]}],{query:"sample actor"}).length!==1)throw Error("NFO search failed");',encoding='utf-8')
         subprocess.run([node,str(check)],check=True,capture_output=True,text=True,encoding='utf-8')
+
+    def test_reopen_saved_library_twice_without_scanning_or_old_process(self):
+        report = self.scan()
+        original = self.movie.read_bytes()
+        with mock.patch.object(media_scan, 'main', side_effect=AssertionError('Opening saved results must not scan')):
+            for _ in range(2):
+                state = media_gui.DashboardState(self.output)
+                try:
+                    history = state.report_history()['reports']
+                    self.assertEqual(history[0]['id'], report.name)
+                    self.assertEqual(history[0]['summary']['files'], 1)
+                    self.assertFalse(state.running)
+                    self.assertIsNone(state.process)
+                    self.assertFalse(state.monitor['enabled'])
+                finally:
+                    state.close()
+        self.assertEqual(self.movie.read_bytes(), original)

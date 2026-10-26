@@ -274,7 +274,7 @@ $('center-content').children[0].children[1].onclick();assert($('center-content')
 
     def test_quick_favorite_and_play_are_explicit_actions_and_keep_scroll(self):
         self.run_ui(r"""
-const actions=$('center-content').children[0].children[0].children.find(n=>n.className==='card-actions');assert(!actions.children.some(n=>n.textContent==='删除…'));await actions.children.find(n=>n.textContent==='☆ 收藏').onclick();assert.equal(calls[0].body.action,'favorite');assert.equal(scope.window.scrollY,350);
+const actions=$('center-content').children[0].children[0].children.find(n=>n.className==='card-actions');assert(actions.children.some(n=>n.textContent==='删除…'));await actions.children.find(n=>n.textContent==='☆ 收藏').onclick();assert.equal(calls[0].body.action,'favorite');assert.equal(scope.window.scrollY,350);
 const refreshed=$('center-content').children[0].children[0].children.find(n=>n.className==='card-actions');await refreshed.children.find(n=>n.textContent==='播放').onclick();assert.equal(calls[1].path,'api/media/action');assert.equal(calls[1].body.action,'open');assert.equal(calls[2].body.action,'recent');assert.equal(operations.length,0);
 """)
 

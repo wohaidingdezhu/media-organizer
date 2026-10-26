@@ -69,3 +69,12 @@ assert(description.classList.contains('report-section-note'));assert(!warning.cl
 tools.children[1].onclick();assert(section.classList.contains('report-show-notes'));tools.children[1].onclick();assert(!section.classList.contains('report-show-notes'));
 scope.location.hash='';scope.focusReportSection();assert(!body.classList.contains('compact-report'));assert(!other.classList.contains('report-section-hidden'));assert(pairs.every(p=>!p.hidden));assert.equal(requests.length,0);
 ''')
+
+    def test_only_current_trusted_report_can_expand_modal_viewport(self):
+        self.node(r'''
+const html=fs.readFileSync(root+'/dashboard.html','utf8'),start=html.indexOf("window.addEventListener('message'"),end=html.indexOf('async function loadReports',start),events={};
+Object.assign(scope,{window:{addEventListener:(name,handler)=>events[name]=handler},URL,selectedReport:'scan-generated'});const frame=$('result-frame');frame.src='http://127.0.0.1:12345/token/center.html';frame.contentWindow={};vm.runInContext(html.slice(start,end),scope);const viewer=$('result-viewer');
+(async()=>{for(const event of [{source:{},origin:'http://127.0.0.1:12345',data:{type:'media-overlay',open:true}},{source:frame.contentWindow,origin:'https://foreign.invalid',data:{type:'media-overlay',open:true}},{source:frame.contentWindow,origin:'http://127.0.0.1:12345',data:{type:'media-overlay',open:'yes'}}]){await events.message(event);assert(!viewer.classList.contains('overlay-mode'));}
+await events.message({source:frame.contentWindow,origin:'http://127.0.0.1:12345',data:{type:'media-overlay',open:true}});assert(viewer.classList.contains('overlay-mode'));
+await events.message({source:frame.contentWindow,origin:'http://127.0.0.1:12345',data:{type:'media-overlay',open:false}});assert(!viewer.classList.contains('overlay-mode'));assert.equal(requests.length,0);})().catch(e=>{console.error(e);process.exitCode=1;});
+''')
