@@ -336,8 +336,8 @@ cards.find(card=>card.attrs['aria-label'].includes('/B/旅行')).onclick();asser
 
     def test_resource_folder_pagination_reaches_every_root(self):
         self.run_ui(r"""
-directories={};for(let n=0;n<61;n++)directories['/sample'+n]={name:'sample'+n,parent:'',children:[],ids:[photo.id]};location.hash='#resources';events.hashchange();await $('center-refresh').onclick();assert.equal($('center-content').children[0].children.length,50);
-const pager=$('center-content').children.find(n=>n.className==='pager');pager.children[2].onclick();assert.equal($('center-content').children[0].children.length,11);assert($('center-content').children[0].children.some(card=>card.attrs['aria-label'].includes('/sample60')));const finalPager=$('center-content').children.find(n=>n.className==='pager');assert(finalPager.children[2].disabled);finalPager.children[0].onclick();assert.equal($('center-content').children[0].children.length,50);assert.equal(calls.length,0);assert.equal(operations.length,0);
+directories={};for(let n=0;n<61;n++)directories['/sample'+n]={name:'sample'+n,parent:'',children:[],ids:[photo.id]};location.hash='#resources';events.hashchange();await $('center-refresh').onclick();assert.equal($('center-content').children[0].children.length,48);
+const pager=$('center-content').children.find(n=>n.className==='pager');pager.children[2].onclick();assert.equal($('center-content').children[0].children.length,13);assert($('center-content').children[0].children.some(card=>card.attrs['aria-label'].includes('/sample60')));const finalPager=$('center-content').children.find(n=>n.className==='pager');assert(finalPager.children[2].disabled);finalPager.children[0].onclick();assert.equal($('center-content').children[0].children.length,48);assert.equal(calls.length,0);assert.equal(operations.length,0);
 """)
 
     def test_video_facts_filters_apply_to_same_file_and_preserve_complete_movie(self):
