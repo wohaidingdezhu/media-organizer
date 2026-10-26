@@ -186,13 +186,23 @@ function fillFilters(){
     const prior=$(id).value;$(id).replaceChildren();for(const value of ['',...values]){const option=make('option','',value||label);option.value=value;$(id).append(option);}$(id).value=values.includes(prior)?prior:'';
   }
 }
-function enterDirectory(path){directory=path;page=folderPage=0;selected.clear();render();}
+const browsePositions=new Map();
+function positionKey(){return JSON.stringify([view,directory,album,collection,tag,...['query','search-scope','media-kind','media-order','filter-year','filter-genre','filter-duration','filter-resolution','photo-layout'].map(id=>$(id).value),$('include-subfolders').checked]);}
+function scrollBrowse(position){if(typeof window.scrollTo==='function')window.scrollTo(position?.x||0,position?.y||0);}
+function browseTo(next={}){
+  const key=positionKey();browsePositions.delete(key);browsePositions.set(key,{page,folderPage,x:window.scrollX||0,y:window.scrollY||0});if(browsePositions.size>100)browsePositions.delete(browsePositions.keys().next().value);
+  view=next.view||view;directory=next.directory||'';album=next.album||'';collection=next.collection||'';tag=next.tag||'';selected.clear();reviewSelected.clear();
+  const prior=browsePositions.get(positionKey());page=prior?.page||0;folderPage=prior?.folderPage||0;render();scrollBrowse(prior);
+}
+function turnPage(offset,folders=false){if(folders)folderPage+=offset;else page+=offset;render();scrollBrowse();}
+function enterDirectory(path){browseTo({directory:path});}
+
 function renderDirectories(paths){
   const nodes=catalog.directories||{},kind=$('media-kind').value,year=$('filter-year').value,genre=$('filter-genre').value,duration=$('filter-duration').value,resolution=$('filter-resolution').value;
   const rows=paths.map(path=>{const ids=centerFolderIds(nodes,path,true);return {path,items:centerFilter([...ids].map(id=>byId.get(id)).filter(Boolean),{kind,year,genre,duration,resolution})};}).filter(row=>!(kind||year||genre||duration||resolution)||row.items.length);
   rows.sort((a,b)=>a.path.localeCompare(b.path,'zh-CN',{numeric:true}));const pages=Math.max(1,Math.ceil(rows.length/50));folderPage=Math.max(0,Math.min(folderPage,pages-1));
   const wall=make('div','wall video-wall');for(const row of rows.slice(folderPage*50,folderPage*50+50)){const card=collectionCard(nodes[row.path].name,row.items.map(item=>item.id),()=>enterDirectory(row.path),'',row.path);card.classList.add('directory-card');wall.append(card);}$('center-content').append(wall);
-  if(rows.length>50){const pager=make('div','pager'),previous=button('上一页文件夹',()=>{folderPage--;render();}),next=button('下一页文件夹',()=>{folderPage++;render();});previous.disabled=folderPage===0;next.disabled=folderPage>=pages-1;pager.append(previous,make('span','muted',`文件夹第 ${folderPage+1}/${pages} 页 · 共 ${rows.length} 个`),next);$('center-content').append(pager);}
+  if(rows.length>50){const pager=make('div','pager'),previous=button('上一页文件夹',()=>turnPage(-1,true)),next=button('下一页文件夹',()=>turnPage(1,true));previous.disabled=folderPage===0;next.disabled=folderPage>=pages-1;pager.append(previous,make('span','muted',`文件夹第 ${folderPage+1}/${pages} 页 · 共 ${rows.length} 个`),next);$('center-content').append(pager);}
   if(!rows.length&&!directory)$('center-content').append(make('p','empty','没有匹配的媒体目录。试试清除筛选，或从“媒体库”添加目录并扫描。'));return rows.length;
 }
 function renderDirectoryBreadcrumb(){
@@ -201,7 +211,7 @@ function renderDirectoryBreadcrumb(){
   $('center-breadcrumb').append(button('↑ 上一级',()=>enterDirectory(nodes[directory]?.parent||'')),button('全部目录',()=>enterDirectory('')));for(const key of chain)$('center-breadcrumb').append(button(nodes[key].name,()=>enterDirectory(key)));
   $('center-breadcrumb').append(make('div','muted album-path',directory));
   const folderLabel=catalog.state.folder_labels?.[directory],label=sourceFolder(directory);
-  $('center-breadcrumb').append(button(folderLabel?'查看标签：'+folderLabel:'以“'+label+'”作为目录标签',async()=>{if(folderLabel){view='tags';tag=folderLabel;directory='';page=0;render();}else if(await update({action:'folder_label',path:directory,label}))message('已绑定目录标签。该目录及子目录的照片、视频会集中在此标签；以后新增文件重扫后自动加入。');}));
+  $('center-breadcrumb').append(button(folderLabel?'查看标签：'+folderLabel:'以“'+label+'”作为目录标签',async()=>{if(folderLabel){browseTo({view:'tags',tag:folderLabel});}else if(await update({action:'folder_label',path:directory,label}))message('已绑定目录标签。该目录及子目录的照片、视频会集中在此标签；以后新增文件重扫后自动加入。');}));
   if(folderLabel)$('center-breadcrumb').append(button('取消目录标签',()=>update({action:'folder_label',path:directory,label:''})));
 
 }
@@ -235,7 +245,7 @@ function renderReview(){
   $('center-pager').hidden=!groups.length;$('center-page').textContent=`第 ${page+1}/${pages} 页 · 共 ${groups.length} 组`;$('center-prev').disabled=page===0;$('center-next').disabled=page>=pages-1;syncSelection();
 }
 function syncMediaFilters(){const photosOnly=$('media-kind').value==='photo'||!globalSearch()&&view==='photos';for(const id of ['filter-duration','filter-resolution']){$(id).hidden=photosOnly;if(photosOnly)$(id).value='';}}
-function render(){if(!catalog)return;syncMediaFilters();previewObserver?.disconnect();$('photo-layout').hidden=view!=='photos'||globalSearch();const query=$('query').value.trim(),kind=$('media-kind').value,all=globalSearch();const ids=all?null:directory?centerFolderIds(catalog.directories||{},directory,$('include-subfolders').checked):album?new Set(catalog.folders[album]||[]):collection?new Set(catalog.state.collections[collection]?.ids||[]):null;
+function render(){if(!catalog)return;announceCenterView();syncMediaFilters();previewObserver?.disconnect();$('photo-layout').hidden=view!=='photos'||globalSearch();const query=$('query').value.trim(),kind=$('media-kind').value,all=globalSearch();const ids=all?null:directory?centerFolderIds(catalog.directories||{},directory,$('include-subfolders').checked):album?new Set(catalog.folders[album]||[]):collection?new Set(catalog.state.collections[collection]?.ids||[]):null;
   const context=collection?catalog.state.collections[collection]?.name||'合集':album?sourceFolder(album):directory?sourceFolder(directory):titles[view]||titles.home;
   pageItems=[];visible=centerFilter(catalog.items,{view,query,global:all,kind,tag:all?'':tag,ids,order:$('media-order').value||'recent',year:$('filter-year').value,genre:$('filter-genre').value,duration:$('filter-duration').value,resolution:$('filter-resolution').value});$('center-title').textContent=query?(all?'全部媒体 · 搜索结果':view==='review'?titles.review:context+' · 搜索结果'):context;
   retainSelection(selected,visible.map(item=>item.id));
@@ -246,11 +256,11 @@ function render(){if(!catalog)return;syncMediaFilters();previewObserver?.disconn
   if(view==='review'&&!all){$('recursive-label').hidden=true;renderReview();return;}
   if(all)$('center-breadcrumb').append(button('← 返回'+context,clearSearch));
   if(directory&&!all)renderDirectoryBreadcrumb();
-  if(!all&&(album||collection||tag)){$('center-breadcrumb').append(button('← 返回'+(tag?'标签':'相册与合集'),()=>{$('query').value='';resetLocation();render();}));if(collection){$('center-breadcrumb').append(button('重命名合集',()=>editCollection(collection)),button('删除合集记录',async()=>{const id=collection;if(await update({action:'delete_collection',id})&&view==='collections'&&collection===id){resetLocation();render();}}));$('center-breadcrumb').append(make('span','muted','只修改合集记录，原文件保留。'));}}
+  if(!all&&(album||collection||tag)){$('center-breadcrumb').append(button('← 返回'+(tag?'标签':'相册与合集'),()=>{$('query').value='';browseTo();}));if(collection){$('center-breadcrumb').append(button('重命名合集',()=>editCollection(collection)),button('删除合集记录',async()=>{const id=collection;if(await update({action:'delete_collection',id})&&view==='collections'&&collection===id){resetLocation();render();}}));$('center-breadcrumb').append(make('span','muted','只修改合集记录，原文件保留。'));}}
   if(view==='home'&&!query&&!kind&&!tag&&!$('filter-year').value&&!$('filter-genre').value&&!$('filter-duration').value&&!$('filter-resolution').value&&$('media-order').value==='recent'){const counts=make('div','counts');for(const [value,label]of [['movie','电影'],['video','视频'],['photo','照片'],['favorite','收藏']]){const node=make('div','count');node.append(make('span','muted',label),make('strong','',catalog.items.filter(item=>value==='favorite'?item.favorite:item.kind===value).length));counts.append(node);}$('center-content').append(counts);
     if(catalog.recent.length){$('center-content').append(make('h2','','最近打开'));showRows(catalog.recent.map(id=>byId.get(id)).filter(Boolean).slice(0,8),$('center-content'));}
     $('center-content').append(make('h2','','最近更新'),make('p','muted','按文件修改时间展示；系统播放器不回传播放进度。'));pageItems=visible.slice(0,12);showRows(pageItems,$('center-content'));
-    const albums=Object.entries(catalog.folders).map(([path,ids])=>({path,ids,mtime:ids.reduce((value,id)=>Math.max(value,byId.get(id)?.mtime||0),0)})).sort((a,b)=>b.mtime-a.mtime).slice(0,4).map(item=>[item.path,item.ids]);if(albums.length){$('center-content').append(make('h2','','目录相册'));const grid=make('div','wall');for(const [path,ids]of albums)grid.append(collectionCard(sourceFolder(path),ids,()=>{view='collections';album=path;page=0;selected.clear();render();},'',path));$('center-content').append(grid);}
+    const albums=Object.entries(catalog.folders).map(([path,ids])=>({path,ids,mtime:ids.reduce((value,id)=>Math.max(value,byId.get(id)?.mtime||0),0)})).sort((a,b)=>b.mtime-a.mtime).slice(0,4).map(item=>[item.path,item.ids]);if(albums.length){$('center-content').append(make('h2','','目录相册'));const grid=make('div','wall');for(const [path,ids]of albums)grid.append(collectionCard(sourceFolder(path),ids,()=>browseTo({view:'collections',album:path}),'',path));$('center-content').append(grid);}
     syncSelection();return;
   }
   if(view==='resources'&&!query){const nodes=catalog.directories||{};const folderCount=renderDirectories(directory?nodes[directory]?.children||[]:Object.keys(nodes).filter(path=>!nodes[path].parent));if(directory)$('center-subtitle').textContent=(catalog.restored?'备份快照 · ':'')+folderCount+' 个子文件夹 · '+($('include-subfolders').checked?'含子目录 ':'本层 ')+visible.length+' 项媒体';if(!directory){$('center-subtitle').textContent='选择目录逐层浏览 · '+catalog.items.length+' 项媒体';syncSelection();return;}if(visible.length)$('center-content').append(make('h2','', $('include-subfolders').checked?'本目录及子目录的媒体':'本层媒体'));}
@@ -260,13 +270,13 @@ function render(){if(!catalog)return;syncMediaFilters();previewObserver?.disconn
       const shown=ids.filter(id=>matched.has(id));if(filtered&&!shown.length)return;
       const items=shown.map(id=>byId.get(id));tiles.push({name,mtime:items.reduce((value,item)=>Math.max(value,item.mtime),0),oldest:items.length?items.reduce((value,item)=>Math.min(value,item.mtime),Infinity):0,bytes:items.reduce((value,item)=>value+item.bytes,0),create:()=>collectionCard(name,shown,handler,items[0]?.preview,path)});
     }
-    for(const [id,item]of Object.entries(catalog.state.collections))tile(item.name,item.ids,()=>{collection=id;page=0;selected.clear();render();});
-    for(const [path,ids]of Object.entries(catalog.folders))tile(sourceFolder(path),ids,()=>{album=path;page=0;selected.clear();render();},path);
+    for(const [id,item]of Object.entries(catalog.state.collections))tile(item.name,item.ids,()=>browseTo({collection:id}));
+    for(const [path,ids]of Object.entries(catalog.folders))tile(sourceFolder(path),ids,()=>browseTo({album:path}),path);
     const order=$('media-order').value,name=(a,b)=>a.name.localeCompare(b.name,'zh-CN',{numeric:true});tiles.sort((a,b)=>order==='name'?name(a,b):order==='size'?b.bytes-a.bytes||name(a,b):order==='oldest'?a.oldest-b.oldest||name(a,b):b.mtime-a.mtime||name(a,b));
     const tilePages=Math.max(1,Math.ceil(tiles.length/50));page=Math.max(0,Math.min(page,tilePages-1));grid.append(...tiles.slice(page*50,page*50+50).map(tile=>tile.create()));$('center-content').append(grid);$('center-pager').hidden=!tiles.length;$('center-page').textContent=`第 ${page+1}/${tilePages} 页 · ${tiles.length} 个相册与合集`;$('center-prev').disabled=page===0;$('center-next').disabled=page>=tilePages-1;
     if(!tiles.length)$('center-content').append(make('p','empty','没有匹配的相册与合集。试试清除筛选，或添加媒体目录。'));syncSelection();return;
   }
-  if(view==='tags'&&!query&&!tag){const counts=new Map();for(const item of visible)for(const label of item.tags)counts.set(label,(counts.get(label)||0)+1);const chips=make('div','chips');for(const [label,count]of [...counts].sort((a,b)=>b[1]-a[1]))chips.append(button(label+' · '+count,()=>{tag=label;page=0;render();},'chip'));$('center-content').append(chips);$('center-subtitle').textContent=counts.size+' 个标签 · '+visible.length+' 项媒体';if(!counts.size){$('center-content').append(make('p','empty',catalog.items.some(item=>item.tags.length)?'当前筛选下没有标签，可清除筛选查看已有标签。':'还没有标签，不需要重新扫描。可在媒体详情添加标签，或直接用下方的文件夹名创建标签。'));const folders=make('div','actions');for(const path of Object.keys(catalog.folders).slice(0,20)){const label=sourceFolder(path),control=button('以“'+label+'”建标签',()=>update({action:'folder_label',path,label}));control.setAttribute('title',path);folders.append(control);}$('center-content').append(folders);}syncSelection();return;}
+  if(view==='tags'&&!query&&!tag){const counts=new Map();for(const item of visible)for(const label of item.tags)counts.set(label,(counts.get(label)||0)+1);const chips=make('div','chips');for(const [label,count]of [...counts].sort((a,b)=>b[1]-a[1]))chips.append(button(label+' · '+count,()=>browseTo({tag:label}),'chip'));$('center-content').append(chips);$('center-subtitle').textContent=counts.size+' 个标签 · '+visible.length+' 项媒体';if(!counts.size){$('center-content').append(make('p','empty',catalog.items.some(item=>item.tags.length)?'当前筛选下没有标签，可清除筛选查看已有标签。':'还没有标签，不需要重新扫描。可在媒体详情添加标签，或直接用下方的文件夹名创建标签。'));const folders=make('div','actions');for(const path of Object.keys(catalog.folders).slice(0,20)){const label=sourceFolder(path),control=button('以“'+label+'”建标签',()=>update({action:'folder_label',path,label}));control.setAttribute('title',path);folders.append(control);}$('center-content').append(folders);}syncSelection();return;}
   if(view==='photos'&&!all&&$('photo-layout').value==='timeline'){const order=$('media-order').value||'recent';visible=centerTimelineOrder(visible,order);$('center-subtitle').textContent+=' · '+(order==='oldest'?'月份从旧到新':'月份从新到旧')+' · 月内'+({recent:'最近更新',oldest:'最早更新',name:'按名称',size:'按大小'}[order]||'最近更新');}
   const pages=Math.max(1,Math.ceil(visible.length/50));page=Math.max(0,Math.min(page,pages-1));pageItems=visible.slice(page*50,page*50+50);if(view==='photos'&&!all&&$('photo-layout').value==='timeline'){const months=new Map();for(const item of pageItems){const month=item.metadata.timeline_month||'';if(!months.has(month))months.set(month,[]);months.get(month).push(item);}for(const [month,items]of months){$('center-content').append(make('h2','',month||'日期未知'),make('p','muted',items.some(item=>item.metadata.timeline_source!=='EXIF 拍摄日期')?'含文件名或文件时间推测日期，详情可查看来源。':'按拍摄日期归组'));showRows(items,$('center-content'),'photo');}}else showRows(pageItems,$('center-content'),kind||(!query&&(view==='photos'?'photo':view==='videos'?'video':''))||(visible.length&&visible.every(item=>item.kind===visible[0].kind)?visible[0].kind:''));
   const unclassifiedMovies=view==='movies'&&!query&&!filters&&!catalog.items.some(item=>item.kind==='movie')&&catalog.items.some(item=>item.kind==='video');if(!visible.length&&unclassifiedMovies){$('center-content').append(make('p','empty','目前没有归类为电影的项目。普通视频仍在“视频”中；没有本地影片资料或明确电影目录时不会自动猜测，不必为分类重新扫描。'),button('查看视频并标为电影',()=>switchCenterView('videos'),'primary'));}
@@ -332,9 +342,16 @@ $('compare-selected').onclick=()=>{const chosen=catalog.items.filter(item=>selec
 function stopDetailVideo(){for(const player of ($('detail-content').querySelectorAll?.('video')||[])){player.pause();player.removeAttribute('src');player.load();}}
 $('media-detail').addEventListener('close',()=>{detailEpoch++;stopDetailVideo();detailBindings=null;centerOverlay(false);});$('detail-close').onclick=()=>$('media-detail').close();$('media-detail').addEventListener('keydown',event=>{if(['INPUT','TEXTAREA','SELECT'].includes(event.target.tagName)||event.altKey||event.ctrlKey||event.metaKey||event.shiftKey)return;const item=detailSequence[detailIndex];if(item?.kind!=='photo')return;if(event.key==='ArrowRight'&&detailIndex<detailSequence.length-1){event.preventDefault();detailIndex++;detailEpoch++;renderDetail();}else if(event.key==='ArrowLeft'&&detailIndex>0){event.preventDefault();detailIndex--;detailEpoch++;renderDetail();}});
 const dashboardLink=document.querySelector?.('nav[aria-label="报告导航"] a');
+let announcedView='';
+function announceCenterView(){
+  if(location.hash!=='#'+view&&window.history?.replaceState)window.history.replaceState(null,'','#'+view);
+  if(announcedView===view)return;announcedView=view;
+  if(window.parent&&window.parent!==window&&dashboardLink)window.parent.postMessage({type:'media-context',view},new URL(dashboardLink.href).origin);
+}
+
 function switchCenterView(next){if(window.parent!==window&&dashboardLink)window.parent.postMessage({type:'media-navigate',view:next},new URL(dashboardLink.href).origin);else{location.hash='#'+next;navigate();}}
 if(window.parent!==window&&dashboardLink){$('center-rescan').hidden=false;$('center-rescan').onclick=()=>{window.parent.postMessage({type:'media-rescan'},new URL(dashboardLink.href).origin);message('已请求重新扫描当前资料库的来源目录；扫描期间可继续浏览。');};}
-$('center-prev').onclick=()=>{page--;render();};$('center-next').onclick=()=>{page++;render();};$('center-refresh').onclick=()=>{for(const [id,job]of previewWork)if(job.state==='failed')previewWork.delete(id);previewStatus();return load();};
+$('center-prev').onclick=()=>turnPage(-1);$('center-next').onclick=()=>turnPage(1);$('center-refresh').onclick=()=>{for(const [id,job]of previewWork)if(job.state==='failed')previewWork.delete(id);previewStatus();return load();};
 function navigate(){const next=location.hash.slice(1);view=titles[next]?next:'home';$('query').value='';$('search-scope').value='view';$('media-kind').value=$('filter-year').value=$('filter-genre').value=$('filter-duration').value=$('filter-resolution').value='';$('media-order').value='recent';$('include-subfolders').checked=false;manage=false;resetLocation();if($('media-detail').open)$('media-detail').close();render();}
 window.addEventListener('hashchange',navigate);navigate();load();
 }

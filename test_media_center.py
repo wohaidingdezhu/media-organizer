@@ -370,7 +370,7 @@ movie.files[0].video={duration_seconds:75,width:1920,height:1080};directories={'
 state.collections['1'.repeat(32)]={name:'Collection',ids:[movie.id,photo.id]};location.hash='#collections';events.hashchange();$('filter-duration').value='long';$('filter-duration').onchange();assert.equal($('center-content').children[0].children.length,0);$('reset-filters').onclick();assert($('center-content').children[0].children.length>0);assert.equal(operations.length,0);
 ''')
 
-    def run_ui(self, assertions):
+    def run_ui(self, assertions, setup=""):
         node=shutil.which('node');self.assertIsNotNone(node)
         code=r'''
 const assert=require('assert/strict'),fs=require('fs'),vm=require('vm');
@@ -385,7 +385,9 @@ const scope={console,location,IntersectionObserver:class{observe(){}unobserve(){
 if(options?.body){const body=JSON.parse(options.body);calls.push({path,body});if(body.action==='favorite')state.favorites[body.id]=body.value;if(body.action==='recent')state.recent=[body.id];return {ok:true,json:async()=>state};}
 if(failCenter&&path==='api/center')return {ok:false,json:async()=>({error:'Disconnected'})};
 return {ok:true,json:async()=>path==='api/media'?access:{items:items.map(i=>({...i,favorite:state.favorites[i.id]||false})),state,folders,directories,review,operation_state:operationState,hidden_files:hiddenFiles,recent:state.recent,restored:false}};
-}};vm.createContext(scope);vm.runInContext(fs.readFileSync(process.argv[1],'utf8'),scope);
+}};
+'''+setup+r'''
+vm.createContext(scope);vm.runInContext(fs.readFileSync(process.argv[1],'utf8'),scope);
 (async()=>{await new Promise(resolve=>setImmediate(resolve));if($('center-error').textContent)throw Error($('center-error').textContent);
 '''+assertions+r'''
 })().catch(error=>{console.error(error);process.exitCode=1;});
