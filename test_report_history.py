@@ -159,6 +159,8 @@ class ReportHistoryTests(unittest.TestCase):
                 self.assertIn("200 OK", headers)
                 first = json.loads(raw)
                 self.assertEqual(first["report_id"], "scan-old")
+                self.assertEqual(first["report"]["id"], "scan-old")
+                self.assertIn("files", first["report"]["summary"])
                 self.assertTrue(first["url"].endswith("report.html#issues"))
                 headers, raw = request(server, prefix + "api/reports/view", "POST",
                                        {"report_id": "scan-new", "view": "library"})

@@ -391,7 +391,8 @@ class DashboardState(WorkspaceController):
                 threading.Thread(target=server.serve_forever, daemon=True).start()
             server, library_url = self.report_servers[report_id]
             self.library_server, self.library_report, self.library_url = server, report, library_url
-            return {"url": library_url.rsplit("/", 1)[0] + "/" + REPORT_VIEWS[view], "report_id": report_id}
+            return {"url": library_url.rsplit("/", 1)[0] + "/" + REPORT_VIEWS[view], "report_id": report_id,
+                    "report": summary}
 
     def open_library(self):
         history = self.report_history()
