@@ -305,7 +305,9 @@ class MovieUpgradeTests(unittest.TestCase):
         with mock.patch.object(scan.ImageProbeWorker, 'request', autospec=True, side_effect=generated_frame) as worker:
             _, document = self.run_scan(True)
         self.assertEqual(document['scan_reuse']['video_covers'], 0)
-        self.assertEqual(worker.call_count, 1)
+        self.assertEqual(document['scan_reuse']['video_metadata'], 0)
+        self.assertEqual(worker.call_count, 2)
+        self.assertEqual(sum(bool(call.kwargs.get('thumbnail')) for call in worker.call_args_list), 1)
 
     def test_shared_javascript_is_valid_and_searches_manual_edition(self):
         node = shutil.which('node')

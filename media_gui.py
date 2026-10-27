@@ -28,9 +28,11 @@ MAX_REPORT_BYTES = 128 * 1024 * 1024
 MAX_REPORT_HISTORY = 50
 REPORT_VIEWS = {
     "overview": "report.html", "duplicates": "organize.html#duplicates",
-    "similar": "report.html#similar", "library": "library.html",
+    "similar": "report.html#similar", "library": "center.html#movies",
     "issues": "report.html#issues", "folders": "report.html#folder-groups",
-    "organize": "organize.html", "photos": "photos.html", "users": "users.html",
+    "organize": "organize.html", "photos": "center.html#photos", "users": "users.html",
+    "review": "center.html#review", "home": "center.html#home", "videos": "center.html#videos", "collections": "center.html#collections",
+    "favorites": "center.html#favorites", "tags": "center.html#tags", "resources": "center.html#resources",
 }
 
 
@@ -178,6 +180,7 @@ class DashboardState(WorkspaceController):
         self.logs = deque(maxlen=300)
         self.running = False
         self.status = "准备就绪。请先添加照片或视频文件夹。"
+        self.progress = None
         self.process = None
         self.cancel_requested = threading.Event()
         self.cancel_file = self.output / (".scan-cancel-" + secrets.token_hex(12))
@@ -192,6 +195,11 @@ class DashboardState(WorkspaceController):
 
     def log(self, line):
         with self.lock:
+            from scan_progress import parse
+            update = parse(str(line))
+            if update is not None:
+                self.progress = update
+                return
             self.logs.append(str(line).rstrip())
 
     def _report_summary(self, report_id):
@@ -230,9 +238,10 @@ class DashboardState(WorkspaceController):
         with self.lock:
             report = latest_library(self.output)
             return {"folders": list(self.folders), "running": self.running,
-                    "status": self.status, "logs": list(self.logs),
+                    "status": self.status, "logs": list(self.logs), "progress": self.progress,
                     "latest_report": report.name if report else None, "monitor": dict(self.monitor),
-                    "workspace": self.output.name, "next_update_seconds": max(0, int(self.next_scan - __import__("time").monotonic())) if self.next_scan else None}
+                    "workspace": self.output.name, "watch_status": self.watch_status, "scan_origin": self.scan_origin,
+                    "next_update_seconds": max(0, int(self.next_scan - __import__("time").monotonic())) if self.next_scan else None}
 
     def add_folders(self):
         choices = scan.choose_folders()
@@ -245,6 +254,8 @@ class DashboardState(WorkspaceController):
                     raise ValueError("请选择实际存在的普通文件夹，不要选择符号链接")
                 if str(path) not in self.folders:
                     self.folders.append(str(path))
+            if choices:
+                self.status = f"已选择 {len(self.folders)} 个文件夹，点击“开始只读扫描”建立或更新资料库。"
             self.save_settings()
         return self.snapshot()
 
@@ -258,10 +269,26 @@ class DashboardState(WorkspaceController):
             if not self.folders:
                 self.monitor["enabled"] = False
                 self.next_scan = None
+            self.status = (f"已选择 {len(self.folders)} 个文件夹，点击“开始只读扫描”更新资料库。"
+                           if self.folders else "请先添加照片或视频文件夹。")
             self.save_settings()
         return self.snapshot()
 
-    def start_scan(self, options):
+    def rescan_report(self, identifier):
+        from workspace_data import read_json
+        with self.lock:
+            report = selected_report(self.output, identifier)
+            document = read_json(report, 'report.json')
+            if document.get('restored_snapshot'):
+                raise ValueError('恢复快照需先重新选择本机目录')
+            folders = document.get('roots')
+            if not isinstance(folders, list) or not folders or not all(isinstance(path, str) and Path(path).is_absolute() for path in folders):
+                raise ValueError('扫描来源无效，请重新选择目录')
+            self.start_scan(self.scan_options, folders=folders)
+            self.scan_origin = 'recovery'
+            return self.snapshot()
+
+    def start_scan(self, options, folders=None):
         if not isinstance(options, dict):
             raise ValueError("扫描选项无效")
         for key in ("image_analysis", "video_covers", "video_headers", "refresh_media"):
@@ -274,13 +301,16 @@ class DashboardState(WorkspaceController):
         with self.lock:
             if self.running:
                 raise ValueError("已有扫描正在进行")
-            args = scan_arguments(self.folders, output=self.output, image_analysis=image_analysis,
+            args = scan_arguments(self.folders if folders is None else folders, output=self.output, image_analysis=image_analysis,
                                   video_covers=video_covers, video_headers=video_headers, refresh_media=options.get('refresh_media', False),
                                   video_rule=video_rule)
             self.scan_options = dict(options)
+            self.scan_origin = 'manual'
             self.running = True
             self.cancel_requested.clear()
             self.logs.clear()
+            from scan_progress import progress
+            self.progress = progress('prepare')
             self.status = "正在准备组件并扫描；原始媒体不会被修改。"
         self.scan_thread = threading.Thread(target=self._run_scan, args=(args, image_analysis, video_covers), daemon=True)
         self.scan_thread.start()
@@ -292,7 +322,7 @@ class DashboardState(WorkspaceController):
             if self.cancel_requested.is_set():
                 code = 130
             else:
-                environment = dict(os.environ, PYTHONUTF8="1")
+                environment = dict(os.environ, PYTHONUTF8="1", MEDIA_ORGANIZER_PROGRESS="1")
                 if sys.platform == "win32":
                     environment["MEDIA_ORGANIZER_CANCEL_FILE"] = str(self.cancel_file.absolute())
                 command = [sys.executable, "--scan", *args[1:]] if getattr(sys, "frozen", False) else [sys.executable, "-X", "utf8", "-u", *args]
@@ -308,6 +338,8 @@ class DashboardState(WorkspaceController):
                 code = process.wait()
             with self.lock:
                 if code == 0:
+                    from scan_progress import progress
+                    self.progress = progress('done', 1, 1)
                     history = self.report_history()["reports"]
                     if history:
                         summary = history[0]["summary"]
@@ -353,15 +385,14 @@ class DashboardState(WorkspaceController):
             raise ValueError("报告视图无效")
         with self.lock:
             report, summary = self._report_summary(report_id)
-            if view == "library" and not summary["has_library"]:
-                raise ValueError("这次扫描没有影片资料库，请查看总览或重新扫描")
             if report_id not in self.report_servers:
                 server, library_url = create_library_server(report, self.output, dashboard_url=self.dashboard_url)
                 self.report_servers[report_id] = (server, library_url)
                 threading.Thread(target=server.serve_forever, daemon=True).start()
             server, library_url = self.report_servers[report_id]
             self.library_server, self.library_report, self.library_url = server, report, library_url
-            return {"url": library_url.rsplit("/", 1)[0] + "/" + REPORT_VIEWS[view], "report_id": report_id}
+            return {"url": library_url.rsplit("/", 1)[0] + "/" + REPORT_VIEWS[view], "report_id": report_id,
+                    "report": summary}
 
     def open_library(self):
         history = self.report_history()
@@ -445,7 +476,7 @@ def create_dashboard_server(output=REPORTS):
 
         def do_POST(self):
             route = self.route()
-            if route not in {"api/folders/add", "api/folders/remove", "api/scan/start",
+            if route not in {"api/folders/add", "api/folders/remove", "api/scan/start", "api/reports/rescan",
                              "api/scan/cancel", "api/library/open", "api/reports/open", "api/reports/view", "api/quit", "api/catalog", "api/monitor", "api/restore/preview", "api/restore/confirm"}:
                 self.send_error(404)
                 return
@@ -484,6 +515,8 @@ def create_dashboard_server(output=REPORTS):
                     result = state.remove_folder(data["index"])
                 elif route == "api/scan/start":
                     result = state.start_scan(data)
+                elif route == "api/reports/rescan":
+                    result = state.rescan_report(data.get('report_id'))
                 elif route == "api/scan/cancel":
                     result = state.cancel_scan()
                 elif route == "api/library/open":

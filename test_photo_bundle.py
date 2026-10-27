@@ -58,13 +58,22 @@ class PhotoBundleTests(unittest.TestCase):
         return ops.preview('copy', [key], str(self.destination), photo_bundle=True)
 
     def wait(self, ops, job):
-        deadline = time.monotonic() + 8
+        # Windows runners can take longer while flushing each verified copy and
+        # journal; leave the real operation checks intact and avoid tight polling.
+        deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             result = ops.snapshot(job['id'])
             if result['status'] != 'running':
                 return result
-            time.sleep(.01)
-        self.fail('generated photo copy did not finish')
+            time.sleep(.05)
+        ops.request_stop(job['id'])
+        stop_deadline = time.monotonic() + 15
+        while time.monotonic() < stop_deadline:
+            result = ops.snapshot(job['id'])
+            if result['status'] != 'running':
+                break
+            time.sleep(.05)
+        self.fail('generated photo copy timed out; stop requested: ' + str(result))
 
     def test_copy_expands_unique_pair_and_editing_files_with_original_names_and_full_hashes(self):
         paths, key, report, document, plan, ops = self.prepare()

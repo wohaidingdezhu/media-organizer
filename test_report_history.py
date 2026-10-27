@@ -159,12 +159,14 @@ class ReportHistoryTests(unittest.TestCase):
                 self.assertIn("200 OK", headers)
                 first = json.loads(raw)
                 self.assertEqual(first["report_id"], "scan-old")
+                self.assertEqual(first["report"]["id"], "scan-old")
+                self.assertIn("files", first["report"]["summary"])
                 self.assertTrue(first["url"].endswith("report.html#issues"))
                 headers, raw = request(server, prefix + "api/reports/view", "POST",
                                        {"report_id": "scan-new", "view": "library"})
                 self.assertIn("200 OK", headers)
                 second = json.loads(raw)
-                self.assertTrue(second["url"].endswith("library.html"))
+                self.assertTrue(second["url"].endswith("center.html#movies"))
                 for result in (first, second):
                     viewer, _ = state.report_servers[result["report_id"]]
                     headers, content = request(viewer, urlsplit(result["url"]).path)
@@ -182,7 +184,7 @@ class ReportHistoryTests(unittest.TestCase):
                 self.assertIn("400 Bad Request", headers)
                 headers, _ = request(server, prefix + "api/reports/view", "POST",
                                      {"report_id": "scan-old", "view": "library"})
-                self.assertIn("400 Bad Request", headers)
+                self.assertIn("200 OK", headers)
                 headers, raw = request(server, prefix + "api/library/open", "POST", {})
                 self.assertIn("200 OK", headers)
                 self.assertEqual(json.loads(raw)["report_id"], "scan-new")

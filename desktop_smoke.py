@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import threading
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 
 def verified_quick_copy(operations, destination, expected):
@@ -64,6 +64,8 @@ def run():
             raise AssertionError('Packaged scan failed')
         report = next(output.glob('scan-*/report.json'))
         document = json.loads(report.read_text(encoding='utf-8'))
+        video_facts = next(item['video'] for item in document['files'] if item['path'] == str(video))
+        assert video_facts['duration_seconds'] > 0 and video_facts['width'] > 0 and video_facts['height'] > 0
         group, = document['video_library']['groups']
         assert group['metadata']['title'] == '样例电影'
         assert group['poster'] and group['stills']
@@ -73,6 +75,7 @@ def run():
         report = max(output.glob('scan-*/report.json'))
         document = json.loads(report.read_text(encoding='utf-8'))
         assert document['scan_reuse']['image_metadata'] == 2
+        assert document['scan_reuse']['video_metadata'] == 1
         assert document['video_library']['groups'][0]['edition'] == '本机版本'
         destination = base / '副本'
         destination.mkdir()
@@ -117,6 +120,31 @@ def run():
         viewer, library_url = create_library_server(report.parent, output)
         threading.Thread(target=viewer.serve_forever, daemon=True).start()
         try:
+            prefix = library_url.rsplit('/', 1)[0] + '/'
+            # The frozen Mac and Windows apps must include the new shared page,
+            # its script and its metadata module, not just the legacy reports.
+            with urlopen(prefix + 'center.html', timeout=10) as response:
+                page = response.read()
+                assert b'function centerFilter' in page and b'@@MEDIA_CENTER@@' not in page
+                assert b'media-detail' in page and b'manage-toggle' in page
+                assert b'function centerReviewGroups' in page and b'compare-selected' in page
+                assert b'function centerFolderIds' in page and b'include-subfolders' in page and b'filter-year' in page
+            with urlopen(prefix + 'api/center', timeout=10) as response:
+                center = json.load(response)
+                feature = next(item for item in center['items'] if item['kind'] == 'movie')
+                assert feature['metadata']['title'] == '样例电影'
+                assert any(item['kind'] == 'photo' for item in center['items'])
+                assert 'exact' in center['review'] and 'similar' in center['review']
+                assert not center['operation_state']['running']
+                assert center['directories'][str(source)]['parent'] == ''
+                assert str(source / 'extrafanart') in center['directories'][str(source)]['children']
+            favorite = Request(prefix + 'api/center',
+                               data=json.dumps({'action': 'favorite', 'id': feature['id'], 'value': True}).encode('utf-8'),
+                               headers={'Content-Type': 'application/json', 'Origin': f'http://127.0.0.1:{viewer.server_port}'})
+            with urlopen(favorite, timeout=10) as response:
+                assert json.load(response)['favorites'][feature['id']] is True
+            with urlopen(prefix + 'api/center', timeout=10) as response:
+                assert next(item for item in json.load(response)['items'] if item['id'] == feature['id'])['favorite']
             with urlopen(library_url.rsplit('/', 1)[0] + '/api/movie-bundles/' + media_id(str(video)), timeout=10) as response:
                 audit = json.load(response)
                 assert len(audit['items']) == 4 and audit['media_ids'] == [media_id(str(video))]
@@ -248,4 +276,4 @@ def run():
             server.server_close()
         after = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in source.rglob('*') if path.is_file()}
         assert before == after
-        print('PACKAGED_SMOKE_OK: scan, reuse, FFmpeg frame cache, grouping, attachment audit, batch classification, shared photo interface, simple month/region copies, confirmed multi-batch queue, settings, copy result identities, film and photo bundle copies, NFO, poster, still, catalog, backup, restore, HTTP, originals unchanged', flush=True)
+        print('PACKAGED_SMOKE_OK: media center, shared cards, favorites, scan, reuse, FFmpeg frame cache, grouping, attachment audit, batch classification, shared photo interface, simple month/region copies, confirmed multi-batch queue, settings, copy result identities, film and photo bundle copies, NFO, poster, still, catalog, backup, restore, HTTP, originals unchanged', flush=True)

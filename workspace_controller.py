@@ -20,6 +20,9 @@ class WorkspaceController:
         self.monitor_stop = threading.Event()
         self.pending_restore = None
         self.scan_options = {}
+        self.scan_origin = 'manual'
+        self.watch_baseline = self.watch_candidate = None
+        self.watch_status = ''
         self.load_settings()
 
     def load_settings(self):
@@ -28,11 +31,12 @@ class WorkspaceController:
             folders = settings.get('folders', [])
             monitor = settings.get('monitor', self.monitor)
             if (not isinstance(folders, list) or len(folders) > 100 or not all(isinstance(path, str) and Path(path).is_absolute() and '..' not in Path(path).parts for path in folders)
-                    or not isinstance(monitor, dict) or type(monitor.get('enabled')) is not bool or type(monitor.get('minutes')) is not int or not 1 <= monitor['minutes'] <= 1440):
+                    or not isinstance(monitor, dict) or type(monitor.get('enabled')) is not bool or type(monitor.get('minutes')) is not int or not 1 <= monitor['minutes'] <= 1440
+                    or not isinstance(monitor.get('mode', 'timer'), str) or monitor.get('mode', 'timer') not in {'timer', 'changes'}):
                 raise ValueError('目录合集或定时更新设置无效')
             self.folders = folders
             self.monitor = monitor
-            self.next_scan = time.monotonic() + monitor['minutes'] * 60 if monitor['enabled'] else None
+            self.next_scan = time.monotonic() + (15 if monitor.get('mode') == 'changes' else monitor['minutes'] * 60) if monitor['enabled'] else None
         except (OSError, ValueError, AttributeError) as error:
             self.log('设置未加载：' + str(error))
 
@@ -42,13 +46,18 @@ class WorkspaceController:
 
     def set_monitor(self, options):
         enabled, minutes = options.get('enabled'), options.get('minutes')
-        if type(enabled) is not bool or type(minutes) is not int or not 1 <= minutes <= 1440:
+        mode = options.get('mode', 'timer')
+        if type(enabled) is not bool or type(minutes) is not int or not 1 <= minutes <= 1440 or not isinstance(mode, str) or mode not in {'timer', 'changes'}:
             raise ValueError('更新间隔须为 1–1440 分钟')
         with self.lock:
             if enabled and not self.folders:
                 raise ValueError('请先选择目录合集')
             self.monitor = {'enabled': enabled, 'minutes': minutes}
-            self.next_scan = time.monotonic() + minutes * 60 if enabled else None
+            if 'mode' in options:
+                self.monitor['mode'] = mode
+            self.watch_baseline = self.watch_candidate = None
+            self.watch_status = ''
+            self.next_scan = time.monotonic() + (15 if mode == 'changes' else minutes * 60) if enabled else None
             self.save_settings()
         return self.snapshot()
 
@@ -57,9 +66,52 @@ class WorkspaceController:
         with self.lock:
             if (not self.monitor['enabled'] or self.running or self.next_scan is None or now < self.next_scan):
                 return False
-            self.next_scan = now + self.monitor['minutes'] * 60
+            if self.monitor.get('mode') == 'changes':
+                self.next_scan = now + 15
+                context = (tuple(self.folders), self.output, dict(self.monitor))
+            else:
+                context = None
+                self.next_scan = now + self.monitor['minutes'] * 60
+        if context:
+            # Do not hold the dashboard lock while walking a large/offline disk.
+            import portable_fs as fs
+            from media_scan import IMAGE_EXT, VIDEO_EXT, SIDECAR_EXT, SKIP_DIRS, PACKAGE_EXT
+            try:
+                current = fs.directory_fingerprint(context[0], context[1], IMAGE_EXT | VIDEO_EXT | SIDECAR_EXT,
+                                                   SKIP_DIRS, PACKAGE_EXT, self.monitor_stop)
+            except (OSError, ValueError) as error:
+                with self.lock:
+                    if context == (tuple(self.folders), self.output, self.monitor):
+                        self.watch_candidate = None
+                        self.watch_status = '目录检查暂不可用，保留当前资料库：' + str(error)
+                return False
+            with self.lock:
+                if context != (tuple(self.folders), self.output, self.monitor) or self.running or self.monitor_stop.is_set():
+                    return False
+                if current == self.watch_baseline:
+                    self.watch_candidate = None
+                    self.watch_status = '未发现目录变化'
+                    return False
+                if self.watch_candidate != current:
+                    self.watch_candidate = current
+                    self.watch_status = '发现变化，等待文件稳定后更新'
+                    return False
+                try:
+                    with maintenance_when_idle(self.output):
+                        self.start_scan(self.scan_options)
+                    self.scan_origin = 'changes'
+                    self.watch_baseline = current
+                    self.watch_candidate = None
+                    self.watch_status = '目录变化已触发只读扫描'
+                except (OSError, ValueError) as error:
+                    self.watch_status = '自动更新等待重试：' + str(error)
+                return True
+        with self.lock:
+            if not self.monitor['enabled'] or self.running or self.monitor_stop.is_set():
+                return False
             try:
                 self.start_scan(self.scan_options)
+                self.scan_origin = 'timer'
             except (OSError, ValueError) as error:
                 self.status = '定时更新未启动：' + str(error)
             return True
@@ -108,6 +160,8 @@ class WorkspaceController:
                 self.report_cache.clear()
                 self.folders = []
                 self.monitor = {'enabled': False, 'minutes': 15}
+                self.watch_baseline = self.watch_candidate = None
+                self.watch_status = ''
                 self.next_scan = None
                 self.pending_restore = None
                 self.status = '已恢复为独立资料库副本；请重新选择本机媒体目录并扫描，启用原文件操作。'
