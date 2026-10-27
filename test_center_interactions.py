@@ -160,7 +160,7 @@ await sections().find(section=>!containsSecond(section)).children.find(n=>n.clas
     def test_review_batch_bar_only_occupies_space_while_files_are_selected(self):
         self.run_ui(r'''
 const f={...photo.files[0],kind:'photo',media_kind:'photo',owner:photo.id,metadata:photo.metadata};review.exact=[{files:[f,{...f,id:movie.files[0].id,path:movie.files[0].path}]}];await $('center-refresh').onclick();location.hash='#review';events.hashchange();
-const batch=()=>$('center-content').children.find(n=>n.className==='actions review-batch');assert(batch().hidden);
+const batch=()=>$('center-content').children.find(n=>n.className==='actions review-batch');assert(!batch().hidden);assert(batch().children[0].textContent.includes('1'));batch().children.find(n=>n.textContent==='清空选择').onclick();assert(batch().hidden);
 const check=$('center-content').children.find(n=>n.className==='review-group').children.find(n=>n.className==='review-files').children[0].children[0].children[0];check.checked=true;check.onchange();assert(!batch().hidden);assert(batch().children[0].textContent.includes('1'));batch().children.find(n=>n.textContent==='清空选择').onclick();assert(batch().hidden);assert.equal(operations.length,0);
 ''')
 

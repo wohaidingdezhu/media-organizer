@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import weakref
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import quote, unquote, urlsplit
 import webbrowser
@@ -194,10 +195,20 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
     organize_settings = OrganizeSettings(output_dir, current_document)
     from media_center import CenterState, center_catalog
     center_state = CenterState(output_dir)
+    # Only hide paths positively confirmed missing while their scan root is
+    # reachable. This is an in-memory view; reconnecting a disk or replacing a
+    # file restores visibility and never alters the original report or media.
+    from missing_monitor import MissingMonitor
+    missing_monitor = MissingMonitor(media)
     def center_snapshot():
         history = operations.history()
+        missing_monitor.request_scan()
+        absent, availability = missing_monitor.snapshot()
         with data_lock(output_dir):
-            result = center_catalog(current_document(), center_state.snapshot(), load_notes(note_path), history['handled']['trash'])
+            result = center_catalog(current_document(), center_state.snapshot(), load_notes(note_path), set(history['handled']['trash']) | absent)
+        result['missing_files'] = len(absent)
+        result['availability_revision'] = availability['revision']
+        result['hidden_files'] -= len(absent - set(history['handled']['trash']))
         result['operation_state'] = {'running': any(job['status'] in {'running', 'external_running'} for job in history['jobs']),
                                      'warnings': history['warnings']}
         return preview_repair.apply(result)
@@ -319,6 +330,10 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 return
             if route == "api/media":
                 self.send_json(200, media.snapshot())
+                return
+            if route == 'api/media/availability':
+                missing_monitor.request_scan()
+                self.send_json(200, missing_monitor.status())
                 return
             if route.startswith('api/video/'):
                 self.send_video(route.removeprefix('api/video/'))
@@ -538,7 +553,27 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     self.send_json(200, operations.quick_preview(payload.get("destination"), payload.get("all_batches", False)))
                     return
                 elif route == "api/operations/preview":
-                    self.send_json(200, operations.preview(payload["mode"], payload["ids"], payload.get("destination"), payload.get('bundle', False), payload.get('photo_bundle', False)))
+                    try:
+                        result = operations.preview(payload["mode"], payload["ids"], payload.get("destination"), payload.get('bundle', False), payload.get('photo_bundle', False))
+                    except ValueError as error:
+                        # Recheck the attempted files and their retained exact
+                        # duplicates. An offline root is deliberately not hidden.
+                        ids = payload.get('ids')
+                        if payload.get('mode') == 'trash' and isinstance(ids, list) and len(ids) <= 200:
+                            from media_actions import media_id
+                            selected = {media.records[key]['path'] for key in ids if isinstance(key, str) and key in media.records}
+                            paths = set(selected)
+                            for group in current_document().get('duplicates', []):
+                                members = group.get('paths', []) if isinstance(group, dict) else []
+                                if isinstance(members, list) and selected.intersection(members):
+                                    paths.update(path for path in members if isinstance(path, str))
+                            absent = {path for path in paths if media_id(path) in media.records and media.availability(media_id(path)) == 'missing'}
+                            if absent:
+                                missing_monitor.mark_missing(absent)
+                                self.send_json(400, {'error': str(error) + f' 已确认 {len(absent)} 个文件不在原位置，返回列表后会暂时隐藏；如文件恢复会重新显示。', 'missing_count': len(absent)})
+                                return
+                        raise
+                    self.send_json(200, result)
                     return
                 if route == 'api/grouping':
                     from movie_grouping import update_assignments
@@ -623,6 +658,14 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     server.daemon_threads = True
+    server.missing_monitor = missing_monitor
+    weakref.finalize(server, missing_monitor.stop)
+    if hasattr(server, 'server_close'):
+        original_close = server.server_close
+        def close_with_monitor():
+            missing_monitor.stop()
+            original_close()
+        server.server_close = close_with_monitor
     with _TAG_LOCKS_LOCK:
         server.tag_lock = _TAG_LOCKS.setdefault(tag_path, threading.Lock())
     return server, f"http://127.0.0.1:{server.server_port}/{token}/library.html"

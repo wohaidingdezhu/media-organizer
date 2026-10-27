@@ -80,6 +80,56 @@ class MediaActions:
         return {"available": sys.platform in {"darwin", "win32"},
                 "ids_by_path": {record["path"]: key for key, record in self.records.items()}}
 
+    def availability(self, identifier):
+        """Only call a file missing if its scanned root is securely accessible.
+
+        A disconnected drive, inaccessible directory or unsafe path is not proof
+        of deletion. These states must never silently hide a library entry.
+        """
+        if not isinstance(identifier, str) or identifier not in self.records:
+            raise ValueError("文件不属于当前扫描的媒体清单，请重新扫描")
+        path = Path(self.records[identifier]['path'])
+        roots = [root for root in self.roots if root in path.parents]
+        root = max(roots, key=lambda item: len(item.parts))
+        from file_operations import open_directory
+        try:
+            descriptor = open_directory(root)
+        except (OSError, ValueError):
+            return 'unavailable'
+        try:
+            # A mount point can still exist after an external disk disappears.
+            # Hide only when the root is on the same device as the recorded
+            # file; old reports and nested mounts without proof stay visible.
+            expected = self.records[identifier].get('source_signature')
+            try:
+                root_device = os.fstat(descriptor).st_dev
+            except OSError:
+                return 'unavailable'
+            if (not isinstance(expected, list) or len(expected) != 5
+                    or any(type(value) is not int for value in expected)
+                    or root_device != expected[0]):
+                return 'unavailable'
+            try:
+                checked_stat(path)
+            except FileNotFoundError:
+                # Reopen the root after the lookup to catch a disconnected or
+                # replaced volume during the check.
+                try:
+                    current = open_directory(root)
+                    try:
+                        if os.fstat(current).st_dev != expected[0]:
+                            return 'unavailable'
+                    finally:
+                        os.close(current)
+                except (OSError, ValueError):
+                    return 'unavailable'
+                return 'missing'
+            except (OSError, ValueError):
+                return 'unavailable'
+            return 'available'
+        finally:
+            os.close(descriptor)
+
     def validate(self, identifier):
         if not isinstance(identifier, str) or identifier not in self.records:
             raise ValueError("文件不属于当前扫描的媒体清单，请重新扫描")
@@ -87,7 +137,9 @@ class MediaActions:
         try:
             info = checked_stat(record["path"])
         except OSError as error:
-            raise ValueError("原文件已移走、磁盘未连接或路径含符号链接，请重新扫描") from error
+            if self.availability(identifier) == 'missing':
+                raise ValueError(f"文件已不在原位置：{record['path']}。可刷新列表移除该失效记录；原文件不会被操作。") from error
+            raise ValueError(f"无法访问文件：{record['path']}。请检查来源磁盘、文件夹权限或符号链接，连接恢复后重试。") from error
         expected = record.get("source_signature")
         if expected is not None:
             if (not isinstance(expected, list) or len(expected) != 5

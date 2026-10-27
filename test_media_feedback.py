@@ -191,10 +191,10 @@ fail=false;await repair.onclick();await new Promise(r=>setImmediate(r));assert.e
 
     def test_cancelled_scan_keeps_last_progress_instead_of_claiming_complete(self):
         state=media_gui.DashboardState(self.root/'progress-reports');self.addCleanup(state.close);state.running=True
-        process=mock.Mock();process.stdout=[PREFIX+json.dumps(progress('photos',1,2))];process.wait.return_value=130
+        process=mock.Mock();process.stdout=io.StringIO(PREFIX+json.dumps(progress('photos',1,2))+'\n');process.wait.return_value=130
         with mock.patch.object(media_gui,'compile_helpers'),mock.patch.object(media_gui.subprocess,'Popen',return_value=process):
             state._run_scan(['generated'],False,False)
-        self.assertFalse(state.running);self.assertEqual(state.progress['percent'],50);self.assertIn('取消',state.status)
+        self.assertFalse(state.running);self.assertEqual(state.progress['percent'],50);self.assertIn('取消',state.status);self.assertTrue(process.stdout.closed)
 
     def test_invalid_acknowledgement_storage_is_rejected(self):
         for name,value in (('dismissed_similar',{'x':True}),('dismissed_similar',{'a'*64:'true'}),('media_kinds',{'a'*64:'photo'})):
@@ -242,8 +242,8 @@ photo.preview='';items=[photo];location.hash='#photos';events.hashchange();await
         code=r'''
 const fs=require('fs'),vm=require('vm'),assert=require('assert/strict'),html=fs.readFileSync(process.argv[1]+'/dashboard.html','utf8');
 class E{constructor(){this.children=[];this.classList={toggle(){}};}replaceChildren(){this.children=[];}append(...x){this.children.push(...x);}removeAttribute(key){delete this[key];}}
-const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new E());return nodes.get(id);},scope={$: $,lastFolders:'',lastLog:'',monitorEditing:false,document:{activeElement:null,createElement:()=>new E()},act(){}};
-vm.createContext(scope);vm.runInContext(html.slice(html.indexOf('function renderStatus('),html.indexOf('async function refresh(')),scope);
+const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new E());return nodes.get(id);},scope={$: $,folderSelection:new Map(),lastFolders:'',lastLog:'',monitorEditing:false,document:{activeElement:null,createElement:()=>new E()},act(){}};
+vm.createContext(scope);vm.runInContext(html.slice(html.indexOf('function syncScanScope('),html.indexOf('async function refresh(')),scope);
 const data={folders:[],running:true,status:'Scanning',logs:[],monitor:{enabled:false},progress:{stage:'photos',label:'Photos',completed:2,total:4,percent:50,current:'sample.jpg'}};
 scope.renderStatus(data);assert.equal($('scan-progress').value,50);assert.equal($('scan-banner-progress').value,50);assert($('scan-progress-label').textContent.includes('50%'));assert.equal($('scan-progress-current').textContent,'sample.jpg');assert(!$('scan-banner').hidden);
 data.progress={stage:'discover',label:'Discovery',completed:3,total:null,percent:null,current:''};scope.renderStatus(data);assert.equal($('scan-progress').value,undefined);assert(!$('scan-progress-label').textContent.includes('%'));data.running=false;scope.renderStatus(data);assert($('scan-banner').hidden);assert($('bar').hidden);
