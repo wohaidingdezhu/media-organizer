@@ -111,6 +111,7 @@ class WorkspaceController:
                 return False
             try:
                 self.start_scan(self.scan_options)
+                self.scan_origin = 'timer'
             except (OSError, ValueError) as error:
                 self.status = '定时更新未启动：' + str(error)
             return True
