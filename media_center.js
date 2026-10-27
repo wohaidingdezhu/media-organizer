@@ -166,13 +166,13 @@ function showRows(rows,parent,kind=''){const wall=make('div','wall'+(kind==='pho
   if(manage||item.kind!=='photo'){const ids=centerMediaIds([item]),trash=button('删除…',()=>openFileReview('delete',ids),'danger');trackAvailability(trash,()=>canTrash(ids));actions.append(trash);}card.append(actions);wall.append(card);
 }parent.append(wall);}
 function sourceFolder(path){return path.split(/[\\/]/).filter(Boolean).pop()||path;}
-function collectionCard(name,ids,handler,preview,path=''){
+function collectionCard(name,ids,handler,preview,path='',missing=0){
   const card=button('',handler,'collection'),items=ids.map(id=>byId.get(id)).filter(Boolean);
   // Try at most three distinct files, preferring existing art over decoding.
   const rank=item=>centerArt(item.preview)?2:previewAllowed(item)?1:0;
   const candidates=[...new Map([...items].sort((a,b)=>rank(b)-rank(a)).map(item=>[previewFile(item)?.id,item])).values()].slice(0,3);
   if(candidates.length){const art=make('div','collection-art');let index=0;art.previewFallback=()=>{if(index+1>=candidates.length)return false;art.replaceChildren();image(candidates[++index],art);return true;};image(candidates[0],art);card.append(art);}
-  card.append(make('strong','',name),make('span','muted',ids.length+' 项媒体'));if(path){const location=make('div','muted album-path',path);location.setAttribute('title',path);card.append(location);card.setAttribute('aria-label',name+' · '+path+' · '+ids.length+' 项媒体');}return card;
+  const count=ids.length+' 项媒体'+(missing?' · 另有 '+missing+' 项不在本次扫描结果或已隐藏':'');card.append(make('strong','',name),make('span','muted',count));if(path){const location=make('div','muted album-path',path);location.setAttribute('title',path);card.append(location);card.setAttribute('aria-label',name+' · '+path+' · '+count);}return card;
 }
 
 const availabilityControls=new Map(),selectionChecks=new Map();
@@ -272,7 +272,7 @@ function render(){if(!catalog)return;announceCenterView();syncMediaFilters();pre
   $('center-subtitle').textContent=(catalog.restored?'备份快照 · ':'')+(query?(all?'在本次媒体库中全局搜索 · ':'在当前页面中搜索 · '):'')+`${visible.length} 项媒体`+(!all&&tag?' · 标签：'+tag:'');if(!query&&!all&&view==='movies')$('center-subtitle').textContent+=' · 按作品计数，版本和分段在详情中选择';if(!query&&!all&&view==='videos')$('center-subtitle').textContent+=' · 含尚未归类为电影的文件，可按时长筛选';$('clear-search').hidden=!query;$('create-collection').hidden=view!=='collections'||!!collection||!!album||!!query;
   $('recursive-label').hidden=view!=='resources'||!directory||all;const filters=[kind,$('filter-duration').value,$('filter-resolution').value,$('filter-year').value,$('filter-genre').value,$('media-order').value&&$('media-order').value!=='recent'].filter(Boolean).length;$('center-options-summary').textContent=filters?`筛选与排序 · ${filters} 项`:'筛选与排序';$('reset-filters').hidden=!filters;
   $('center-content').replaceChildren();$('center-breadcrumb').replaceChildren();$('center-pager').hidden=true;
-  const status=[];if(catalog.hidden_files)status.push(`已按本次扫描的回收站成功记录隐藏 ${catalog.hidden_files} 个文件；如已恢复，请重新扫描。`);if(catalog.operation_state?.running)status.push('文件操作正在进行，状态将自动更新。');if(catalog.operation_state?.warnings?.length)status.push('操作记录待核对，已暂停清理。请从整理工具查看操作记录。');$('center-status').hidden=!status.length;$('center-status').textContent=status.join(' ');
+  const status=[];if(catalog.hidden_files)status.push(`已按本次扫描的回收站成功记录隐藏 ${catalog.hidden_files} 个文件；如已恢复，请重新扫描。`);if(collection&&!all){const missing=(catalog.state.collections[collection]?.ids||[]).filter(id=>!byId.has(id)).length;if(missing)status.push(`此合集另有 ${missing} 项不在本次扫描结果或已隐藏；合集记录仍保留，可切换扫描结果或重新扫描对应目录。`);}if(catalog.operation_state?.running)status.push('文件操作正在进行，状态将自动更新。');if(catalog.operation_state?.warnings?.length)status.push('操作记录待核对，已暂停清理。请从整理工具查看操作记录。');$('center-status').hidden=!status.length;$('center-status').textContent=status.join(' ');
   if(view==='review'&&!all){$('recursive-label').hidden=true;renderReview();return;}
   if(all)$('center-breadcrumb').append(button('← 返回'+context,clearSearch));
   if(directory&&!all)renderDirectoryBreadcrumb();
@@ -288,7 +288,7 @@ function render(){if(!catalog)return;announceCenterView();syncMediaFilters();pre
     const grid=make('div','wall video-wall'),tiles=[],matched=new Set(visible.map(item=>item.id)),filtered=kind||$('filter-year').value||$('filter-genre').value||$('filter-duration').value||$('filter-resolution').value;
     function tile(name,ids,handler,path=''){
       const shown=ids.filter(id=>matched.has(id));if(filtered&&!shown.length)return;
-      const items=shown.map(id=>byId.get(id));tiles.push({name,mtime:items.reduce((value,item)=>Math.max(value,item.mtime),0),oldest:items.length?items.reduce((value,item)=>Math.min(value,item.mtime),Infinity):0,bytes:items.reduce((value,item)=>value+item.bytes,0),create:()=>collectionCard(name,shown,handler,items[0]?.preview,path)});
+      const items=shown.map(id=>byId.get(id)),missing=ids.filter(id=>!byId.has(id)).length;tiles.push({name,mtime:items.reduce((value,item)=>Math.max(value,item.mtime),0),oldest:items.length?items.reduce((value,item)=>Math.min(value,item.mtime),Infinity):0,bytes:items.reduce((value,item)=>value+item.bytes,0),create:()=>collectionCard(name,shown,handler,items[0]?.preview,path,missing)});
     }
     for(const [id,item]of Object.entries(catalog.state.collections))tile(item.name,item.ids,()=>browseTo({collection:id}));
     for(const [path,ids]of Object.entries(catalog.folders))tile(sourceFolder(path),ids,()=>browseTo({album:path}),path);
