@@ -60,6 +60,7 @@
     <div id="result-content" hidden>
       <div class="result-header"><div class="scan-heading"><h2 id="result-title">扫描结果</h2><p id="result-time"></p></div><label class="field history-picker">查看哪次扫描<select id="history" aria-label="选择历史扫描"></select></label></div>
       <div id="history-note" class="history-note"></div>
+      <p id="current-sources" class="sub" style="overflow-wrap:anywhere"></p>
       <button id="scan-info-open" class="scan-info-open" type="button">扫描信息与导出</button><dialog id="scan-info-dialog" aria-labelledby="scan-info-title"><div class="scan-info-heading"><h2 id="scan-info-title">扫描信息与导出</h2><button id="scan-info-close" type="button">关闭</button></div><div class="scan-info-body"><details class="scan-overview"><summary>扫描概况</summary><div id="metrics" class="metrics"></div></details>
       <details class="sources"><summary id="source-summary">扫描来源</summary><ul id="source-list"></ul></details>
       <div class="result-toolbar">
@@ -74,7 +75,7 @@
   </section>
 
   <section id="scan-pane" aria-label="新建扫描" hidden><div class="grid">
-    <section class="panel"><h2>1. 选择扫描文件夹</h2><ul id="folders" class="folder-list"><li class="empty">尚未选择文件夹</li></ul><button id="add-folder" class="ghost">＋ 添加文件夹…</button><p class="sub">Mac 可一次选择多个文件夹；Windows 可多次添加。首次建议先试一个较小目录。</p></section>
+    <section class="panel"><h2>1. 选择扫描文件夹</h2><p class="sub">勾选本次要扫描的文件夹；取消勾选不会移除文件夹。</p><ul id="folders" class="folder-list"><li class="empty">尚未选择文件夹</li></ul><button id="add-folder" class="ghost">＋ 添加文件夹…</button><p id="scan-scope" class="sub" role="status"></p><p class="sub">本次结果只显示勾选的目录；其他目录的记录仍可在历史扫描或“跨扫描索引”查看。自动更新开启时仍检查所有已添加目录。</p><p class="sub">Mac 可一次选择多个文件夹；Windows 可多次添加。首次建议先试一个较小目录。</p></section>
     <section class="panel"><h2>2. 扫描选项</h2>
       <label class="option"><input id="images" type="checkbox" checked><span>解析照片日期与相似候选<small>同时生成本地图片封面；完整 SHA-256 查重始终开启。</small></span></label>
       <label class="option"><input id="covers" type="checkbox" checked><span>读取视频时长、尺寸与封面<small>无本地封面时截帧；信息与封面只保存在资料库。</small></span></label>
@@ -99,6 +100,7 @@
 const $ = id => document.getElementById(id);
 const descriptions = {review:'核对精确重复与相似照片，比较后再清理。',home:'本地电影、视频、照片的统一资料库。',videos:'浏览本地视频，点击卡片查看详情并播放。',collections:'目录相册与自定义合集，原文件保持原位置。',favorites:'收藏你喜欢的照片、电影和视频。',tags:'按标签集中浏览不同类型的媒体。',resources:'浏览本次媒体库全部文件。',users:'管理用户名，给照片和整部电影分配归属，预览对应用户目录的分类计划。',photos:'按年月和原文件夹浏览照片、并排比较，勾选后可核对分类计划或预览废纸篓 / 回收站清理。',organize:'按文件夹浏览，点击文件旁的查看、播放或删除。整理到新文件夹时会先预览。',overview:'本次扫描的完整汇总。选择上方分类，可直接定位需要核对的结果。',duplicates:'内容完全相同的文件。可逐项删除，或选择一份保留后清理其余副本。',similar:'点击“对比这两张”查看，或在文件旁点击“删除…”。相似照片可能内容不同，请自行核对。',library:'浏览影片封面、播放影片，编辑标签、评分和观看备注；可筛选已观看与收藏。',folders:'同名或整理后名称冲突的文件夹候选；请结合来源路径核对。',issues:'本次扫描遇到的读取问题与跳过项。没有问题不表示所有视频都已验证可播放。'};
 let reports=[], selectedReport='', selectedView='home', lastLog='', lastFolders='', previousRunning=false, knownLatest;
+const folderSelection=new Map();
 let pollTimer=null, stopped=false, historyLoading=false, viewRequest=0;
 try { const saved=JSON.parse(sessionStorage.getItem('media-result-selection') || '{}'); selectedReport=saved.report || ''; if(descriptions[saved.view])selectedView=saved.view; } catch (_) {}
 const saveSelection=()=>{try{sessionStorage.setItem('media-result-selection',JSON.stringify({report:selectedReport,view:selectedView}));}catch(_){}};
@@ -110,7 +112,7 @@ function renderSummary(){const report=reports.find(item=>item.id===selectedRepor
   $('history').value=report.id;$('result-title').textContent=report.id===reports[0].id?'最近一次扫描':'历史扫描';$('result-time').textContent=formatTime(report.created_at);
   const summary=report.summary, values=[['媒体文件',summary.files,'照片与视频'],['照片',summary.photos,'扫描清单'],['视频',summary.videos,'扫描清单'],['精确重复',summary.duplicate_groups,'组 · 完整 SHA-256'],['图片相似候选',summary.similar_pairs,'对 · 需人工核对'],['读取问题',summary.issues,'条 · 本次扫描']];
   $('metrics').replaceChildren();for(const [label,count,detail] of values){const card=document.createElement('div');card.className='metric';const name=document.createElement('span'),value=document.createElement('strong'),note=document.createElement('small');name.textContent=label;value.textContent=Number(count||0).toLocaleString('zh-CN');note.textContent=detail;card.append(name,value,note);$('metrics').append(card);}
-  $('source-summary').textContent=`扫描来源 · ${report.roots.length} 个文件夹`;$('source-list').replaceChildren();for(const path of report.roots){const li=document.createElement('li');li.textContent=path;$('source-list').append(li);}
+  $('source-summary').textContent=`扫描来源 · ${report.roots.length} 个文件夹`;$('current-sources').textContent='当前展示的扫描来源：'+report.roots.join('、');$('source-list').replaceChildren();for(const path of report.roots){const li=document.createElement('li');li.textContent=path;$('source-list').append(li);}
 
 }
 async function openView(view){$('result-viewer').classList.remove('overlay-mode');showPane('results');if(!selectedReport)return;const ticket=++viewRequest;selectedView=view;saveSelection();notice();
@@ -142,8 +144,9 @@ async function loadReports(selectLatest=false,keepView=false){if(historyLoading)
   $('history').replaceChildren();for(const report of reports){const option=document.createElement('option');option.value=report.id;option.textContent=`${formatTime(report.created_at)} · ${report.summary.files} 个媒体${report.id===reports[0].id?' · 最新':''}`;$('history').append(option);}
   renderSummary();if($('platform-main').getAttribute?.('data-pane')!==initialPane)return false;const opened=await openView(selectedView);if(opened&&selectLatest)$('pending-report-update').hidden=true;return !!opened;
 }catch(error){notice(error);}finally{historyLoading=false;}}
-function renderStatus(data){const folderState=JSON.stringify([data.folders,data.running]);if(folderState!==lastFolders){lastFolders=folderState;$('folders').replaceChildren();if(!data.folders.length){const li=document.createElement('li');li.className='empty';li.textContent='尚未选择文件夹';$('folders').append(li);}data.folders.forEach((path,index)=>{const li=document.createElement('li'),name=document.createElement('span'),remove=document.createElement('button');name.className='path';name.textContent=path;remove.className='small ghost';remove.textContent='移除';remove.disabled=data.running;remove.onclick=()=>act('folders/remove',{index});li.append(name,remove);$('folders').append(li);});}
-  $('scan').disabled=data.running||!data.folders.length;$('cancel').disabled=!data.running;$('add-folder').disabled=data.running;$('status').classList.toggle('busy',data.running);$('status-text').textContent=data.status;$('bar').hidden=!data.running;$('scan-banner').hidden=!data.running;
+function syncScanScope(data){const chosen=data.folders.filter(path=>folderSelection.get(path));$('scan').disabled=data.running||!chosen.length;$('scan-scope').textContent=data.folders.length?`本次扫描 ${chosen.length} / ${data.folders.length} 个文件夹。`:'请添加文件夹并选择扫描范围。';}
+function renderStatus(data){const folderState=JSON.stringify([data.folders,data.running]);if(folderState!==lastFolders){lastFolders=folderState;for(const path of folderSelection.keys())if(!data.folders.includes(path))folderSelection.delete(path);for(const path of data.folders)if(!folderSelection.has(path))folderSelection.set(path,true);$('folders').replaceChildren();if(!data.folders.length){const li=document.createElement('li');li.className='empty';li.textContent='尚未选择文件夹';$('folders').append(li);}data.folders.forEach((path,index)=>{const li=document.createElement('li'),label=document.createElement('label'),check=document.createElement('input'),name=document.createElement('span'),remove=document.createElement('button');label.className='path';label.style.display='flex';label.style.alignItems='center';label.style.gap='10px';check.type='checkbox';check.checked=folderSelection.get(path);check.disabled=data.running;check.setAttribute('aria-label','本次扫描 '+path);check.onchange=()=>{folderSelection.set(path,check.checked);syncScanScope(data);};name.textContent=path;label.append(check,name);remove.className='small ghost';remove.textContent='移除';remove.disabled=data.running;remove.onclick=()=>act('folders/remove',{index});li.append(label,remove);$('folders').append(li);});}
+  syncScanScope(data);$('cancel').disabled=!data.running;$('add-folder').disabled=data.running;$('status').classList.toggle('busy',data.running);$('status-text').textContent=data.status;$('bar').hidden=!data.running;$('scan-banner').hidden=!data.running;
   const stage=data.progress,known=stage&&Number.isFinite(stage.percent)&&stage.total>0;
   const amount=n=>stage?.stage==='hash_file'?(n/1048576).toFixed(1)+' MB':n.toLocaleString('zh-CN');$('scan-progress-label').textContent=stage?stage.label+(known?' · '+stage.percent+'%（'+amount(stage.completed)+'/'+amount(stage.total)+'）':stage.completed?' · 已发现 '+stage.completed+' 个文件':''):'正在准备扫描…';$('scan-progress-current').textContent=stage?.current||'';if(data.running&&stage)$('status-text').textContent=$('scan-progress-label').textContent;
   for(const id of ['scan-progress','scan-banner-progress']){if(known)$(id).value=stage.percent;else $(id).removeAttribute('value');}
@@ -157,7 +160,7 @@ async function beginFirstScan(){showPane('scan');await $('add-folder').onclick()
 $('nav-scan').onclick=()=>showPane('scan');$('first-scan').onclick=beginFirstScan;$('nav-results').onclick=()=>openView('home');$('nav-settings').onclick=()=>showPane('settings');
 $('history').onchange=()=>{selectedReport=$('history').value;renderSummary();openView(selectedView);};for(const button of document.querySelectorAll('[data-view]'))button.onclick=()=>openView(button.dataset.view);
 $('add-folder').onclick=async()=>{$('add-folder').disabled=true;try{await act('folders/add');}finally{if(!stopped)$('add-folder').disabled=previousRunning;}};
-$('scan').onclick=async()=>{const data=await act('scan/start',{image_analysis:$('images').checked,video_covers:$('covers').checked,video_headers:$('headers').checked,video_rule:$('rule').value,refresh_media:$('refresh-media').checked});if(data){previousRunning=data.running;$('scan-details').open=true;}};
+$('scan').onclick=async()=>{const data=await act('scan/start',{image_analysis:$('images').checked,video_covers:$('covers').checked,video_headers:$('headers').checked,video_rule:$('rule').value,refresh_media:$('refresh-media').checked,scan_folders:[...folderSelection].filter(([,chosen])=>chosen).map(([path])=>path)});if(data){previousRunning=data.running;$('scan-details').open=true;}};
 $('cancel').onclick=()=>act('scan/cancel');$('reports').onclick=()=>act('reports/open');
 $('quit').onclick=async()=>{if(await act('quit')){stopped=true;clearTimeout(pollTimer);document.body.innerHTML='<main><h1>媒体整理助手已退出</h1><p>重新打开应用即可继续使用。</p></main>';}};
 let catalogFolder='', catalogPage=0, catalogPages=1, restoreToken='', monitorEditing=false;

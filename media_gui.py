@@ -301,10 +301,21 @@ class DashboardState(WorkspaceController):
         with self.lock:
             if self.running:
                 raise ValueError("已有扫描正在进行")
-            args = scan_arguments(self.folders if folders is None else folders, output=self.output, image_analysis=image_analysis,
+            chosen = options.get('scan_folders')
+            if chosen is not None:
+                if (folders is not None or not isinstance(chosen, list) or
+                        any(not isinstance(path, str) or path not in self.folders for path in chosen) or
+                        len(set(chosen)) != len(chosen)):
+                    raise ValueError('扫描范围已变化，请重新选择文件夹')
+                selected_folders = chosen
+            else:
+                selected_folders = self.folders if folders is None else folders
+            args = scan_arguments(selected_folders, output=self.output, image_analysis=image_analysis,
                                   video_covers=video_covers, video_headers=video_headers, refresh_media=options.get('refresh_media', False),
                                   video_rule=video_rule)
-            self.scan_options = dict(options)
+            # A one-time choice must not silently restrict future scheduled or
+            # recovery scans.  Those use their own recorded roots.
+            self.scan_options = {key: value for key, value in options.items() if key != 'scan_folders'}
             self.scan_origin = 'manual'
             self.running = True
             self.cancel_requested.clear()
@@ -333,8 +344,11 @@ class DashboardState(WorkspaceController):
                     self.process = process
                     if self.cancel_requested.is_set():
                         self._signal_scan(process)
-                for line in process.stdout:
-                    self.log(line)
+                try:
+                    for line in process.stdout:
+                        self.log(line)
+                finally:
+                    process.stdout.close()
                 code = process.wait()
             with self.lock:
                 if code == 0:

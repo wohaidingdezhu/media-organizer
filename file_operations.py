@@ -399,15 +399,17 @@ class FileOperations:
                 raise ValueError("同一精确重复组请至少保留一个文件；不能整组一起清理")
             kept = [identifier for identifier, record in self.media.records.items() if record["path"] in paths - selected_paths]
             available = False
+            failures = []
             for identifier in kept:
                 try:
                     self.media.validate(identifier)
                     available = True
                     break
-                except (OSError, ValueError):
-                    continue
+                except (OSError, ValueError) as error:
+                    failures.append((self.media.records[identifier]['path'], str(error)))
             if not available:
-                raise ValueError("计划保留的精确重复文件已变化或不可访问，请先重新扫描并核对")
+                path, reason = failures[0] if failures else ('未知', '记录不在当前资料库')
+                raise ValueError(f"为避免误删，清理已暂停：这一组准备保留的文件无法确认仍是扫描时的原件。保留文件：{path}。{reason}。请检查文件或重新扫描后再选择；本次没有删除任何文件。")
 
     def _copy_destination(self, destination):
         if not isinstance(destination, str) or not destination or "\x00" in destination:
