@@ -59,6 +59,30 @@ def prepare_console(root, name='desktop-session.log'):
         fs.close(parent)
 
 
+def verify_catalog_ui(window, ready_url, timeout=90):
+    """Exercise the actual window and wait for asynchronous catalog loading."""
+    import time
+    deadline = time.monotonic() + timeout
+    opened = False
+    while time.monotonic() < deadline:
+        time.sleep(.5)
+        current = window.get_current_url()
+        if not current or not str(current).startswith(ready_url):
+            continue
+        try:
+            if not opened:
+                present = native_value(window, "!!document.getElementById('nav-catalog') && !!document.getElementById('restore-file') && !!document.getElementById('monitor-save')")
+                if not present:
+                    continue
+                window.run_js("document.getElementById('nav-catalog').click()")
+                opened = True
+            if native_value(window, "!document.getElementById('catalog-pane').hidden && document.getElementById('catalog-summary').textContent.includes('长期清单')") is True:
+                return True
+        except Exception as error:
+            print('UI verification error:', repr(error), flush=True)
+    return False
+
+
 def main(argv=None):
     import argparse
     parser = argparse.ArgumentParser()
@@ -69,7 +93,6 @@ def main(argv=None):
     if args.smoke_test:
         return subprocess.call([*backend_command(), '--smoke-test'], **hidden_process_options())
     import tempfile
-    import time
     temporary = tempfile.TemporaryDirectory() if args.ui_smoke_test else None
     output = Path(temporary.name).resolve() / 'reports' if temporary else args.output or application_data_directory()
     # Windows windowed executables have no stdout/stderr. Native libraries need
@@ -131,24 +154,11 @@ def main(argv=None):
         return False
     if args.ui_smoke_test:
         def verify_ui():
-            deadline = time.monotonic() + 90
-            while time.monotonic() < deadline:
-                time.sleep(.5)
-                current = window.get_current_url()
-                if current and str(current).startswith(url[0]):
-                    try:
-                        present = native_value(window, "!!document.getElementById('nav-catalog') && !!document.getElementById('restore-file') && !!document.getElementById('monitor-save')")
-                        if not present:
-                            print('UI not ready:', current, flush=True)
-                            continue
-                        window.run_js("document.getElementById('nav-catalog').click()")
-                        time.sleep(1)
-                        ui_result[0] = native_value(window, "!document.getElementById('catalog-pane').hidden && document.getElementById('catalog-summary').textContent.includes('长期清单')") is True
-                        print('UI verification:', ui_result[0], native_value(window, "document.getElementById('catalog-summary').textContent + ' | ' + document.getElementById('notice').textContent"), flush=True)
-                        request_shutdown(url[0])
-                        return
-                    except Exception as error:
-                        print('UI verification error:', repr(error), flush=True)
+            ui_result[0] = verify_catalog_ui(window, url[0])
+            if ui_result[0]:
+                print('UI verification: True', flush=True)
+                request_shutdown(url[0])
+                return
             # The smoke backend has no source folders and cannot perform file jobs.
             print('UI verification timed out:', window.get_current_url(), flush=True)
             process.terminate()

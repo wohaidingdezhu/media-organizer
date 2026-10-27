@@ -233,7 +233,7 @@ const frame=$('result-frame');frame.src='http://127.0.0.1:12345/token/center.htm
 for(const event of [{source:{},origin:'http://127.0.0.1:12345',data:{type:'media-rescan'}},{source:frame.contentWindow,origin:'http://evil.test',data:{type:'media-rescan'}},{source:frame.contentWindow,origin:'http://127.0.0.1:12345',data:{type:'other'}}])await handler(event);
 assert.equal(actions.length,0);await handler({source:frame.contentWindow,origin:'http://127.0.0.1:12345',data:{type:'media-rescan'}});
 assert.equal(actions.length,1);assert.equal(actions[0].path,'reports/rescan');assert.equal(actions[0].body.report_id,'old-report');assert(scope.previousRunning);
-Object.assign(scope,{historyLoading:false,selectedView:'videos',reports:[],request:async()=>({reports:[{id:'new-report',created_at:'generated',summary:{files:4}}]}),document:{createElement:()=>({})},formatTime:x=>x,renderSummary(){},openView:async view=>{assert.equal(view,'videos');},showPane(){throw Error('Must not reset sidebar after opening selected view');}});
+Object.assign(scope,{historyLoading:false,viewRequest:0,selectedView:'videos',reports:[],request:async()=>({reports:[{id:'new-report',created_at:'generated',summary:{files:4}}]}),document:{createElement:()=>({})},formatTime:x=>x,renderSummary(){},openView:async view=>{assert.equal(view,'videos');return true;},showPane(){throw Error('Must not reset sidebar after opening selected view');}});
 $('history').replaceChildren=()=>{};$('history').append=()=>{};
 vm.runInContext(html.slice(html.indexOf('async function loadReports('),html.indexOf('function renderStatus(')),scope);
 assert(await scope.loadReports(true,true));assert.equal(scope.selectedReport,'new-report');assert.equal(scope.selectedView,'videos');
