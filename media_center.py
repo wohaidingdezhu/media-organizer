@@ -170,8 +170,12 @@ class CenterState:
                     if not isinstance(name, str):
                         raise ValueError('请输入合集名称')
                     if action == 'create':
+                        ids = payload.get('ids', [])
+                        if (not isinstance(ids, list) or len(ids) > 200
+                                or any(not valid_id(key) or key not in allowed for key in ids)):
+                            raise ValueError('一次最多加入200个本库媒体，请刷新后重新选择')
                         identifier = secrets.token_hex(16)
-                        value['collections'][identifier] = {'name': '', 'ids': []}
+                        value['collections'][identifier] = {'name': '', 'ids': list(dict.fromkeys(ids))}
                     value['collections'][identifier]['name'] = unicodedata.normalize('NFC', name).strip()
                 elif action == 'delete_collection':
                     del value['collections'][identifier]

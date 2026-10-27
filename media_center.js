@@ -179,9 +179,9 @@ const availabilityControls=new Map();
 function trackAvailability(control,allowed){availabilityControls.set(control,allowed);control.disabled=!allowed();}
 function syncAvailability(){for(const [control,allowed]of availabilityControls){if(control.isConnected===false)availabilityControls.delete(control);else control.disabled=!allowed();}}
 function syncSelection(){if(!catalog)return;syncAvailability();$('collection-submit').disabled=busy;$('collection-submit').textContent=busy?'正在保存…':'保存';const reviewing=view==='review'&&!globalSearch();$('manage-bar').hidden=!manage||reviewing;$('manage-toggle').hidden=reviewing;$('selected-count').textContent=`已选 ${selected.size} 项`;$('manage-toggle').textContent=manage?'完成整理':'整理模式';$('manage-toggle').setAttribute('aria-pressed',String(manage));
-  for(const id of ['add-collection','delete-selected','remove-collection','clear-selection'])$(id).disabled=busy||!selected.size;
+  for(const id of ['add-collection','create-selection-collection','delete-selected','remove-collection','clear-selection'])$(id).disabled=busy||!selected.size;
   const chosen=catalog.items.filter(item=>selected.has(item.id));$('compare-selected').disabled=busy||chosen.length!==2||chosen.some(item=>item.kind!=='photo'||item.files.length!==1);$('delete-selected').disabled=!canTrash(centerMediaIds(chosen));$('add-collection').disabled=busy||!selected.size||!Object.keys(catalog.state.collections).length;$('remove-collection').hidden=!collection||globalSearch();
-  const prior=$('target-collection').value;$('target-collection').replaceChildren();for(const [id,item]of Object.entries(catalog.state.collections)){const option=make('option','',item.name);option.value=id;$('target-collection').append(option);}if(catalog.state.collections[prior])$('target-collection').value=prior;
+  const noCollections=!Object.keys(catalog.state.collections).length;$('target-collection').hidden=$('add-collection').hidden=noCollections;const prior=$('target-collection').value;$('target-collection').replaceChildren();for(const [id,item]of Object.entries(catalog.state.collections)){const option=make('option','',item.name);option.value=id;$('target-collection').append(option);}if(catalog.state.collections[prior])$('target-collection').value=prior;
 }
 function retainSelection(selection,ids){const allowed=new Set(ids);for(const id of selection)if(!allowed.has(id))selection.delete(id);}
 function resetLocation(){reviewSelected.clear();page=folderPage=0;album=collection=tag=directory='';selected.clear();}
@@ -300,7 +300,7 @@ function render(){if(!catalog)return;announceCenterView();syncMediaFilters();pre
   if(view==='photos'&&!all&&$('photo-layout').value==='timeline'){const order=$('media-order').value||'recent';visible=centerTimelineOrder(visible,order);$('center-subtitle').textContent+=' · '+(order==='oldest'?'月份从旧到新':'月份从新到旧')+' · 月内'+({recent:'最近更新',oldest:'最早更新',name:'按名称',size:'按大小'}[order]||'最近更新');}
   const pages=Math.max(1,Math.ceil(visible.length/galleryPageSize));page=Math.max(0,Math.min(page,pages-1));pageItems=visible.slice(page*galleryPageSize,page*galleryPageSize+galleryPageSize);if(view==='photos'&&!all&&$('photo-layout').value==='timeline'){const months=new Map();for(const item of pageItems){const month=item.metadata.timeline_month||'';if(!months.has(month))months.set(month,[]);months.get(month).push(item);}for(const [month,items]of months){$('center-content').append(make('h2','',month||'日期未知'),make('p','muted',items.some(item=>item.metadata.timeline_source!=='EXIF 拍摄日期')?'含文件名或文件时间推测日期，详情可查看来源。':'按拍摄日期归组'));showRows(items,$('center-content'),'photo');}}else showRows(pageItems,$('center-content'),kind||(!query&&(view==='photos'?'photo':view==='videos'?'video':''))||(visible.length&&visible.every(item=>item.kind===visible[0].kind)?visible[0].kind:''));
   const unclassifiedMovies=view==='movies'&&!query&&!filters&&!catalog.items.some(item=>item.kind==='movie')&&catalog.items.some(item=>item.kind==='video');if(!visible.length&&unclassifiedMovies){$('center-content').append(make('p','empty','目前没有归类为电影的项目。普通视频仍在“视频”中；没有本地影片资料或明确电影目录时不会自动猜测，不必为分类重新扫描。'),button('查看视频并标为电影',()=>switchCenterView('videos'),'primary'));}
-  if(!visible.length&&!unclassifiedMovies)$('center-content').append(make('p','empty',view==='resources'&&directory&&!$('include-subfolders').checked&&catalog.directories[directory]?.children.length?'本层没有匹配的媒体。可进入子文件夹，或勾选“包含子文件夹”。':view==='favorites'?'没有匹配的收藏。可在媒体详情收藏，或清除当前筛选。':'没有匹配的媒体。试试清除筛选或添加媒体目录。'));
+  if(!visible.length&&!unclassifiedMovies)$('center-content').append(make('p','empty',view==='resources'&&directory&&!$('include-subfolders').checked&&catalog.directories[directory]?.children.length?'本层没有匹配的媒体。可进入子文件夹，或勾选“包含子文件夹”。':collection&&!query&&!filters?(catalog.state.collections[collection]?.ids.length?'此合集的媒体不在当前扫描结果中。可切换到包含这些文件的扫描结果，或重新扫描对应目录；合集记录仍然保留。':'这个合集还没有媒体。在照片、视频或电影页进入整理模式，勾选后选择此合集，再点击“加入合集”；原文件位置不变。'):view==='favorites'?'没有匹配的收藏。可在媒体详情收藏，或清除当前筛选。':'没有匹配的媒体。试试清除筛选或添加媒体目录。'));
   $('center-pager').hidden=!visible.length;$('center-page').textContent=`第 ${page+1}/${pages} 页 · 共 ${visible.length} 项`;$('center-prev').disabled=page===0;$('center-next').disabled=page>=pages-1;syncSelection();
 }
 function centerOverlay(open){if(typeof reportOverlay==='function')reportOverlay(open);}
@@ -360,18 +360,19 @@ function refreshDetail(id){if(!$('media-detail').open||detailSequence[detailInde
   const input=detailBindings[focusField];if(input){input.focus({preventScroll:true});if(selection&&typeof input.setSelectionRange==='function')input.setSelectionRange(...selection);}
   $('media-detail').scrollTop=position;
 }
-function editCollection(id=''){collectionEpoch++;editingCollection=id;$('collection-form-title').textContent=id?'重命名合集':'新建合集';$('collection-name').value=id?catalog.state.collections[id].name:'';$('collection-error').textContent='';$('collection-form').showModal();centerOverlay(true);$('collection-name').focus();}
+let collectionInitialIds=[];
+function editCollection(id='',ids=[]){collectionEpoch++;collectionInitialIds=[...ids];editingCollection=id;$('collection-form-title').textContent=id?'重命名合集':'新建合集';$('collection-name').value=id?catalog.state.collections[id].name:'';$('collection-error').textContent='';$('collection-help').textContent=ids.length?'保存后将选中的 '+ids.length+' 项媒体加入新合集；原文件位置不变。':'合集仅保存分类记录，原文件位置不变。';$('collection-form').showModal();centerOverlay(true);$('collection-name').focus();}
 $('collection-save').onsubmit=async event=>{
   event.preventDefault();if(busy)return;
-  const epoch=collectionEpoch,submitted=$('collection-name').value;
-  const ok=await update({action:editingCollection?'rename':'create',id:editingCollection,name:submitted},saved=>{
+  const epoch=collectionEpoch,submitted=$('collection-name').value,initialCount=collectionInitialIds.length;
+  const ok=await update({action:editingCollection?'rename':'create',id:editingCollection,name:submitted,...(!editingCollection?{ids:collectionInitialIds}:{})},saved=>{
     // Keep the server-issued identity even if the following refresh fails.
     if(epoch===collectionEpoch&&$('collection-form').open&&saved.created_collection_id){editingCollection=saved.created_collection_id;$('collection-form-title').textContent='重命名合集';}
   });
   if(epoch!==collectionEpoch||!$('collection-form').open)return;
-  if(ok&&$('collection-name').value===submitted)$('collection-form').close();
+  if(ok&&$('collection-name').value===submitted){$('collection-form').close();if(initialCount){$('target-collection').value=editingCollection;message('合集“'+submitted.trim()+'”已保存，已加入 '+initialCount+' 项媒体；原文件位置不变。','success');}}
   else $('collection-error').textContent=ok?'本次名称已保存；新输入的名称尚未保存。':$('center-error').textContent;
-};$('collection-form').addEventListener('close',()=>{collectionEpoch++;centerOverlay(false);});$('collection-cancel').onclick=()=>$('collection-form').close();$('create-collection').onclick=()=>editCollection();
+};$('collection-form').addEventListener('close',()=>{collectionEpoch++;centerOverlay(false);});$('collection-cancel').onclick=()=>$('collection-form').close();$('create-collection').onclick=()=>editCollection();$('create-selection-collection').onclick=()=>{if(!busy&&manage&&selected.size)editCollection('',[...selected]);};
 function applyBrowseFilters(clearSelection=true){page=folderPage=0;if(clearSelection){selected.clear();reviewSelected.clear();}render();scrollBrowse();}
 function clearSearch(){$('query').value='';applyBrowseFilters();}
 $('center-search').onsubmit=event=>{event.preventDefault();applyBrowseFilters();};$('clear-search').onclick=clearSearch;for(const id of ['search-scope','media-kind'])$(id).onchange=()=>applyBrowseFilters();
