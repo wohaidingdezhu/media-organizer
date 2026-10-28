@@ -119,7 +119,7 @@ class MissingRecoveryTests(unittest.TestCase):
         headers, result = self.preview(self.paths[0])
         self.assertIn('400', headers)
         self.assertIn(str(self.paths[1]), result['error'])
-        self.assertIn('没有删除任何文件', result['error'])
+        self.assertIn('当前文件未删除', result['error'])
         self.assertNotIn('missing_count', result)
         self.assertTrue(all(path.is_file() for path in self.paths))
 
@@ -183,6 +183,75 @@ class MissingRecoveryTests(unittest.TestCase):
             self.assertTrue(self.server.missing_monitor.status()['scanning'])
             self.server.missing_monitor.stop()
             release.set()
+
+    def test_refresh_rechecks_restored_file_without_waiting_for_full_scan_interval(self):
+        self.paths[0].unlink()
+        self.run_check()
+        self.assertEqual(self.center()['missing_files'], 1)
+        self.paths[0].write_bytes(b'restored generated image')
+        headers, body = request(self.server, self.prefix + 'api/media/availability/recheck', 'POST', {}, origin=self.origin)
+        self.assertIn('200 OK', headers)
+        self.assertEqual(json.loads(body)['queued'], 1)
+        deadline = time.monotonic() + 3
+        while self.server.missing_monitor.status()['scanning'] and time.monotonic() < deadline:
+            time.sleep(.005)
+        self.assertEqual(self.center()['missing_files'], 0)
+        self.assertEqual(len(self.center()['items']), 2)
+
+    def test_recheck_request_rejects_an_untrusted_origin(self):
+        headers, _ = request(self.server, self.prefix + 'api/media/availability/recheck', 'POST', {}, origin='http://example.invalid')
+        self.assertIn('403', headers)
+        self.assertFalse(self.server.missing_monitor.status()['scanning'])
+
+    def test_manual_confirmation_cannot_be_overwritten_by_an_older_background_check(self):
+        from missing_monitor import MissingMonitor
+        manager = MediaActions(self.doc)
+        identifier = media_id(str(self.paths[0]))
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        def slow(current):
+            if current == identifier:
+                entered.set()
+                release.wait(3)
+            return 'available'
+        monitor = MissingMonitor(manager, delay=0)
+        self.addCleanup(monitor.stop)
+        with mock.patch.object(manager, 'availability', side_effect=slow):
+            self.assertTrue(monitor.request_scan())
+            self.assertTrue(entered.wait(2))
+            monitor.mark_missing([str(self.paths[0])])
+            release.set()
+            deadline = time.monotonic() + 3
+            while monitor.status()['scanning'] and time.monotonic() < deadline:
+                time.sleep(.005)
+            self.assertIn(str(self.paths[0]), monitor.snapshot()[0])
+
+    def test_recheck_has_priority_during_long_full_check(self):
+        from missing_monitor import MissingMonitor
+        manager = MediaActions(self.doc)
+        first, second = map(lambda path: media_id(str(path)), self.paths)
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        calls = []
+        def slow(identifier):
+            calls.append(identifier)
+            if identifier == first:
+                entered.set()
+                release.wait(3)
+            return 'available'
+        monitor = MissingMonitor(manager, delay=0)
+        self.addCleanup(monitor.stop)
+        monitor.mark_missing([str(self.paths[1])])
+        with mock.patch.object(manager, 'availability', side_effect=slow):
+            self.assertTrue(monitor.request_scan())
+            self.assertTrue(entered.wait(2))
+            self.assertEqual(monitor.recheck_missing(), 1)
+            release.set()
+            deadline = time.monotonic() + 3
+            while monitor.status()['scanning'] and time.monotonic() < deadline:
+                time.sleep(.005)
+            self.assertEqual(calls, [first, second, second])
+            self.assertNotIn(str(self.paths[1]), monitor.snapshot()[0])
 
 
 if __name__ == '__main__':

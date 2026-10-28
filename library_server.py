@@ -492,13 +492,13 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
 
         def do_POST(self):
             route = self.route()
-            if route not in {"api/center", "api/users", "api/organize-settings", "api/organized-results/action", "api/tags", "api/tags/toggle", "api/organization", "api/media/action", "api/media/cover", "api/notes", "api/basket", "api/grouping",
+            if route not in {"api/center", "api/users", "api/organize-settings", "api/organized-results/action", "api/tags", "api/tags/toggle", "api/organization", "api/media/action", "api/media/cover", "api/media/availability/recheck", "api/notes", "api/basket", "api/grouping",
                              "api/operations/preview", "api/operations/quick-preview", "api/operations/start", "api/operations/stop", "api/operations/destination"}:
                 self.send_error(404)
                 return
             origin = self.headers.get("Origin")
             if ((origin and origin != f"http://127.0.0.1:{self.server.server_port}")
-                    or (route in {"api/center", "api/users", "api/organize-settings", "api/organized-results/action", "api/media/action", "api/media/cover", "api/basket", "api/grouping"} or route.startswith("api/operations/")) and origin != f"http://127.0.0.1:{self.server.server_port}"):
+                    or (route in {"api/center", "api/users", "api/organize-settings", "api/organized-results/action", "api/media/action", "api/media/cover", "api/media/availability/recheck", "api/basket", "api/grouping"} or route.startswith("api/operations/")) and origin != f"http://127.0.0.1:{self.server.server_port}"):
                 self.send_json(403, {"error": "页面来源不匹配"})
                 return
             if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
@@ -511,6 +511,9 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 payload = json.loads(self.rfile.read(length))
                 if not isinstance(payload, dict):
                     raise ValueError("请求内容必须是 JSON 对象")
+                if route == 'api/media/availability/recheck':
+                    self.send_json(200, {'queued': missing_monitor.recheck_missing()})
+                    return
                 if route == 'api/center':
                     current = center_snapshot()
                     pairs = {pair['id'] for key in ('similar', 'dismissed_similar') for pair in current['review'][key]}
