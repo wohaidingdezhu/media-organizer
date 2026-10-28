@@ -18,7 +18,7 @@ import time
 import unicodedata
 
 from media_actions import checked_stat, file_signature
-from organization_plan import _target_error
+from organization_plan import MAX_STATE_BYTES, STATE_FILE, _target_error
 from contextlib import contextmanager
 
 _BATCH_LOCK = threading.Lock()
@@ -386,18 +386,30 @@ class FileOperations:
                 os.close(descriptor)
             _BATCH_LOCK.release()
 
-    def _check_kept_duplicates(self, ids, current):
+    def _duplicate_index(self, ids, current):
         selected_paths = {self.media.records[identifier]["path"] for identifier in ids if identifier in self.media.records}
         duplicate_sets = {}
         for item in current.values():
             if item.get("duplicate_group"):
                 duplicate_sets.setdefault(item["duplicate_group"], set()).add(item["path"])
+        ids_by_path = {record['path']: identifier for identifier, record in self.media.records.items()}
+        by_selected = {}
+        groups = []
         for paths in duplicate_sets.values():
             if not paths.intersection(selected_paths):
                 continue
             if len(paths) > 1 and paths <= selected_paths:
                 raise ValueError("同一精确重复组请至少保留一个文件；不能整组一起清理")
-            kept = [identifier for identifier, record in self.media.records.items() if record["path"] in paths - selected_paths]
+            kept = [ids_by_path[path] for path in sorted(paths - selected_paths) if path in ids_by_path]
+            groups.append(kept)
+            for path in paths.intersection(selected_paths):
+                if path in ids_by_path:
+                    by_selected[ids_by_path[path]] = kept
+        return groups, by_selected
+
+    def _check_kept_duplicates(self, ids, current=None, *, index=None, focus_id=None):
+        groups, by_selected = index if index is not None else self._duplicate_index(ids, current)
+        for kept in groups if focus_id is None else ([by_selected[focus_id]] if focus_id in by_selected else []):
             available = False
             failures = []
             for identifier in kept:
@@ -409,7 +421,50 @@ class FileOperations:
                     failures.append((self.media.records[identifier]['path'], str(error)))
             if not available:
                 path, reason = failures[0] if failures else ('未知', '记录不在当前资料库')
-                raise ValueError(f"为避免误删，清理已暂停：这一组准备保留的文件无法确认仍是扫描时的原件。保留文件：{path}。{reason}。请检查文件或重新扫描后再选择；本次没有删除任何文件。")
+                raise ValueError(f"为避免误删，清理已暂停：这一组准备保留的文件无法确认仍是扫描时的原件。保留文件：{path}。{reason}。请检查文件或重新扫描后再选择；当前文件未删除，如处理已开始请查看完成记录。")
+
+    def _plan_marker(self):
+        """Detect external plan edits without rebuilding the full media index."""
+        directory = open_directory(self.report_dir)
+        try:
+            info = os.fstat(directory)
+            identity = (info.st_dev, info.st_ino)
+            try:
+                descriptor = os.open(STATE_FILE, FLAGS, dir_fd=directory)
+            except FileNotFoundError:
+                return identity, None
+            with os.fdopen(descriptor, 'rb') as stream:
+                before = os.fstat(stream.fileno())
+                if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_STATE_BYTES:
+                    raise ValueError('整理计划文件无效')
+                digest = hashlib.sha256()
+                remaining = MAX_STATE_BYTES + 1
+                while remaining:
+                    chunk = stream.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+                    remaining -= len(chunk)
+                if not remaining:
+                    raise ValueError('整理计划文件过大')
+                after = os.fstat(stream.fileno())
+            linked = os.stat(STATE_FILE, dir_fd=directory, follow_symlinks=False)
+            if (not stat.S_ISREG(linked.st_mode) or file_signature(before) != file_signature(after)
+                    or file_signature(after) != file_signature(linked)):
+                raise ValueError('整理计划正在变化，请重新预览后再操作')
+            return identity, (after.st_mode, *file_signature(after), digest.digest())
+        finally:
+            os.close(directory)
+
+    def _duplicate_plan_index(self, ids):
+        # Plan edits through the application are blocked by the batch lock.
+        # Detect external replacements and never cache an inconsistent read.
+        before = self._plan_marker()
+        current = {record['id']: record for record in self.plan().snapshot()['items']}
+        after = self._plan_marker()
+        if before != after:
+            raise ValueError('整理计划正在变化，请重新预览后再操作')
+        return after, self._duplicate_index(ids, current)
 
     def _copy_destination(self, destination):
         if not isinstance(destination, str) or not destination or "\x00" in destination:
@@ -670,6 +725,8 @@ class FileOperations:
 
     def _run(self, job, preview, batch_descriptor, release_batch=True, stop_id=None):
         final_status = "stopped"
+        duplicate_marker = duplicate_index = None
+        selected_ids = [entry['id'] for entry in preview['items']] if preview['mode'] == 'trash' else []
         def cancelled():
             requested = self._stop_requested(stop_id or job["id"])
             if requested:
@@ -698,8 +755,9 @@ class FileOperations:
                                 self._save_job(job)
                         answer = copy_one(preview['_media'], item["id"], preview["destination"], item["relative"], item["signature"], preview["dest_identity"], progress, cancelled)
                     else:
-                        current = {record["id"]: record for record in self.plan().snapshot()["items"]}
-                        self._check_kept_duplicates([entry["id"] for entry in preview["items"]], current)
+                        if duplicate_index is None or self._plan_marker() != duplicate_marker:
+                            duplicate_marker, duplicate_index = self._duplicate_plan_index(selected_ids)
+                        self._check_kept_duplicates(selected_ids, index=duplicate_index, focus_id=item['id'])
                         if cancelled():
                             raise OperationCancelled("已停止，当前文件未移到废纸篓 / 回收站")
                         answer = trash_one(self.media, item["id"], item["signature"])

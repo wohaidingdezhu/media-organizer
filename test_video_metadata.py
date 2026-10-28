@@ -10,11 +10,69 @@ import unittest
 from unittest import mock
 
 import media_scan as scan
+import media_gui
 from media_center import center_catalog
 from video_metadata import clean_video_metadata, parse_video_metadata
 
 
 class VideoMetadataTests(unittest.TestCase):
+    def test_both_platforms_prepare_only_requested_media_helpers(self):
+        import sys
+        import media_backend
+        for platform in ('darwin', 'win32'):
+            for images in (False, True):
+                for videos in (False, True):
+                    with self.subTest(platform=platform, images=images, videos=videos), \
+                            mock.patch.object(sys, 'platform', platform), \
+                            mock.patch.object(media_backend, 'helper', side_effect=lambda name: Path(name + '.py')) as helper, \
+                            mock.patch.object(scan, 'helper_available', return_value=True):
+                        media_gui.compile_helpers(mock.Mock(), images, videos)
+                        self.assertEqual([call.args[0] for call in helper.call_args_list],
+                                         (['image_probe'] if images or videos else []) + (['video_cover'] if videos else []))
+
+    @unittest.skipUnless(importlib.util.find_spec('PIL') and importlib.util.find_spec('imageio_ffmpeg'),
+                         'Shared image/FFmpeg dependencies are required; both platform CI jobs install them')
+    def test_scan_controls_photo_analysis_and_video_preview_independently(self):
+        import imageio_ffmpeg
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            source, output = root / 'generated', root / 'reports'
+            source.mkdir()
+            photo, video = source / 'photo.jpg', source / 'ABC-123.mp4'
+            Image.new('RGB', (32, 24), 'red').save(photo)
+            subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-nostdin', '-loglevel', 'error', '-f', 'lavfi',
+                            '-i', 'color=c=blue:s=80x60:d=1', '-c:v', 'mpeg4', str(video)],
+                           capture_output=True, text=True, encoding='utf-8', check=True, timeout=15)
+            before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in source.iterdir()}
+            for image_analysis in (False, True):
+                for video_covers in (False, True):
+                    with self.subTest(image_analysis=image_analysis, video_covers=video_covers):
+                        args = media_gui.scan_arguments([source], output=output, image_analysis=image_analysis,
+                                                        video_covers=video_covers, refresh_media=True)
+                        self.assertEqual('--no-photo-analysis' in args, not image_analysis)
+                        self.assertEqual('--no-video-covers' in args, not video_covers)
+                        with contextlib.redirect_stdout(io.StringIO()):
+                            self.assertEqual(scan.main(args[1:]), 0)
+                        report = sorted(output.glob('scan-*'))[-1]
+                        document = json.loads((report / 'report.json').read_text(encoding='utf-8'))
+                        self.assertEqual(document['image_inspection']['enabled'], image_analysis)
+                        self.assertEqual(document['video_metadata_inspection']['enabled'], video_covers)
+                        self.assertEqual(document['options']['video_covers_enabled'], video_covers)
+                        facts = next(item for item in document['files'] if item['kind'] == '视频').get('video', {})
+                        self.assertEqual(bool(facts), video_covers)
+                        self.assertEqual(document['video_library']['frame_count'], int(video_covers))
+                        if video_covers:
+                            self.assertEqual((facts['width'], facts['height']), (80, 60))
+                            self.assertTrue(document['video_library']['groups'][0]['poster'])
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(scan.main([str(source), '--output', str(output), '--no-image-metadata']), 0)
+            legacy = json.loads((sorted(output.glob('scan-*'))[-1] / 'report.json').read_text(encoding='utf-8'))
+            self.assertFalse(legacy['image_inspection']['enabled'])
+            self.assertFalse(legacy['video_metadata_inspection']['enabled'])
+            self.assertEqual(legacy['video_library']['frame_count'], 0)
+            self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in source.iterdir()})
+
     def test_header_facts_exclude_audio_and_cover_art_and_keep_unknown_duration(self):
         header = '''  Duration: 01:02:03.45, start: 0.000000, bitrate: 100 kb/s
   Stream #0:0: Video: mjpeg, yuv420p, 500x500 (attached pic)

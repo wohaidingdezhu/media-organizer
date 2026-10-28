@@ -129,8 +129,8 @@ def scan_arguments(folders, *, output=REPORTS, image_analysis=True, video_covers
     args = [str(BASE / "media_scan.py"), *map(str, folders), "--output", str(output),
             "--video-rule", video_rule]
     if not image_analysis:
-        args.append("--no-image-metadata")
-    elif not video_covers:
+        args.append("--no-photo-analysis")
+    if not video_covers:
         args.append("--no-video-covers")
     if video_headers:
         args.append("--check-video-headers")
@@ -142,8 +142,8 @@ def scan_arguments(folders, *, output=REPORTS, image_analysis=True, video_covers
 def compile_helpers(log, image_analysis=True, video_covers=True):
     import media_backend
     compiler = shutil.which("swiftc") if sys.platform == "darwin" else None
-    wanted = [("image_probe", "照片解析")] if image_analysis else []
-    if image_analysis and video_covers:
+    wanted = [("image_probe", "照片解析或本地封面")] if image_analysis or video_covers else []
+    if video_covers:
         wanted.append(("video_cover", "视频封面"))
     for name, description in wanted:
         selected = media_backend.helper(name)

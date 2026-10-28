@@ -1394,7 +1394,8 @@ def main(argv=None):
     parser.add_argument("--distance", type=int, choices=range(0, 17), default=6, metavar="0-16", help="图片 dHash 距离阈值，默认 6")
     parser.add_argument("--max-similar", type=int, default=5000, help="相似候选上限，默认 5000")
     parser.add_argument("--no-similar", action="store_true", help="关闭相似图片比较")
-    parser.add_argument("--no-image-metadata", action="store_true", help="跳过照片解析和封面生成，加快扫描；仍有精确文件查重")
+    parser.add_argument("--no-image-metadata", action="store_true", help="兼容选项：跳过照片解析、视频信息及封面生成；仍有精确文件查重")
+    parser.add_argument("--no-photo-analysis", action="store_true", help="仅跳过照片解析、相似检测及照片小图；视频信息和封面仍可独立开启")
     parser.add_argument("--check-video-headers", action="store_true", help="可选：读取少量视频文件头并提示常见容器是否可识别；不验证能否播放")
     parser.add_argument("--no-local-metadata", action="store_true", help="不读取本地 NFO 影片资料和剧照")
     parser.add_argument("--refresh-media", action="store_true", help="重新解析全部媒体，不复用历史解析和小图；查重始终重新完整校验")
@@ -1443,11 +1444,13 @@ def main(argv=None):
         cache = ScanCache(output, roots, fingerprint, enabled=not args.refresh_media)
         duplicates = exact_duplicates(records, issues)
         video_inspection = inspect_video_headers(records, issues, args.check_video_headers)
-        image_inspection = inspect_images(records, media_backend.helper("image_probe"), issues, not args.no_image_metadata, cache=cache)
-        video_metadata_inspection = inspect_video_metadata(records, issues, not args.no_image_metadata and not args.no_video_covers, cache=cache)
+        photo_enabled = not args.no_image_metadata and not args.no_photo_analysis
+        video_enabled = not args.no_image_metadata and not args.no_video_covers
+        image_inspection = inspect_images(records, media_backend.helper("image_probe"), issues, photo_enabled, cache=cache)
+        video_metadata_inspection = inspect_video_metadata(records, issues, video_enabled, cache=cache)
         classify(records, args.video_rule)
         sidecars = associate_sidecars(found_sidecars, records)
-        similarity = similar_images(records, args.distance, args.max_similar, not args.no_similar and not args.no_image_metadata and image_inspection["available"])
+        similarity = similar_images(records, args.distance, args.max_similar, not args.no_similar and photo_enabled and image_inspection["available"])
         video_groups = related_videos(records)
         folder_groups = related_folders(folders_seen, records, sidecars)
         tag_path = output / "library-tags.json"
@@ -1472,16 +1475,16 @@ def main(argv=None):
         directory = output / dt.datetime.now().strftime("scan-%Y%m%d-%H%M%S-%f")
         directory.mkdir(parents=True, exist_ok=False, mode=0o700)
         previews = export_previews(directory, records, similarity, media_backend.helper("image_probe"), issues,
-                                   photo_limit=500 if not args.no_image_metadata and image_inspection["available"] else 0, cache=cache)
+                                   photo_limit=500 if photo_enabled and image_inspection["available"] else 0, cache=cache)
         cover_issue_start = len(issues)
         video_library["poster_count"] = export_local_covers(directory, video_library["groups"], records,
                                                              media_backend.helper("image_probe"), issues,
-                                                             enabled=not args.no_image_metadata, cache=cache)
+                                                             enabled=photo_enabled or video_enabled, cache=cache)
         video_library["frame_count"] = export_video_frame_covers(directory, video_library["groups"], records,
                                                                   media_backend.helper("video_cover"), issues,
                                                                   limit=args.max_video_covers,
-                                                                  enabled=not args.no_image_metadata and not args.no_video_covers, cache=cache)
-        video_library["still_count"] = export_stills(directory, video_library["groups"], records, previews, media_backend.helper("image_probe"), issues, enabled=not args.no_image_metadata and not args.no_local_metadata)
+                                                                  enabled=video_enabled, cache=cache)
+        video_library["still_count"] = export_stills(directory, video_library["groups"], records, previews, media_backend.helper("image_probe"), issues, enabled=photo_enabled and not args.no_local_metadata)
         video_library["poster_count"] += video_library["frame_count"]
         video_library["issues"].extend({"path": item["path"], "reason": item["reason"], "type": "封面"}
                                        for item in issues[cover_issue_start:])
@@ -1495,7 +1498,7 @@ def main(argv=None):
                             "image_backend": media_backend.helper("image_probe").name,
                             "video_backend": media_backend.helper("video_cover").name,
                             "check_video_headers": args.check_video_headers, "max_video_covers": args.max_video_covers,
-                            "video_covers_enabled": not args.no_video_covers and not args.no_image_metadata},
+                            "video_covers_enabled": video_enabled},
                 "image_inspection": image_inspection, "video_inspection": video_inspection,
                 "video_metadata_inspection": video_metadata_inspection, "scan_reuse": cache.summary(),
                 "files": clean_records, "duplicates": duplicates,

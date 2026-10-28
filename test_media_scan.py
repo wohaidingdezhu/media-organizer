@@ -35,9 +35,9 @@ class MediaTests(unittest.TestCase):
             args = media_gui.scan_arguments([first, second], image_analysis=False,
                                             video_headers=True, video_rule="folder")
             self.assertEqual(args[1:3], [str(first), str(second)])
-            self.assertIn("--no-image-metadata", args)
+            self.assertIn("--no-photo-analysis", args)
             self.assertIn("--check-video-headers", args)
-            self.assertEqual(args[-2:], ["--no-image-metadata", "--check-video-headers"])
+            self.assertEqual(args[-2:], ["--no-photo-analysis", "--check-video-headers"])
             self.assertIsNone(media_gui.latest_library(base))
             for name in ("scan-20260101", "scan-20260102"):
                 report = base / name

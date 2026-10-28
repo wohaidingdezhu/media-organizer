@@ -2,6 +2,7 @@ from test_support import make_symlink
 """All sources and destinations here are freshly generated temporary data."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -310,6 +311,115 @@ class OperationTests(unittest.TestCase):
                 trash.assert_not_called()
             self.assertEqual(job['status'], 'stopped')
             self.assertTrue(Path(self.records[0]['path']).is_file())
+
+    def test_batch_checks_only_current_duplicate_group(self):
+        records, groups, selected = [], [], []
+        for number in range(104):
+            paths = []
+            for side in range(2):
+                path = self.source / f'group-{number:03d}-{side}.jpg'
+                path.write_bytes(f'generated-{number}'.encode())
+                info = path.stat()
+                records.append({'path': str(path), 'kind': '照片', 'bytes': info.st_size,
+                    'mtime': info.st_mtime, 'source_signature': file_signature(info),
+                    'suggested_path': f'照片/{path.name}'})
+                paths.append(str(path))
+            groups.append({'paths': paths})
+            selected.append(media_id(paths[0]))
+        document = {'roots': [str(self.source)], 'files': records, 'duplicates': groups}
+        report = self.root / 'report-many'; report.mkdir()
+        media, plan = MediaActions(document), OrganizationPlan(report, document)
+        ops = operations.FileOperations(report, media, lambda: plan)
+        snapshot = {record['id']: record for record in plan.snapshot()['items']}
+        index = ops._duplicate_index(selected, snapshot)
+        with mock.patch.object(media, 'validate', wraps=media.validate) as validate:
+            for identifier in selected:
+                ops._check_kept_duplicates(selected, index=index, focus_id=identifier)
+        self.assertEqual(validate.call_count, 104)
+        # Exercise the real batch orchestration, with the system trash replaced.
+        with mock.patch.object(operations, 'trash_helper', return_value=Path('/synthetic/trash')), \
+             mock.patch.object(operations, 'trash_one', return_value={'trashed_path': 'generated'}) as trash, \
+             mock.patch.object(media, 'validate', wraps=media.validate) as validate, \
+             mock.patch.object(plan, 'snapshot', wraps=plan.snapshot) as read_plan:
+            preview = ops.preview('trash', selected)
+            identifier = ops.start(preview['token'])['id']
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                job = ops.snapshot(identifier)
+                if job['status'] != 'running':
+                    break
+                time.sleep(.01)
+        self.assertEqual(job['status'], 'complete')
+        self.assertEqual(trash.call_count, 104)
+        # With the trash function replaced, items are checked in the preview
+        # and at start; each keeper is checked once at preview and once at runtime.
+        self.assertEqual(validate.call_count, 416)
+        self.assertEqual(read_plan.call_count, 2)
+
+    def test_batch_rechecks_keeper_and_never_counts_another_selected_file(self):
+        third = self.source / 'generated-third.png'
+        third.write_bytes(b'generated retained duplicate')
+        info = third.stat()
+        extra = {'path': str(third), 'kind': '照片', 'bytes': info.st_size,
+                 'mtime': info.st_mtime, 'source_signature': file_signature(info),
+                 'suggested_path': '照片/旅行/' + third.name}
+        document = {**self.document, 'files': self.records + [extra],
+                    'duplicates': [{'paths': [r['path'] for r in self.records + [extra]]}]}
+        report = self.root / 'report-three'; report.mkdir()
+        media, plan = MediaActions(document), OrganizationPlan(report, document)
+        ops = operations.FileOperations(report, media, lambda: plan)
+        selected = [media_id(record['path']) for record in self.records]
+        with mock.patch.object(operations, 'trash_helper', return_value=Path('/synthetic/trash')):
+            preview = ops.preview('trash', selected)
+            calls = []
+            def trash(_media, identifier, _signature):
+                calls.append(identifier)
+                third.unlink()  # Simulate an external change between items.
+                return {'trashed_path': 'generated'}
+            with mock.patch.object(operations, 'trash_one', side_effect=trash):
+                identifier = ops.start(preview['token'])['id']
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    job = ops.snapshot(identifier)
+                    if job['status'] != 'running':
+                        break
+                    time.sleep(.01)
+        self.assertEqual(calls, selected[:1])
+        self.assertEqual(job['status'], 'stopped')
+        self.assertEqual(job['items'][1]['status'], 'failed')
+        self.assertIn(str(third), job['items'][1]['error'])
+        self.assertIn('当前文件未删除', job['items'][1]['error'])
+        self.assertIn('查看完成记录', job['items'][1]['error'])
+        self.assertTrue(all(Path(record['path']).exists() for record in self.records))
+
+    def test_batch_stops_if_plan_is_replaced_between_files(self):
+        with mock.patch.object(operations, 'trash_helper', return_value=Path('/synthetic/trash')):
+            preview = self.ops.preview('trash', self.ids)
+            def trash(_media, identifier, _signature):
+                (self.report / 'organization-plan.json').write_text('invalid generated plan', encoding='utf-8')
+                return {'trashed_path': 'generated'}
+            with mock.patch.object(operations, 'trash_one', side_effect=trash) as trash_mock:
+                job = self.finished(self.ops.start(preview['token'])['id'])
+        self.assertEqual(trash_mock.call_count, 1)
+        self.assertEqual(job['status'], 'stopped')
+        self.assertEqual(job['items'][1]['status'], 'failed')
+        self.assertTrue(all(Path(record['path']).exists() for record in self.records))
+
+    def test_plan_marker_detects_same_size_edit_even_if_mtime_is_restored(self):
+        path = self.report / 'organization-plan.json'
+        original = path.read_bytes()
+        info = path.stat()
+        signature = operations.file_signature
+        # Simulate a platform where the stable identity timestamp does not
+        # change when contents are edited in place.
+        def stable_time(st):
+            return signature(st)[:4] + [0]
+        with mock.patch.object(operations, 'file_signature', side_effect=stable_time):
+            before = self.ops._plan_marker()
+            path.write_bytes(b'X' + original[1:])
+            os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
+            after = self.ops._plan_marker()
+        self.assertNotEqual(before, after)
 
     def test_controller_cannot_quit_during_file_operations(self):
         operations._BATCH_LOCK.acquire()
