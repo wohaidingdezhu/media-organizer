@@ -1,6 +1,7 @@
 """Persistent report-only catalog. File operations always use a fresh report check."""
 import hashlib
 import json
+from collections import Counter
 from pathlib import Path, PureWindowsPath, PurePosixPath
 import re
 
@@ -123,20 +124,28 @@ def catalog(root, query='', folder='', kind='', state='', page=0):
         raise ValueError('资料库筛选无效')
     index, warnings = sync_index(root)
     items = list(index['items'].values())
+    # Parse each folder once and accumulate its ancestors. Counting every
+    # child by rescanning every item makes large directory trees quadratic.
+    folders_by_item = [(item, source_path(item['folder'])) for item in items]
+    folder_counts = Counter()
+    for _, parent in folders_by_item:
+        folder_counts[parent] += 1
+        folder_counts.update(parent.parents)
     query = query.strip().casefold()
-    selected = [item for item in items if (not kind or item['kind'] == kind) and
+    selected_folder = source_path(folder) if folder else None
+    selected = [item for item, parent in folders_by_item if (not kind or item['kind'] == kind) and
                 (not state or item['state'] == state) and
-                (not folder or source_path(folder) == source_path(item['folder']) or source_path(folder) in source_path(item['folder']).parents) and
+                (not selected_folder or selected_folder == parent or selected_folder in parent.parents) and
                 (not query or query in item['path'].casefold())]
     selected.sort(key=lambda item: (item['path'].casefold(), item['path']))
     pages = max(1, (len(selected) + 49) // 50)
     page = min(page, pages - 1)
     # Folder cards show immediate children, retaining full paths for same-name folders.
-    parents = {source_path(item['folder']) for item in items}
+    parents = {parent for _, parent in folders_by_item}
     roots = sorted({item['root'] for item in items if item['root']})
     children = set()
     if folder:
-        base = source_path(folder)
+        base = selected_folder
         for parent in parents:
             if base in parent.parents:
                 children.add(str(base / parent.relative_to(base).parts[0]))
@@ -145,6 +154,6 @@ def catalog(root, query='', folder='', kind='', state='', page=0):
     return {'items': selected[page * 50:page * 50 + 50], 'total': len(selected), 'page': page, 'pages': pages,
             'all_count': len(items), 'scans': len(index['scans']), 'warnings': warnings,
             'folders': [{'path': child, 'name': source_path(child).name or child,
-                         'count': sum(source_path(child) == source_path(item['folder']) or source_path(child) in source_path(item['folder']).parents for item in items)}
+                         'count': folder_counts[source_path(child)]}
                         for child in sorted(children)],
             'message': '长期清单来自扫描快照；未扫描到不表示删除，操作原文件前仍核对扫描身份。'}

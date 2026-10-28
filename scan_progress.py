@@ -3,7 +3,7 @@ import json
 import os
 
 PREFIX = '@@MEDIA_PROGRESS@@'
-LABELS = {'prepare': '准备扫描', 'discover': '清点文件', 'hash': '校验精确重复',
+LABELS = {'prepare': '准备扫描', 'discover': '清点文件', 'hash_sample': '筛选同大小文件', 'hash': '校验精确重复',
           'hash_file': '完整校验当前文件', 'photos': '读取照片信息', 'videos': '读取视频信息',
           'similar': '比较相似照片', 'metadata': '整理本地影片资料', 'previews': '生成照片预览',
           'posters': '读取本地封面', 'frames': '生成视频封面', 'export': '保存资料库',

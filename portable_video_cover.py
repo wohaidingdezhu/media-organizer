@@ -7,6 +7,7 @@ from pathlib import Path
 from portable_image_probe import batch
 import portable_fs as os
 from video_metadata import parse_video_metadata
+from system_integration import hidden_process_options
 
 
 def dark_frame(frame):
@@ -34,7 +35,7 @@ def probe(path, thumbnail=None):
         before = os.fstat(source)
         deadline = time.monotonic() + 23
         metadata = subprocess.run([executable, "-nostdin", "-hide_banner", "-i", input_path],
-                                  capture_output=True, timeout=8, **options)
+                                  capture_output=True, timeout=8, **options, **hidden_process_options())
         facts = parse_video_metadata(metadata.stderr)
         if not thumbnail:
             from media_actions import checked_stat, file_signature
@@ -61,7 +62,7 @@ def probe(path, thumbnail=None):
                                          "-i", input_path, "-frames:v", "1", "-an",
                                          "-vf", "scale=512:512:force_original_aspect_ratio=decrease",
                                          "-f", "image2pipe", "-vcodec", "png", "pipe:1"],
-                                        capture_output=True, timeout=min(7, remaining), **options)
+                                        capture_output=True, timeout=min(7, remaining), **options, **hidden_process_options())
             except subprocess.TimeoutExpired:
                 continue
             if not result.returncode and result.stdout.startswith(b"\x89PNG\r\n\x1a\n"):
