@@ -51,6 +51,14 @@ def attachment_manifests(document):
     for record in records:
         if record.get('kind') == '照片':
             path = source_path(record['path'])
+            # Only stills and generic cover candidates can be used or reported
+            # as ambiguous below. Indexing every ordinary photo made a folder
+            # with many photos and videos repeatedly traverse all its photos.
+            stem = path.stem.casefold()
+            still = path.parent.name.casefold() == 'extrafanart' or stem in {'fanart', 'backdrop'} or stem.endswith('-fanart')
+            generic_cover = stem in {'poster', 'folder', 'cover', '封面'} or stem.endswith(('-poster', '-cover'))
+            if not (still or generic_cover):
+                continue
             owner = path.parent.parent if path.parent.name.casefold() == 'extrafanart' else path.parent
             art[str(owner)].append(record)
     for item in document.get('sidecars', []):

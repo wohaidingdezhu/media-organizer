@@ -182,6 +182,24 @@ def full_hash(record, progress=None):
     return digest.hexdigest()
 
 
+def sample_hash(record):
+    """Read both ends only to rule out unequal files, never to prove a duplicate."""
+    descriptor = os.open(record['path'], os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+    with os.fdopen(descriptor, 'rb') as source:
+        before = os.fstat(source.fileno())
+        if not stat.S_ISREG(before.st_mode) or signature(before) != record['_signature']:
+            raise ValueError('文件自扫描开始后发生变化，已排除查重')
+        size = 256 * 1024
+        first = source.read(size)
+        source.seek(-size, os.SEEK_END)
+        last = source.read(size)
+        if len(first) != size or len(last) != size or signature(os.fstat(source.fileno())) != record['_signature']:
+            raise ValueError('抽样过程中发生变化，已排除查重')
+    if signature(os.stat(record['path'], follow_symlinks=False)) != record['_signature']:
+        raise ValueError('抽样后文件已变化，已排除查重')
+    return hashlib.sha256(first + last).digest()
+
+
 def exact_duplicates(records, issues):
     by_size, by_digest = collections.defaultdict(list), collections.defaultdict(list)
     for record in records:
@@ -192,22 +210,49 @@ def exact_duplicates(records, issues):
             issue(issues, record["path"], "空媒体文件，请人工检查")
         else:
             by_size[record["bytes"]].append(record)
-    candidates = [r for group in by_size.values() if len(group) > 1 for r in group]
+    size_candidates = [r for group in by_size.values() if len(group) > 1 for r in group]
+    sampled = [r for r in size_candidates if r['bytes'] > 1024 * 1024]
+    sample_groups = collections.defaultdict(list)
+    scan_progress('hash_sample', 0, len(sampled))
+    last_progress = time.monotonic()
+    for index, record in enumerate(sampled, 1):
+        try:
+            sample_groups[(record['bytes'], sample_hash(record))].append(record)
+        except (OSError, ValueError) as error:
+            record['hash_status'] = '读取失败或文件变化：未确认'
+            issue(issues, record['path'], str(error))
+        now = time.monotonic()
+        if index == 1 or index == len(sampled) or now - last_progress >= .5:
+            scan_progress('hash_sample', index, len(sampled), record['name'])
+            last_progress = now
+    candidates = [r for r in size_candidates if r['bytes'] <= 1024 * 1024]
+    for group in sample_groups.values():
+        if len(group) > 1:
+            candidates.extend(group)
+        else:
+            group[0]['hash_status'] = '首尾抽样无匹配：无需完整哈希即可排除重复'
     scan_progress('hash', 0, len(candidates))
-    print(f"媒体清单 {len(records):,} 项；需完整校验 {len(candidates):,} 个同大小文件（共 {size_text(sum(r['bytes'] for r in candidates))}）。", flush=True)
+    print(f"媒体清单 {len(records):,} 项；首尾抽样仅排除不同文件，需完整校验 {len(candidates):,} 个文件（共 {size_text(sum(r['bytes'] for r in candidates))}）。", flush=True)
     for group in by_size.values():
         if len(group) == 1:
             group[0]["hash_status"] = "大小唯一：无需哈希即可排除精确重复"
+    last_progress = time.monotonic()
     for index, record in enumerate(candidates, 1):
-        print(f"内容校验 {index}/{len(candidates)}：{record['name']}", flush=True)
+        large = record['bytes'] >= 64 * 1024 * 1024
+        if index == 1 or index % 50 == 0 or index == len(candidates) or large:
+            print(f"内容校验 {index}/{len(candidates)}：{record['name']}", flush=True)
         try:
-            record["sha256"] = full_hash(record, lambda amount, total: scan_progress('hash_file', amount, total, record['name']))
+            report_file = (lambda amount, total: scan_progress('hash_file', amount, total, record['name'])) if large else None
+            record["sha256"] = full_hash(record, report_file)
             record["hash_status"] = "完整 SHA-256 已校验"
             by_digest[(record["bytes"], record["sha256"])].append(record)
         except (OSError, ValueError) as error:
             record["hash_status"] = "读取失败或文件变化：未确认"
             issue(issues, record["path"], str(error))
-        scan_progress('hash', index, len(candidates), record['name'])
+        now = time.monotonic()
+        if index == 1 or index == len(candidates) or large or now - last_progress >= .5:
+            scan_progress('hash', index, len(candidates), record['name'])
+            last_progress = now
     return [{"sha256": key[1], "bytes_each": key[0], "paths": [r["path"] for r in group],
              "redundant_logical_bytes": key[0] * (len(group) - 1)}
             for key, group in by_digest.items() if len(group) > 1]
@@ -444,28 +489,48 @@ def inspect_video_metadata(records, issues, enabled=True, cache=None):
         return summary
     videos = [record for record in records if record['kind'] == '视频' and record['bytes'] and not record['hardlink_to']]
     scan_progress('videos', 0, len(videos))
-    worker = ImageProbeWorker(helper)
-    try:
-        for index, record in enumerate(videos, 1):
-            if index == 1 or index % 50 == 0 or index == len(videos):
-                print(f'读取视频信息 {index}/{len(videos)}…', flush=True)
-            try:
-                if signature(os.stat(record['path'], follow_symlinks=False)) != record['_signature']:
-                    raise ValueError('视频自扫描后发生变化')
+    workers = [ImageProbeWorker(helper) for _ in range(2)]
+    cache_lock = threading.Lock()
+    def inspect_one(item):
+        worker, record = item
+        try:
+            if signature(os.stat(record['path'], follow_symlinks=False)) != record['_signature']:
+                raise ValueError('视频自扫描后发生变化')
+            # Cache counters and lookups are shared by both workers.
+            with cache_lock:
                 facts = cache.video_metadata(record) if cache else None
-                if facts is None:
-                    facts = clean_video_metadata(worker.request(record['path'], timeout=12))
-                if signature(os.stat(record['path'], follow_symlinks=False)) != record['_signature']:
-                    raise ValueError('读取视频信息时文件发生变化')
-                if not facts:
-                    raise ValueError('未读取到有效视频时长或尺寸')
-                record['video'] = facts
-                summary['inspected'] += 1
-            except (OSError, ValueError, subprocess.TimeoutExpired) as error:
-                issue(issues, record['path'], f'视频信息未读取，仍保留文件查重结果：{error}')
-            scan_progress('videos', index, len(videos), record['name'])
+            if facts is None:
+                facts = clean_video_metadata(worker.request(record['path'], timeout=12))
+            if signature(os.stat(record['path'], follow_symlinks=False)) != record['_signature']:
+                raise ValueError('读取视频信息时文件发生变化')
+            if not facts:
+                raise ValueError('未读取到有效视频时长或尺寸')
+            return facts, ''
+        except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+            return None, str(error)
+    try:
+        # Bounded batches prevent a large folder from queuing thousands of
+        # requests or delaying a user cancellation behind an entire library.
+        last_progress = time.monotonic()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            for start in range(0, len(videos), 2):
+                batch = videos[start:start + 2]
+                assignments = [(workers[(start + offset) % 2], record) for offset, record in enumerate(batch)]
+                for index, (record, (facts, error)) in enumerate(zip(batch, pool.map(inspect_one, assignments)), start + 1):
+                    if error:
+                        issue(issues, record['path'], f'视频信息未读取，仍保留文件查重结果：{error}')
+                    else:
+                        record['video'] = facts
+                        summary['inspected'] += 1
+                    if index == 1 or index % 50 == 0 or index == len(videos):
+                        print(f'读取视频信息 {index}/{len(videos)}…', flush=True)
+                    now = time.monotonic()
+                    if index == 1 or index == len(videos) or now - last_progress >= .5:
+                        scan_progress('videos', index, len(videos), record['name'])
+                        last_progress = now
     finally:
-        worker.close()
+        for worker in workers:
+            worker.close()
     return summary
 
 
@@ -826,25 +891,30 @@ class BKTree:
 
     def add(self, value, record):
         if self.root is None:
-            self.root = [value, [record], {}]
+            self.root = [value, [record], {}, record.get('sha256') or None]
             return
         node = self.root
         while True:
             distance = bin(value ^ node[0]).count("1")
             if distance == 0:
                 node[1].append(record)
+                if node[3] != record.get('sha256'):
+                    node[3] = None
                 return
             if distance not in node[2]:
-                node[2][distance] = [value, [record], {}]
+                node[2][distance] = [value, [record], {}, record.get('sha256') or None]
                 return
             node = node[2][distance]
 
-    def query(self, value, threshold):
+    def query(self, value, threshold, exclude_sha=''):
         stack = [self.root] if self.root else []
         while stack:
             node = stack.pop()
             distance = bin(value ^ node[0]).count("1")
-            if distance <= threshold:
+            # Skip an entire identical-hash bucket: its members are exact
+            # duplicates, not similar-photo candidates. Mixed buckets retain
+            # their original order and still compare each individual record.
+            if distance <= threshold and not (exclude_sha and node[3] == exclude_sha):
                 for record in node[1]:
                     yield distance, record
             stack.extend(child for d, child in node[2].items() if distance - threshold <= d <= distance + threshold)
@@ -860,7 +930,7 @@ def similar_images(records, threshold, limit, enabled):
     for index, record in enumerate(eligible, 1):
         value = int(record["image"]["dhash"], 16)
         ratio = record["image"]["width"] / record["image"]["height"]
-        for distance, other in tree.query(value, threshold):
+        for distance, other in tree.query(value, threshold, record.get('sha256', '')):
             if record["sha256"] and record["sha256"] == other["sha256"]:
                 continue
             other_ratio = other["image"]["width"] / other["image"]["height"]
