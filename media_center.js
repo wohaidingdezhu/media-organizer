@@ -431,5 +431,9 @@ function switchCenterView(next){if(window.parent!==window&&dashboardLink)window.
 if(window.parent!==window&&dashboardLink){$('center-rescan').hidden=false;$('center-rescan').onclick=()=>{window.parent.postMessage({type:'media-rescan'},new URL(dashboardLink.href).origin);message('已请求重新扫描当前资料库的来源目录；扫描期间可继续浏览。');};}
 $('center-prev').onclick=()=>turnPage(-1);$('center-next').onclick=()=>turnPage(1);$('center-refresh').onclick=async()=>{for(const [id,job]of previewWork)if(job.state==='failed')previewWork.delete(id);previewStatus();let failure='';if(catalog?.missing_files){try{await request('api/media/availability/recheck',{});}catch(error){failure='无法重新检查暂时隐藏的文件：'+error.message;}}const refreshed=await load();if(failure)message(failure);return refreshed;};
 function navigate(){const next=location.hash.slice(1);view=titles[next]?next:'home';$('query').value='';$('search-scope').value='view';$('media-kind').value=$('filter-year').value=$('filter-genre').value=$('filter-duration').value=$('filter-resolution').value='';$('media-order').value='recent';$('include-subfolders').checked=false;manage=false;resetLocation();if($('media-detail').open)$('media-detail').close();render();}
-window.addEventListener('hashchange',navigate);navigate();load();
+window.addEventListener('hashchange',navigate);navigate();
+// The cross-scan gallery opens only a recorded media id in its own report.
+// Do not interrupt a user who navigated or started editing while loading.
+const initialView=view,requestedFile=location.search?new URLSearchParams(location.search).get('open_file'):'';
+load().then(result=>{if(!result||!requestedFile||!/^[0-9a-f]{64}$/.test(requestedFile)||view!==initialView||busy||manage||selected.size||reviewSelected.size||$('media-detail').open||$('collection-form').open)return;const item=catalog.items.find(media=>media.files.some(file=>file.id===requestedFile));if(item)openDetail(item,[item]);else message('该文件已不在这份扫描结果中，请刷新或重新扫描。');});
 }

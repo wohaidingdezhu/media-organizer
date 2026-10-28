@@ -59,6 +59,8 @@ class VideoMetadataTests(unittest.TestCase):
                         self.assertEqual(document['image_inspection']['enabled'], image_analysis)
                         self.assertEqual(document['video_metadata_inspection']['enabled'], video_covers)
                         self.assertEqual(document['options']['video_covers_enabled'], video_covers)
+                        catalog = center_catalog(document, {'favorites': {}, 'collections': {}, 'recent': []})
+                        self.assertEqual(catalog['preview_policy'], {'images': image_analysis, 'videos': video_covers})
                         facts = next(item for item in document['files'] if item['kind'] == '视频').get('video', {})
                         self.assertEqual(bool(facts), video_covers)
                         self.assertEqual(document['video_library']['frame_count'], int(video_covers))
@@ -71,6 +73,9 @@ class VideoMetadataTests(unittest.TestCase):
             self.assertFalse(legacy['image_inspection']['enabled'])
             self.assertFalse(legacy['video_metadata_inspection']['enabled'])
             self.assertEqual(legacy['video_library']['frame_count'], 0)
+            legacy.pop('options')
+            catalog = center_catalog(legacy, {'favorites': {}, 'collections': {}, 'recent': []})
+            self.assertEqual(catalog['preview_policy'], {'images': False, 'videos': False})
             self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in source.iterdir()})
 
     def test_header_facts_exclude_audio_and_cover_art_and_keep_unknown_duration(self):

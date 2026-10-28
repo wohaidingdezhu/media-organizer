@@ -14,6 +14,29 @@ def source_path(value):
     return PureWindowsPath(value) if PureWindowsPath(value).is_absolute() else PurePosixPath(value)
 
 
+def within_scan(path, roots):
+    """A scan of a parent or child directory only covers files under it."""
+    source = source_path(path)
+    return any(source_path(root) in source.parents for root in roots)
+
+
+def unavailable_during_discovery(document):
+    """Only discovery failures make an omitted old path inconclusive.
+
+    Decoder and hash errors affect files already discovered and must not make
+    unrelated paths in their parent directory look inaccessible.
+    """
+    prefixes = ('无法读取目录：', '目录状态读取失败：', '云端占位目录，',
+                '文件状态读取失败：', '云端占位文件，')
+    issues = document.get('issues', [])
+    if not isinstance(issues, list):
+        return []
+    return [source_path(item['path']) for item in issues
+            if isinstance(item, dict) and isinstance(item.get('path'), str)
+            and source_path(item['path']).is_absolute() and isinstance(item.get('reason'), str)
+            and item['reason'].startswith(prefixes)]
+
+
 def sync_index(root):
     root = fs.private_data_path(root)
     with data_lock(root):
@@ -36,7 +59,7 @@ def sync_index(root):
                 finally:
                     fs.close(parent)
                 previous = index['scans'].get(name)
-                if isinstance(previous, dict) and previous.get('stamp') == stamp:
+                if isinstance(previous, dict) and previous.get('stamp') == stamp and previous.get('preview_schema') == 2:
                     continue
                 raw = fs.read_private_file(root, (name, 'report.json'))
                 digest = hashlib.sha256(raw).hexdigest()
@@ -44,6 +67,19 @@ def sync_index(root):
                 roots, records = document['roots'], document['files']
                 if not isinstance(roots, list) or not all(isinstance(value, str) for value in roots) or not isinstance(records, list):
                     raise ValueError('报告清单无效')
+                video_previews = {}
+                library = document.get('video_library', {})
+                groups = library.get('groups', []) if isinstance(library, dict) else []
+                if isinstance(groups, list):
+                    for group in groups:
+                        if not isinstance(group, dict):
+                            continue
+                        poster, files = group.get('poster'), group.get('files', [])
+                        if not isinstance(poster, str) or not re.fullmatch(r'covers/[A-Za-z0-9_-]+\.png', poster) or not isinstance(files, list):
+                            continue
+                        for item in files:
+                            if isinstance(item, dict) and isinstance(item.get('path'), str):
+                                video_previews[item['path']] = poster
                 prepared = {}
                 for record in records:
                     path = record.get('path') if isinstance(record, dict) else None
@@ -59,15 +95,21 @@ def sync_index(root):
                         'kind': record['kind'], 'bytes': record['bytes'], 'report_id': name, 'state': 'new' if key not in index['items'] else 'changed' if (index['items'][key].get('sha256') != record.get('sha256') or index['items'][key].get('bytes') != record['bytes'] or index['items'][key].get('mtime') != record.get('mtime')) else 'seen',
                         'mtime': record.get('mtime'),
                         'created_at': document.get('created_at', ''), 'sha256': record.get('sha256', ''),
-                        'preview': document.get('previews', {}).get(path, ''), 'restored': bool(document.get('restored_snapshot'))}
-                # Keep the newest snapshot for each path, including disks not currently attached.
+                        'preview': (document.get('previews', {}).get(path, '') if record['kind'] == '照片' else video_previews.get(path, '')),
+                        'restored': bool(document.get('restored_snapshot'))}
+                # An old root may be a parent or child of a newer selected root.
+                # Only update records actually covered by this scan, and never
+                # infer absence inside a directory that could not be read.
+                unavailable = unavailable_during_discovery(document)
                 for key, old in index['items'].items():
-                    if (old.get('root') in roots and old.get('report_id', '') < name and key not in prepared):
+                    old_path = source_path(old['path'])
+                    if (within_scan(old['path'], roots) and old.get('report_id', '') < name and key not in prepared
+                            and not any(path == old_path or path in old_path.parents for path in unavailable)):
                         old['state'] = 'not_seen'
                 for key, item in prepared.items():
                     if key not in index['items'] or index['items'][key].get('report_id', '') <= name:
                         index['items'][key] = item
-                index['scans'][name] = {'sha256': digest, 'stamp': stamp}
+                index['scans'][name] = {'sha256': digest, 'stamp': stamp, 'preview_schema': 2}
                 changed = True
             except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
                 warnings.append(f'{name} 未纳入长期索引：{error}')
