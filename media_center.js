@@ -1,4 +1,6 @@
 // Shared cards and detail navigation. Browsing does not modify original media.
+// Reuse locale setup across comparisons, including same-date camera imports.
+const centerNameCompare=new Intl.Collator('zh-CN',{numeric:true}).compare;
 function centerYear(item){const value=String(item.metadata.year||item.metadata.date_original||item.metadata.date||item.metadata.date_taken||'');return /^\d{4}(?:$|[-:/ ])/.test(value)?value.slice(0,4):'';}
 function centerFolderIds(directories,path,recursive=false){
   const ids=new Set(),visited=new Set(),pending=[path];
@@ -14,7 +16,7 @@ function centerFilter(items,{view='home',query='',global=false,kind='',tag='',id
   const q=query.trim().normalize('NFC').toLocaleLowerCase();
   let rows=items.filter(item=>(!kind||item.kind===kind)&&(!tag||item.tags.includes(tag))&&(!ids||ids.has(item.id))&&(!folder||item.folder===folder)&&(!year||centerYear(item)===year)&&(!genre||(item.metadata.genres||[]).includes(genre))&&
     (global?true:view==='movies'?item.kind==='movie':view==='videos'?item.kind==='video':view==='photos'?item.kind==='photo':view==='favorites'?item.favorite:true)&&centerMatches(item,q)&&(!(duration||resolution)||item.kind!=='photo'&&item.files.some(file=>centerVideoMatch(file,duration,resolution))));
-  const name=(a,b)=>a.title.localeCompare(b.title,'zh-CN',{numeric:true})||a.id.localeCompare(b.id);
+  const name=(a,b)=>centerNameCompare(a.title,b.title)||a.id.localeCompare(b.id);
   return [...rows].sort((a,b)=>order==='name'?name(a,b):order==='size'?b.bytes-a.bytes||name(a,b):order==='oldest'?a.mtime-b.mtime||name(a,b):b.mtime-a.mtime||name(a,b));
 }
 function centerTimelineOrder(rows,order='recent'){
@@ -23,7 +25,7 @@ function centerTimelineOrder(rows,order='recent'){
 function centerReviewGroups(review,{mode='exact',query='',kind='',year='',genre='',order='recent',duration='',resolution='',owners=new Map()}={}){
   const q=query.trim().normalize('NFC').toLocaleLowerCase();
   const rows=(review?.[mode]||[]).filter(group=>group.files.some(file=>{const owner=owners.get(file.owner);return (!(duration||resolution)||file.kind!=='photo'&&centerVideoMatch(file,duration,resolution))&&(!kind||file.media_kind===kind)&&(!year||centerYear(file)===year)&&(!genre||(file.metadata.genres||[]).includes(genre))&&centerMatches({title:owner?.title||file.name,files:[file],tags:owner?.tags||[],metadata:file.metadata||{},personal:owner?.personal||{note:''}},q);}));
-  const name=(a,b)=>(a.files[0]?.name||'').localeCompare(b.files[0]?.name||'','zh-CN',{numeric:true})||(a.files[0]?.id||'').localeCompare(b.files[0]?.id||'');
+  const name=(a,b)=>centerNameCompare(a.files[0]?.name||'',b.files[0]?.name||'')||(a.files[0]?.id||'').localeCompare(b.files[0]?.id||'');
   const stamp=(group,oldest=false)=>group.files.reduce((value,file)=>oldest?Math.min(value,file.mtime||0):Math.max(value,file.mtime||0),oldest?Infinity:0);
   const bytes=group=>group.files.reduce((value,file)=>Math.max(value,file.bytes||0),0);
   return rows.sort((a,b)=>order==='name'?name(a,b):order==='size'?bytes(b)-bytes(a)||name(a,b):order==='oldest'?stamp(a,true)-stamp(b,true)||name(a,b):stamp(b)-stamp(a)||name(a,b));
@@ -215,7 +217,7 @@ function enterDirectory(path){browseTo({directory:path});}
 function renderDirectories(paths){
   const nodes=catalog.directories||{},kind=$('media-kind').value,year=$('filter-year').value,genre=$('filter-genre').value,duration=$('filter-duration').value,resolution=$('filter-resolution').value;
   const rows=paths.map(path=>{const ids=centerFolderIds(nodes,path,true);return {path,items:centerFilter([...ids].map(id=>byId.get(id)).filter(Boolean),{kind,year,genre,duration,resolution})};}).filter(row=>!(kind||year||genre||duration||resolution)||row.items.length);
-  rows.sort((a,b)=>a.path.localeCompare(b.path,'zh-CN',{numeric:true}));const pages=Math.max(1,Math.ceil(rows.length/galleryPageSize));folderPage=Math.max(0,Math.min(folderPage,pages-1));
+  rows.sort((a,b)=>centerNameCompare(a.path,b.path));const pages=Math.max(1,Math.ceil(rows.length/galleryPageSize));folderPage=Math.max(0,Math.min(folderPage,pages-1));
   const wall=make('div','wall video-wall');for(const row of rows.slice(folderPage*galleryPageSize,folderPage*galleryPageSize+galleryPageSize)){const card=collectionCard(nodes[row.path].name,row.items.map(item=>item.id),()=>enterDirectory(row.path),'',row.path);card.classList.add('directory-card');wall.append(card);}$('center-content').append(wall);
   if(rows.length>galleryPageSize){const pager=make('div','pager'),previous=button('上一页文件夹',()=>turnPage(-1,true)),next=button('下一页文件夹',()=>turnPage(1,true));previous.disabled=folderPage===0;next.disabled=folderPage>=pages-1;pager.append(previous,make('span','muted',`文件夹第 ${folderPage+1}/${pages} 页 · 共 ${rows.length} 个`),next);$('center-content').append(pager);}
   if(!rows.length&&!directory)$('center-content').append(make('p','empty','没有匹配的媒体目录。试试清除筛选，或从“媒体库”添加目录并扫描。'));return rows.length;
@@ -311,7 +313,7 @@ function render(){if(!catalog)return;announceCenterView();syncMediaFilters();pre
     }
     for(const [id,item]of Object.entries(catalog.state.collections))tile(item.name,item.ids,()=>browseTo({collection:id}));
     for(const [path,ids]of Object.entries(catalog.folders))tile(sourceFolder(path),ids,()=>browseTo({album:path}),path);
-    const order=$('media-order').value,name=(a,b)=>a.name.localeCompare(b.name,'zh-CN',{numeric:true});tiles.sort((a,b)=>order==='name'?name(a,b):order==='size'?b.bytes-a.bytes||name(a,b):order==='oldest'?a.oldest-b.oldest||name(a,b):b.mtime-a.mtime||name(a,b));
+    const order=$('media-order').value,name=(a,b)=>centerNameCompare(a.name,b.name);tiles.sort((a,b)=>order==='name'?name(a,b):order==='size'?b.bytes-a.bytes||name(a,b):order==='oldest'?a.oldest-b.oldest||name(a,b):b.mtime-a.mtime||name(a,b));
     const tilePages=Math.max(1,Math.ceil(tiles.length/galleryPageSize));page=Math.max(0,Math.min(page,tilePages-1));grid.append(...tiles.slice(page*galleryPageSize,page*galleryPageSize+galleryPageSize).map(tile=>tile.create()));$('center-content').append(grid);$('center-pager').hidden=!tiles.length;$('center-page').textContent=`第 ${page+1}/${tilePages} 页 · ${tiles.length} 个相册与合集`;$('center-prev').disabled=page===0;$('center-next').disabled=page>=tilePages-1;
     if(!tiles.length)$('center-content').append(make('p','empty','没有匹配的相册与合集。试试清除筛选，或添加媒体目录。'));syncSelection();return;
   }
