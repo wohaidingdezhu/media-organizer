@@ -343,12 +343,21 @@ class OperationTests(unittest.TestCase):
              mock.patch.object(plan, 'snapshot', wraps=plan.snapshot) as read_plan:
             preview = ops.preview('trash', selected)
             identifier = ops.start(preview['token'])['id']
-            deadline = time.monotonic() + 15
+            # This performs over 200 durable journal writes for 104 files.
+            # Busy Windows CI disks can legitimately exceed 15 seconds; this
+            # is a correctness test, not a storage-speed benchmark.
+            deadline = time.monotonic() + 60
             while time.monotonic() < deadline:
                 job = ops.snapshot(identifier)
                 if job['status'] != 'running':
                     break
                 time.sleep(.01)
+            if job['status'] == 'running':
+                ops.request_stop(identifier)
+                stop_deadline = time.monotonic() + 30
+                while time.monotonic() < stop_deadline and ops.snapshot(identifier)['status'] == 'running':
+                    time.sleep(.05)
+                self.fail('批量操作超时，已请求安全停止')
         self.assertEqual(job['status'], 'complete')
         self.assertEqual(trash.call_count, 104)
         # With the trash function replaced, items are checked in the preview
