@@ -458,8 +458,8 @@ def inspect_images(records, helper, issues, enabled, cache=None):
     # Keep only a few requests queued so Ctrl+C does not wait for a large backlog.
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:
-            for start in range(0, len(images), 4):
-                batch = images[start:start + 4]
+            for start in range(0, len(images), 2):
+                batch = images[start:start + 2]
                 assignments = [(workers[(start + offset) % 2], record) for offset, record in enumerate(batch)]
                 for index, (record, (metadata, error)) in enumerate(zip(batch, pool.map(inspect_one, assignments)), start + 1):
                     scan_progress('photos', index, len(images), record['name'])
@@ -1004,8 +1004,8 @@ def export_previews(directory, records, similarity, helper, issues, displayed_pa
     scan_progress('previews', 0, len(items))
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:
-            for start in range(0, len(items), 4):
-                for path, relative, error in pool.map(export_one, items[start:start + 4]):
+            for start in range(0, len(items), 2):
+                for path, relative, error in pool.map(export_one, items[start:start + 2]):
                     completed += 1
                     scan_progress('previews', completed, len(items), Path(path).name)
                     if error:
@@ -1028,18 +1028,25 @@ def export_local_covers(directory, groups, records, helper, issues, enabled=True
     for group in groups:
         group["poster"] = ""
         group["poster_source"] = ""
+    if not enabled or not helper_available(helper):
+        scan_progress('posters', 0, 0)
+        return 0
     candidates = local_cover_candidates(groups, records)
-    scan_progress('posters', 0, len(candidates))
-    if not enabled or not any(candidates) or not helper_available(helper):
+    pending = [(index, options) for index, options in enumerate(candidates) if options]
+    scan_progress('posters', 0, len(pending))
+    if not pending:
         return 0
     cover_dir = directory / "covers"
     cover_dir.mkdir(mode=0o700)
     workers = [ImageProbeWorker(helper) for _ in range(2)]
+    cancelled = threading.Event()
     count = 0
     def export_one(item):
         index, options = item
         destination = cover_dir / f"poster-{index + 1:05d}.png"
         for record in options:
+            if cancelled.is_set():
+                return index, '', '', ''
             try:
                 before = os.stat(record["path"], follow_symlinks=False)
                 if not stat.S_ISREG(before.st_mode) or signature(before) != record["_signature"]:
@@ -1059,14 +1066,21 @@ def export_local_covers(directory, groups, records, helper, issues, enabled=True
         return index, "", "", last_error if options else ""
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:
-            for completed, (index, relative, source, error) in enumerate(pool.map(export_one, enumerate(candidates)), 1):
-                scan_progress('posters', completed, len(candidates))
-                groups[index]["poster"] = relative
-                groups[index]["poster_source"] = source
-                if relative:
-                    count += 1
-                elif error:
-                    issue(issues, candidates[index][0]["path"], error)
+            completed = 0
+            try:
+                for start in range(0, len(pending), 2):
+                    for index, relative, source, error in pool.map(export_one, pending[start:start + 2]):
+                        completed += 1
+                        scan_progress('posters', completed, len(pending))
+                        groups[index]["poster"] = relative
+                        groups[index]["poster_source"] = source
+                        if relative:
+                            count += 1
+                        elif error:
+                            issue(issues, candidates[index][0]["path"], error)
+            except BaseException:
+                cancelled.set()
+                raise
     finally:
         for worker in workers:
             worker.close()
@@ -1107,11 +1121,14 @@ def export_video_frame_covers(directory, groups, records, helper, issues, limit=
         return count
     scan_progress('frames', 0, len(pending))
     workers = [ImageProbeWorker(helper) for _ in range(2)]
+    cancelled = threading.Event()
     def export_one(item):
         index, options = item
         destination = cover_dir / f"frame-{index + 1:05d}.png"
         last_error = ""
         for record in options:
+            if cancelled.is_set():
+                return index, '', '', ''
             try:
                 before = os.stat(record["path"], follow_symlinks=False)
                 if not stat.S_ISREG(before.st_mode) or signature(before) != record["_signature"]:
@@ -1130,16 +1147,23 @@ def export_video_frame_covers(directory, groups, records, helper, issues, limit=
         return index, "", "", last_error
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:
-            for completed, (index, relative, source, error) in enumerate(pool.map(export_one, pending), 1):
-                scan_progress('frames', completed, len(pending))
-                if relative:
-                    groups[index]["poster"] = relative
-                    groups[index]["poster_source"] = "视频截帧：" + source
-                    count += 1
-                else:
-                    groups[index]["poster_status"] = "无法生成视频封面；视频是否可播放仍需人工确认"
-                    if error:
-                        issue(issues, groups[index]["files"][0]["path"], f"视频封面未生成：{error}")
+            completed = 0
+            try:
+                for start in range(0, len(pending), 2):
+                    for index, relative, source, error in pool.map(export_one, pending[start:start + 2]):
+                        completed += 1
+                        scan_progress('frames', completed, len(pending))
+                        if relative:
+                            groups[index]["poster"] = relative
+                            groups[index]["poster_source"] = "视频截帧：" + source
+                            count += 1
+                        else:
+                            groups[index]["poster_status"] = "无法生成视频封面；视频是否可播放仍需人工确认"
+                            if error:
+                                issue(issues, groups[index]["files"][0]["path"], f"视频封面未生成：{error}")
+            except BaseException:
+                cancelled.set()
+                raise
     finally:
         for worker in workers:
             worker.close()
