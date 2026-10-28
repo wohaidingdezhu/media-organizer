@@ -13,32 +13,43 @@ function reportOverlay(open){
 function reportTrashOpen(ids,onClose,summary=''){
   if(!Array.isArray(ids)||ids.length<1||ids.length>200||new Set(ids).size!==ids.length||ids.some(id=>!/^[0-9a-f]{64}$/.test(id)))return;
   const make=(tag,text)=>{const n=document.createElement(tag);if(text)n.textContent=text;return n;};
-  const dialog=make('dialog'),title=make('h2','移到废纸篓 / 回收站？'),message=make('p','正在检查所选文件…'),list=make('ul'),content=make('div'),actions=make('div'),cancel=make('button','取消'),confirm=make('button','确认删除'),stop=make('button','停止处理');
+  const dialog=make('dialog'),title=make('h2','移到废纸篓 / 回收站？'),message=make('p','正在检查所选文件…'),list=make('ul'),progress=make('progress'),content=make('div'),actions=make('div'),cancel=make('button','取消'),confirm=make('button','确认删除'),stop=make('button','停止处理');
   dialog.setAttribute('aria-label','确认移到废纸篓 / 回收站');
   dialog.style.cssText='width:min(680px,92vw);max-height:90vh;overflow:hidden;flex-direction:column;box-sizing:border-box;overflow-wrap:anywhere;word-break:break-word;padding:24px;border:1px solid #d7d3e3;border-radius:16px;background:#fcfcfe;color:#272a36';
   content.style.cssText='flex:1;min-height:0;overflow-x:hidden;overflow-y:auto;overflow-wrap:anywhere;word-break:break-word';list.style.cssText='padding-left:24px;overflow-wrap:anywhere;word-break:break-word';title.style.cssText='flex:none;margin:0 0 12px';
   actions.style.cssText='display:flex;gap:12px;justify-content:flex-end;flex-wrap:wrap;flex:none;background:#fcfcfe;padding:14px 0 0';
   for(const b of [cancel,confirm,stop]){b.type='button';b.style.cssText='padding:10px 16px;border:1px solid #d7d3e3;border-radius:8px;cursor:pointer';}confirm.style.color='#a33b4a';confirm.disabled=true;stop.hidden=true;
-  message.setAttribute('role','status');actions.append(cancel,stop,confirm);content.append(message);dialog.append(title);if(summary){const kept=make('p',summary),notes=make('details'),caption=make('summary','保留文件与清理说明（展开查看）');kept.style.cssText='max-width:100%;overflow-wrap:anywhere;word-break:break-word';notes.append(caption,kept);content.append(notes);}content.append(list);dialog.append(content,actions);
-  let preview=null,running=false,closed=false,jobId='',timer=null;
+  message.setAttribute('role','status');actions.append(cancel,stop,confirm);content.append(message,progress);dialog.append(title);if(summary){const kept=make('p',summary),notes=make('details'),caption=make('summary','保留文件与清理说明（展开查看）');kept.style.cssText='max-width:100%;overflow-wrap:anywhere;word-break:break-word';notes.append(caption,kept);content.append(notes);}content.append(list);dialog.append(content,actions);
+  const retry=make('button','重新检查');progress.max=ids.length;progress.value=0;progress.hidden=true;progress.setAttribute('aria-label','移到回收站的文件进度');progress.style.cssText='width:100%;margin:12px 0';retry.type='button';retry.style.cssText=cancel.style.cssText;retry.hidden=true;actions.append(retry);
+  let preview=null,running=false,closed=false,jobId='',timer=null,previewTimer=null,checking=false,stopRequested=false;
+  const bytes=value=>Number.isFinite(value)&&value>=0?(value>=1073741824?(value/1073741824).toFixed(1)+' GB':value>=1048576?(value/1048576).toFixed(1)+' MB':(value/1024).toFixed(0)+' KB'):'';
   const api=async(path,body)=>{const response=await fetch(path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const result=await response.json();if(!response.ok)throw Error(result.error||'请求未完成');return result;};
   const finish=()=>{running=false;stop.hidden=true;cancel.disabled=false;cancel.textContent='返回列表';};
   const poll=async()=>{if(closed)return;try{const job=await api('api/operations/'+jobId);if(closed)return;if(job.id!==jobId||job.mode!=='trash')throw Error('操作记录不匹配');
+    const completed=(job.items||[]).filter(item=>['success','complete'].includes(item.status)).length,total=Number.isInteger(job.total)&&job.total>0?job.total:ids.length,current=(job.items||[]).find(item=>item.status==='processing');progress.hidden=false;progress.max=total;progress.value=completed;
     if(job.status==='complete'){running=false;dialog.close();return;}
-    if(['running','external_running'].includes(job.status)){message.textContent='正在移到回收站，请稍候…';timer=setTimeout(poll,1000);return;}
-    finish();message.textContent='处理已停止。已完成的文件在回收站中，其余文件未自动重试。';list.replaceChildren();
+    if(['running','external_running'].includes(job.status)){message.textContent=(stopRequested||job.stop_requested?'正在安全停止；当前文件核对或系统回收结束后停止。':'正在核对并移到回收站。')+' 已完成 '+completed+'/'+total+' 个文件（'+Math.floor(completed*100/total)+'%）'+(current?'；当前：'+current.path:'');timer=setTimeout(poll,1000);return;}
+    finish();message.textContent='处理已停止，完成 '+completed+'/'+total+' 个文件。已完成的文件在回收站中，其余文件未自动重试。';list.replaceChildren();
     for(const item of job.items||[]){const row=make('li',(item.status==='complete'||item.status==='success'?'已完成：':'待核对：')+item.path+(item.error?' · '+item.error:''));list.append(row);}
   }catch(error){if(closed)return;message.textContent='连接暂时中断，正在核对处理结果，请勿重复删除：'+error.message;timer=setTimeout(poll,3000);}};
   cancel.onclick=()=>{if(!running)dialog.close();};
   dialog.addEventListener('cancel',event=>{if(running)event.preventDefault();});
-  dialog.addEventListener('close',()=>{closed=true;clearTimeout(timer);dialog.remove();reportOverlay(false);if(typeof onClose==='function')onClose();});
-  stop.onclick=async()=>{if(!jobId)return;stop.disabled=true;try{await api('api/operations/stop',{id:jobId});message.textContent='正在安全停止…';}catch(error){message.textContent='停止请求未确认：'+error.message;stop.disabled=false;}};
-  confirm.onclick=async()=>{if(running||!preview?.token)return;running=true;confirm.disabled=true;cancel.disabled=true;const token=preview.token;preview=null;message.textContent='正在提交…';
+  dialog.addEventListener('close',()=>{closed=true;clearTimeout(timer);clearTimeout(previewTimer);dialog.remove();reportOverlay(false);if(typeof onClose==='function')onClose();});
+  stop.onclick=async()=>{if(!jobId||stop.disabled)return;stop.disabled=true;try{await api('api/operations/stop',{id:jobId});stopRequested=true;if(!closed)message.textContent='正在安全停止；当前文件核对或系统回收结束后停止。';}catch(error){if(!closed){message.textContent='停止请求未确认：'+error.message;stop.disabled=false;}}};
+  confirm.onclick=async()=>{if(running||!preview?.token)return;running=true;confirm.disabled=true;cancel.disabled=true;const token=preview.token;preview=null;list.replaceChildren();content.scrollTop=0;message.textContent='正在提交…';
     try{const started=await api('api/operations/start',{token});jobId=started.id;stop.hidden=false;await poll();}
     catch(error){finish();message.textContent='启动结果未确认，请在整理工具中核对操作记录后再处理：'+error.message;}
   };
+  const checkPreview=async()=>{
+    if(checking||running||closed)return;checking=true;preview=null;retry.hidden=true;confirm.disabled=true;cancel.textContent='取消';list.replaceChildren();const began=Date.now();
+    const waiting=()=>{if(!checking||closed)return;const seconds=Math.floor((Date.now()-began)/1000);message.textContent='正在核对 '+ids.length+' 个文件'+(seconds?' · 已等待 '+seconds+' 秒':'')+'。大文件及保留副本的完整校验可能较慢；尚未删除，可取消返回，所选文件会保留。';if(typeof setTimeout==='function')previewTimer=setTimeout(waiting,1000);};waiting();
+    try{const result=await api('api/operations/preview',{mode:'trash',ids});if(closed)return;preview=result;message.textContent=result.items.length+' 个文件'+(bytes(result.bytes)?' · '+bytes(result.bytes):'')+'将移到系统回收站，可以恢复。';for(const item of result.items)list.append(make('li',item.path));confirm.disabled=!result.token;}
+    catch(error){if(!closed){message.textContent=error.message+'；所选文件已保留，处理原因后可重新检查。';cancel.textContent='返回列表';retry.hidden=false;}}
+    finally{checking=false;clearTimeout(previewTimer);}
+  };
+  retry.onclick=checkPreview;
   document.body.append(dialog);dialog.showModal();dialog.style.display='flex';reportOverlay(true);
-  api('api/operations/preview',{mode:'trash',ids}).then(result=>{if(closed)return;preview=result;message.textContent=result.items.length+' 个文件将移到系统回收站，可以恢复。';for(const item of result.items)list.append(make('li',item.path));confirm.disabled=!result.token;}).catch(error=>{if(!closed){message.textContent=error.message;cancel.textContent='返回列表';}});
+  checkPreview();
 }
 function pageReportPairs(section,page=0){
   const pairs=[...section.querySelectorAll('.pair')],pages=Math.max(1,Math.ceil(pairs.length/10));page=Math.max(0,Math.min(page,pages-1));
