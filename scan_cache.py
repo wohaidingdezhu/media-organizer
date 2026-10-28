@@ -63,39 +63,73 @@ class ScanCache:
     def __init__(self, output, roots, fingerprint, enabled=True):
         self.output = Path(output)
         self.report = None
-        self.files, self.pictures = {}, {}
+        self.files, self.pictures, self.source_reports = {}, {}, {}
+        self.reports = []
         self.reused_metadata = self.reused_previews = self.reused_covers = self.reused_video_metadata = 0
         self.enabled = enabled
         if not enabled or not self.output.exists():
             return
-        for name in sorted(fs.listdir(self.output), reverse=True)[:100]:
-            if not re.fullmatch(r'scan-[A-Za-z0-9_-]{1,120}', name):
-                continue
+        selected_roots = [Path(root) for root in roots]
+        covered_roots = set()
+        names = (name for name in fs.listdir(self.output) if re.fullmatch(r'scan-[A-Za-z0-9_-]{1,120}', name))
+        for name in sorted(names, reverse=True)[:100]:
             try:
                 document = json.loads(fs.read_private_file(self.output, (name, 'report.json'), 128 * 1024 * 1024))
                 # Only fully exported, local snapshots using the same decoders.
                 checked_stat(self.output / name / 'report.html')
-                if (document.get('restored_snapshot') or sorted(document['roots']) != sorted(map(str, roots))
+                prior_roots = document['roots']
+                records = document['files']
+                if (document.get('restored_snapshot') or not isinstance(prior_roots, list)
+                        or not all(isinstance(path, str) and Path(path).is_absolute() for path in prior_roots)
+                        or not isinstance(records, list)
                         or document['options'].get('analysis_fingerprint') != fingerprint):
                     continue
-                self.files = {record['path']: record for record in document['files']}
-                self.report = name
-                for path, relative in document.get('previews', {}).items():
-                    self.pictures[('image', path)] = relative
-                for group in document.get('video_library', {}).get('groups', []):
+                previous = [Path(path) for path in prior_roots]
+                if not any(root == old or root in old.parents or old in root.parents for root in selected_roots for old in previous):
+                    continue
+                prepared = {}
+                for record in records:
+                    if not isinstance(record, dict) or not isinstance(record.get('path'), str):
+                        raise ValueError('缓存报告文件记录无效')
+                    path = Path(record['path'])
+                    if not path.is_absolute() or '..' in path.parts:
+                        raise ValueError('缓存报告文件路径无效')
+                    if any(root in path.parents for root in selected_roots):
+                        prepared[str(path)] = record
+                previews = document.get('previews', {})
+                groups = document.get('video_library', {}).get('groups', [])
+                if not isinstance(previews, dict) or not isinstance(groups, list):
+                    raise ValueError('缓存报告预览记录无效')
+                pictures = {}
+                for path, relative in previews.items():
+                    if path in prepared:
+                        pictures[('image', path)] = relative
+                for group in groups:
+                    if not isinstance(group, dict):
+                        raise ValueError('缓存报告影片记录无效')
                     source = group.get('poster_source', '')
+                    if not isinstance(source, str):
+                        continue
                     role = 'video' if source.startswith('视频截帧：') else 'image'
                     source = source.removeprefix('视频截帧：')
-                    if source and group.get('poster'):
-                        self.pictures.setdefault((role, source), group['poster'])
-                for path, record in self.files.items():
-                    if record.get('kind') in {'照片', '视频'}:
-                        # A manually repaired cover is reusable only after the
-                        # normal full source-signature and PNG checks below.
-                        self.pictures.setdefault(('video' if record['kind'] == '视频' else 'image', path), 'covers/repair-' + media_id(path) + '.png')
-                break
+                    if source in prepared and group.get('poster'):
+                        pictures.setdefault((role, source), group['poster'])
+                if self.report is None:
+                    self.report = name
+                self.reports.append(name)
+                for path, record in prepared.items():
+                    if path in self.files:
+                        continue
+                    self.files[path] = record
+                    self.source_reports[path] = name
+                    for role in ('image', 'video'):
+                        if (role, path) in pictures:
+                            self.pictures[(role, path)] = pictures[(role, path)]
+                covered_roots.update(root for root in selected_roots if any(old == root or old in root.parents for old in previous))
+                if len(covered_roots) == len(selected_roots):
+                    break
             except (OSError, ValueError, KeyError, TypeError, AttributeError):
-                self.files, self.pictures, self.report = {}, {}, None
+                continue
 
     def unchanged(self, record):
         old = self.files.get(record['path'])
@@ -142,7 +176,8 @@ class ScanCache:
         kind = self.files.get(record['path'], {}).get('kind')
         if (role, kind) in {('image', '照片'), ('video', '视频')}:
             candidates.append('covers/repair-' + media_id(record['path']) + '.png')
-        if not self.report:
+        report = self.source_reports.get(record['path'])
+        if not report:
             return False
         created = False
         try:
@@ -153,7 +188,7 @@ class ScanCache:
                 if not re.fullmatch(r'(previews|covers)/[A-Za-z0-9_-]+\.png', candidate):
                     continue
                 try:
-                    content = fs.read_private_file(self.output, (self.report, *PurePosixPath(candidate).parts), 2 * 1024 * 1024)
+                    content = fs.read_private_file(self.output, (report, *PurePosixPath(candidate).parts), 2 * 1024 * 1024)
                 except (OSError, ValueError):
                     continue
                 if valid_thumbnail(content):
@@ -178,7 +213,7 @@ class ScanCache:
             return False
 
     def summary(self):
-        return {'enabled': self.enabled, 'previous_report': self.report or '',
+        return {'enabled': self.enabled, 'previous_report': self.report or '', 'previous_reports': list(self.reports),
                 'image_metadata': self.reused_metadata, 'image_previews': self.reused_previews,
                 'video_covers': self.reused_covers, 'video_metadata': self.reused_video_metadata,
-                'note': '已重新遍历来源并核对文件身份；仅复用未变化文件的解析和小图，同大小查重候选仍重新完整读取 SHA-256。'}
+                'note': '已重新遍历来源并核对文件身份；仅复用未变化文件的解析和小图，可能重复的候选仍重新完整读取 SHA-256。'}
