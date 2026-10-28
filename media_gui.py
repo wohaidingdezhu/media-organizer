@@ -13,7 +13,7 @@ import stat
 import subprocess
 import sys
 import threading
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qs
 import webbrowser
 
 import media_scan as scan
@@ -461,7 +461,7 @@ def create_dashboard_server(output=REPORTS):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-src http://127.0.0.1:*")
+            self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self'; frame-src http://127.0.0.1:*")
             self.end_headers()
             self.wfile.write(body)
 
@@ -485,6 +485,15 @@ def create_dashboard_server(output=REPORTS):
                     self.respond(400, {"error": str(error)})
             elif route == "api/reports":
                 self.respond(200, state.report_history())
+            elif route == "api/catalog/preview":
+                try:
+                    values = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+                    if set(values) != {'id', 'report_id'} or any(len(value) != 1 for value in values.values()):
+                        raise ValueError('预览参数无效')
+                    body = state.catalog_preview(values['id'][0], values['report_id'][0])
+                    self.respond(200, body, 'image/png')
+                except (OSError, ValueError):
+                    self.send_error(404)
             else:
                 self.send_error(404)
 

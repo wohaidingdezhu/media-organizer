@@ -1,6 +1,8 @@
 # coding: utf-8
 """Persistent dashboard collections, opt-in read-only refresh and restore previews."""
 from pathlib import Path
+from collections import OrderedDict
+import re
 import secrets
 import threading
 import time
@@ -19,6 +21,7 @@ class WorkspaceController:
         self.next_scan = None
         self.monitor_stop = threading.Event()
         self.pending_restore = None
+        self.catalog_preview_entries = OrderedDict()
         self.scan_options = {}
         self.scan_origin = 'manual'
         self.watch_baseline = self.watch_candidate = None
@@ -124,8 +127,44 @@ class WorkspaceController:
 
     def workspace_catalog(self, options):
         with self.lock:
-            return catalog(self.output, **{key: options.get(key, default) for key, default in
-                                          [('query', ''), ('folder', ''), ('kind', ''), ('state', ''), ('page', 0)]})
+            result = catalog(self.output, **{key: options.get(key, default) for key, default in
+                                            [('query', ''), ('folder', ''), ('kind', ''), ('state', ''), ('page', 0)]})
+            # Only previously listed records may supply report-relative previews.
+            # Bound the cache across tabs/pages instead of rereading the entire
+            # long-term index for every thumbnail request.
+            for item in result['items']:
+                key = (str(self.output), item.get('id'), item.get('report_id'))
+                self.catalog_preview_entries[key] = item.get('preview', '')
+                self.catalog_preview_entries.move_to_end(key)
+            while len(self.catalog_preview_entries) > 500:
+                self.catalog_preview_entries.popitem(last=False)
+            return result
+
+    def catalog_preview(self, identifier, report_id):
+        import portable_fs as fs
+        from scan_cache import valid_thumbnail
+        if (not isinstance(identifier, str) or not re.fullmatch(r'[0-9a-f]{64}', identifier)
+                or not isinstance(report_id, str) or not re.fullmatch(r'scan-[A-Za-z0-9_-]{1,120}', report_id)):
+            raise ValueError('预览标识无效')
+        with self.lock:
+            root = self.output
+            key = (str(root), identifier, report_id)
+            if key not in self.catalog_preview_entries:
+                raise ValueError('预览不在当前浏览结果中')
+            preview = self.catalog_preview_entries[key]
+        if not isinstance(preview, str):
+            preview = ''
+        candidates = [('covers', 'repair-' + identifier + '.png')]
+        if re.fullmatch(r'(?:previews|covers)/[A-Za-z0-9_-]+\.png', preview):
+            candidates.append(tuple(preview.split('/')))
+        for parts in candidates:
+            try:
+                body = fs.read_private_file(root, (report_id, *parts), 2 * 1024 * 1024)
+            except FileNotFoundError:
+                continue
+            if valid_thumbnail(body):
+                return body
+        raise FileNotFoundError('预览暂不可用')
 
     def backup(self):
         with self.lock:

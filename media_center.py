@@ -365,8 +365,10 @@ def center_catalog(document, state, notes=None, handled_trash=()):
             folders.setdefault(folder, []).append(item['id'])
     return {'items': result, 'state': state, 'folders': folders, 'review': review,
             'preview_policy': {'images': document.get('image_inspection', {}).get('enabled') is not False,
-                               'videos': document.get('options', {}).get('video_covers_enabled') is not False
-                               and document.get('image_inspection', {}).get('enabled') is not False},
+                               # Older reports did not always record a separate video option;
+                               # those used the photo switch for both media types.
+                               'videos': document.get('options', {}).get('video_covers_enabled',
+                                   document.get('image_inspection', {}).get('enabled')) is not False},
             'hidden_files': sum(item.get('path') in hidden for item in document.get('files', []) if isinstance(item, dict)),
             'directories': directory_catalog(result, document.get('roots', [])),
             'recent': [key for key in state['recent'] if key in by_id],
