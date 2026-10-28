@@ -5,6 +5,7 @@ import json
 import re
 import secrets
 import unicodedata
+from functools import lru_cache
 
 from media_actions import media_id
 from movie_grouping import source_path
@@ -137,9 +138,10 @@ class CenterState:
                 if (not isinstance(path, str) or path not in directories
                         or not isinstance(kind, str) or kind not in {'movie', 'video', 'auto'}):
                     raise ValueError('请选择本次扫描中的目录和视频分类')
-                if kind == 'auto':
-                    value['folder_kinds'].pop(path, None)
-                else:
+                for existing in list(value['folder_kinds']):
+                    if source_path(existing) == source_path(path):
+                        del value['folder_kinds'][existing]
+                if kind != 'auto':
                     value['folder_kinds'][path] = kind
             elif action == 'folder_label':
                 path = payload.get('path')
@@ -147,10 +149,11 @@ class CenterState:
                 if not isinstance(path, str) or path not in directories or not isinstance(label, str):
                     raise ValueError('请选择本次扫描中的目录和标签')
                 label = unicodedata.normalize('NFC', label).strip()
+                for existing in list(value['folder_labels']):
+                    if source_path(existing) == source_path(path):
+                        del value['folder_labels'][existing]
                 if label:
                     value['folder_labels'][path] = label
-                else:
-                    value['folder_labels'].pop(path, None)
             elif action in {'favorite', 'recent', 'labels'}:
                 if not valid_id(identifier) or identifier not in allowed:
                     raise ValueError('媒体不属于当前资料库')
@@ -246,15 +249,27 @@ def center_catalog(document, state, notes=None, handled_trash=()):
     result, covered, video_art, video_status, video_details = [], set(), {}, {}, {}
     notes = notes or {}
     # Match saved lexical paths, including reports restored on the other OS.
-    folder_rules = sorted(((source_path(path), kind) for path, kind in state.get('folder_kinds', {}).items()),
-                          key=lambda pair: len(pair[0].parts), reverse=True)
+    folder_rules, label_rules = {}, {}
+    for path, kind in state.get('folder_kinds', {}).items():
+        folder_rules.setdefault(source_path(path), kind)
+    for order, (path, label) in enumerate(state.get('folder_labels', {}).items()):
+        label_rules.setdefault(source_path(path), []).append((order, label))
+
+    @lru_cache(maxsize=None)
+    def folder_settings(folder):
+        # Build once per folder, not once per media × every saved rule. Pure
+        # paths retain POSIX case sensitivity and Windows drive/UNC semantics.
+        lineage = (folder, *folder.parents)
+        kind = next((folder_rules[parent] for parent in lineage if parent in folder_rules), '')
+        labels = sorted(setting for parent in lineage for setting in label_rules.get(parent, ()))
+        return kind, labels
+
     inherited_kinds = {}
     for path, record in records.items():
         if record.get('kind') != '视频':
             continue
         current = source_path(path).parent
-        inherited_kinds[path] = next((kind for parent, kind in folder_rules
-                                      if type(current) is type(parent) and current.parts[:len(parent.parts)] == parent.parts), '')
+        inherited_kinds[path] = folder_settings(current)[0]
 
     def file_item(path):
         record = records[path]
@@ -267,10 +282,11 @@ def center_catalog(document, state, notes=None, handled_trash=()):
             return
         metadata = metadata or {}
         tags = list(tags or [])
-        for directory, label in state.get('folder_labels', {}).items():
-            parent = source_path(directory)
-            if any(type(source_path(file['path'])) is type(parent) and source_path(file['path']).parts[:len(parent.parts)] == parent.parts for file in files):
-                tags.append(label)
+        # A movie may span folders; collect each applicable rule once and keep
+        # the existing saved-rule order across all of its files.
+        matching_labels = dict(setting for file in files
+                               for setting in folder_settings(source_path(file['path']).parent)[1])
+        tags.extend(label for _, label in sorted(matching_labels.items()))
         stamp = max((file['mtime'] for file in files if type(file['mtime']) in {int, float} and math.isfinite(file['mtime'])), default=0)
         result.append({'id': identifier, 'kind': kind, 'title': title, 'files': files, 'preview': preview,
                        'manual_kind': identifier in state.get('media_kinds', {}),
@@ -363,6 +379,12 @@ def center_catalog(document, state, notes=None, handled_trash=()):
     for item in result:
         for folder in dict.fromkeys(str(source_path(file['path']).parent) for file in item['files']):
             folders.setdefault(folder, []).append(item['id'])
+    directories = directory_catalog(result, document.get('roots', []))
+    for path, node in directories.items():
+        current = source_path(path)
+        direct_labels = label_rules.get(current, [])
+        node['folder_label'] = direct_labels[-1][1] if direct_labels else ''
+        node['folder_kind'] = folder_rules.get(current, 'auto')
     return {'items': result, 'state': state, 'folders': folders, 'review': review,
             'preview_policy': {'images': document.get('image_inspection', {}).get('enabled') is not False,
                                # Older reports did not always record a separate video option;
@@ -370,6 +392,6 @@ def center_catalog(document, state, notes=None, handled_trash=()):
                                'videos': document.get('options', {}).get('video_covers_enabled',
                                    document.get('image_inspection', {}).get('enabled')) is not False},
             'hidden_files': sum(item.get('path') in hidden for item in document.get('files', []) if isinstance(item, dict)),
-            'directories': directory_catalog(result, document.get('roots', [])),
+            'directories': directories,
             'recent': [key for key in state['recent'] if key in by_id],
             'created_at': document.get('created_at', ''), 'restored': bool(document.get('restored_snapshot'))}
