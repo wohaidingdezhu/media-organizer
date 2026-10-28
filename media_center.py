@@ -138,9 +138,10 @@ class CenterState:
                 if (not isinstance(path, str) or path not in directories
                         or not isinstance(kind, str) or kind not in {'movie', 'video', 'auto'}):
                     raise ValueError('请选择本次扫描中的目录和视频分类')
-                if kind == 'auto':
-                    value['folder_kinds'].pop(path, None)
-                else:
+                for existing in list(value['folder_kinds']):
+                    if source_path(existing) == source_path(path):
+                        del value['folder_kinds'][existing]
+                if kind != 'auto':
                     value['folder_kinds'][path] = kind
             elif action == 'folder_label':
                 path = payload.get('path')
@@ -148,10 +149,11 @@ class CenterState:
                 if not isinstance(path, str) or path not in directories or not isinstance(label, str):
                     raise ValueError('请选择本次扫描中的目录和标签')
                 label = unicodedata.normalize('NFC', label).strip()
+                for existing in list(value['folder_labels']):
+                    if source_path(existing) == source_path(path):
+                        del value['folder_labels'][existing]
                 if label:
                     value['folder_labels'][path] = label
-                else:
-                    value['folder_labels'].pop(path, None)
             elif action in {'favorite', 'recent', 'labels'}:
                 if not valid_id(identifier) or identifier not in allowed:
                     raise ValueError('媒体不属于当前资料库')
@@ -377,6 +379,12 @@ def center_catalog(document, state, notes=None, handled_trash=()):
     for item in result:
         for folder in dict.fromkeys(str(source_path(file['path']).parent) for file in item['files']):
             folders.setdefault(folder, []).append(item['id'])
+    directories = directory_catalog(result, document.get('roots', []))
+    for path, node in directories.items():
+        current = source_path(path)
+        direct_labels = label_rules.get(current, [])
+        node['folder_label'] = direct_labels[-1][1] if direct_labels else ''
+        node['folder_kind'] = folder_rules.get(current, 'auto')
     return {'items': result, 'state': state, 'folders': folders, 'review': review,
             'preview_policy': {'images': document.get('image_inspection', {}).get('enabled') is not False,
                                # Older reports did not always record a separate video option;
@@ -384,6 +392,6 @@ def center_catalog(document, state, notes=None, handled_trash=()):
                                'videos': document.get('options', {}).get('video_covers_enabled',
                                    document.get('image_inspection', {}).get('enabled')) is not False},
             'hidden_files': sum(item.get('path') in hidden for item in document.get('files', []) if isinstance(item, dict)),
-            'directories': directory_catalog(result, document.get('roots', [])),
+            'directories': directories,
             'recent': [key for key in state['recent'] if key in by_id],
             'created_at': document.get('created_at', ''), 'restored': bool(document.get('restored_snapshot'))}

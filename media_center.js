@@ -227,14 +227,14 @@ function renderDirectoryBreadcrumb(){
   while(nodes[path]&&!visited.has(path)){visited.add(path);chain.unshift(path);path=nodes[path].parent;}
   $('center-breadcrumb').append(button('↑ 上一级',()=>enterDirectory(nodes[directory]?.parent||'')),button('全部目录',()=>enterDirectory('')));for(const key of chain)$('center-breadcrumb').append(button(nodes[key].name,()=>enterDirectory(key)));
   $('center-breadcrumb').append(make('div','muted album-path',directory));
-  const folderLabel=catalog.state.folder_labels?.[directory],label=sourceFolder(directory);
+  const folderLabel=nodes[directory]?.folder_label??catalog.state.folder_labels?.[directory],label=sourceFolder(directory);
   $('center-breadcrumb').append(button(folderLabel?'查看标签：'+folderLabel:'以“'+label+'”作为目录标签',async()=>{if(folderLabel){browseTo({view:'tags',tag:folderLabel});}else if(await update({action:'folder_label',path:directory,label}))message('已绑定目录标签。该目录及子目录的照片、视频会集中在此标签；以后新增文件重扫后自动加入。','success');}));
   if(folderLabel)$('center-breadcrumb').append(button('取消目录标签',()=>update({action:'folder_label',path:directory,label:''})));
   const folder=directory,classification=make('select');classification.setAttribute('aria-label','本目录的视频分类');
   for(const [value,text]of [['auto','继承上级 / 自动识别'],['movie','电影目录'],['video','普通视频目录']]){const option=make('option','',text);option.value=value;classification.append(option);}
-  classification.value=catalog.state.folder_kinds?.[folder]||'auto';trackAvailability(classification,()=>!busy);
+  classification.value=nodes[folder]?.folder_kind??(catalog.state.folder_kinds?.[folder]||'auto');trackAvailability(classification,()=>!busy);
   classification.onchange=async()=>{
-    const kind=classification.value,previous=catalog.state.folder_kinds?.[folder]||'auto';let saved=false;
+    const kind=classification.value,previous=nodes[folder]?.folder_kind??(catalog.state.folder_kinds?.[folder]||'auto');let saved=false;
     if(await update({action:'folder_kind',path:folder,kind},()=>{saved=true;}))message('目录分类已保存，当前及子目录的视频已更新；照片不受影响。单项手动分类优先，新文件扫描后沿用。','success');
     else if(!saved)classification.value=previous;
   };
