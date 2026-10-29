@@ -12,7 +12,7 @@ class BrowseScanContinuityTests(unittest.TestCase):
     def test_manual_completion_and_cancel_keep_existing_selection_and_iframe(self):
         self.node(r'''
 const html=fs.readFileSync(root+'/dashboard.html','utf8'),loads=[];let status={running:false,latest_report:'new',scan_origin:'manual'};
-Object.assign(scope,{stopped:false,previousRunning:true,knownLatest:'old',selectedReport:'old',request:async()=>status,renderStatus(){},notice(){},setTimeout(){return 1;},loadReports:async(...args)=>{loads.push(args);return true;}});
+Object.assign(scope,{stopped:false,scanControls:{epoch:0},previousRunning:true,knownLatest:'old',selectedReport:'old',request:async()=>status,renderStatus(){},notice(){},setTimeout(){return 1;},loadReports:async(...args)=>{loads.push(args);return true;}});
 vm.runInContext(html.slice(html.indexOf('async function refresh()'),html.indexOf('async function act(')),scope);
 (async()=>{for(const pane of ['results','settings','catalog']){scope.knownLatest='old';scope.previousRunning=true;$('platform-main').setAttribute('data-pane',pane);$('pending-report-update').hidden=true;await scope.refresh();assert.equal(loads.length,0);assert.equal(scope.selectedReport,'old');assert(!$('pending-report-update').hidden);}
 status.latest_report='old';scope.knownLatest='old';scope.previousRunning=true;$('pending-report-update').hidden=true;await scope.refresh();assert.equal(loads.length,0);assert($('pending-report-update').hidden);
@@ -23,7 +23,7 @@ status.latest_report='new';$('platform-main').setAttribute('data-pane','scan');s
     def test_failed_or_superseded_completion_load_can_be_retried(self):
         self.node(r'''
 const html=fs.readFileSync(root+'/dashboard.html','utf8');let loads=0;
-Object.assign(scope,{stopped:false,previousRunning:true,knownLatest:'old',selectedReport:'old',request:async()=>({running:false,latest_report:'new',scan_origin:'manual'}),renderStatus(){},notice(){},setTimeout(){return 1;},loadReports:async()=>{loads++;return false;}});
+Object.assign(scope,{stopped:false,scanControls:{epoch:0},previousRunning:true,knownLatest:'old',selectedReport:'old',request:async()=>({running:false,latest_report:'new',scan_origin:'manual'}),renderStatus(){},notice(){},setTimeout(){return 1;},loadReports:async()=>{loads++;return false;}});
 $('platform-main').setAttribute('data-pane','scan');$('pending-report-update').hidden=true;
 vm.runInContext(html.slice(html.indexOf('async function refresh()'),html.indexOf('async function act(')),scope);
 (async()=>{await scope.refresh();assert.equal(loads,1);assert(!$('pending-report-update').hidden);await scope.refresh();assert.equal(loads,1);assert(!$('pending-report-update').hidden);})().catch(e=>{console.error(e);process.exitCode=1;});

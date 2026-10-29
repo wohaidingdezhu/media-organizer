@@ -238,6 +238,7 @@ class DashboardState(WorkspaceController):
         with self.lock:
             report = latest_library(self.output)
             return {"folders": list(self.folders), "running": self.running,
+                    "cancel_requested": self.running and self.cancel_requested.is_set(),
                     "status": self.status, "logs": list(self.logs), "progress": self.progress,
                     "latest_report": report.name if report else None, "monitor": dict(self.monitor),
                     "workspace": self.output.name, "watch_status": self.watch_status, "scan_origin": self.scan_origin,
@@ -378,13 +379,18 @@ class DashboardState(WorkspaceController):
                 self.running = False
 
     def cancel_scan(self):
-        self.cancel_requested.set()
         with self.lock:
-            process = self.process
-            if self.running:
+            if self.running and not self.cancel_requested.is_set():
+                self.cancel_requested.set()
                 self.status = "正在取消扫描…"
-        if process is not None and process.poll() is None:
-            self._signal_scan(process)
+                process = self.process
+                try:
+                    if process is not None and process.poll() is None:
+                        self._signal_scan(process)
+                except OSError:
+                    self.cancel_requested.clear()
+                    self.status = "取消请求未完成，请重试。"
+                    raise
         return self.snapshot()
 
     def _signal_scan(self, process):
