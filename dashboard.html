@@ -71,7 +71,7 @@
       <p class="sub">结果对应所选扫描时间；新增或移走媒体后，可新建扫描刷新清单。</p>
       </div></dialog>
       <p id="view-description" class="view-description"></p>
-      <button id="pending-report-update" class="primary" hidden>目录清单已自动更新 · 查看新结果</button><div class="viewer" id="result-viewer"><div id="viewer-message" class="viewer-message">正在打开结果…</div><iframe id="result-frame" title="扫描结果详情" sandbox="allow-scripts allow-same-origin allow-downloads allow-top-navigation-by-user-activation" hidden></iframe></div>
+      <button id="pending-report-update" class="primary" hidden>扫描结果已更新 · 查看新结果</button><div class="viewer" id="result-viewer"><div id="viewer-message" class="viewer-message">正在打开结果…</div><iframe id="result-frame" title="扫描结果详情" sandbox="allow-scripts allow-same-origin allow-downloads allow-top-navigation-by-user-activation" hidden></iframe></div>
     </div>
   </section>
 
@@ -136,7 +136,7 @@ function adoptCenterView(view,fragment){
 }
 window.addEventListener('message',async event=>{if(event.source!==$('result-frame').contentWindow||!$('result-frame').src||event.origin!==new URL($('result-frame').src).origin||!selectedReport)return;if(event.data?.type==='media-overlay'){if(typeof event.data.open==='boolean')$('result-viewer').classList.toggle('overlay-mode',event.data.open);return;}if(event.data?.type==='media-context'){if($('result-frame').hidden)return;const views={home:'home',movies:'library',videos:'videos',photos:'photos',collections:'collections',favorites:'favorites',resources:'resources',tags:'tags',review:'review'};if(Object.hasOwn(views,event.data.view))adoptCenterView(views[event.data.view],event.data.view);return;}if(event.data?.type==='media-navigate'){const views={movies:'library',videos:'videos',photos:'photos',favorites:'favorites',resources:'resources',tags:'tags'};if(Object.hasOwn(views,event.data.view))await openView(views[event.data.view]);return;}if(event.data?.type!=='media-rescan')return;const data=await act('reports/rescan',{report_id:selectedReport});if(data)previousRunning=data.running;});
 
-async function loadReports(selectLatest=false,keepView=false){if(historyLoading)return;historyLoading=true;const initialPane=$('platform-main').getAttribute?.('data-pane'),initialViewRequest=viewRequest;try{const data=await request('reports');if(viewRequest!==initialViewRequest)return false;reports=data.reports;
+async function loadReports(selectLatest=false,keepView=false){if(historyLoading)return;historyLoading=true;const initialPane=$('platform-main').getAttribute?.('data-pane'),initialViewRequest=viewRequest;try{const data=await request('reports');if(viewRequest!==initialViewRequest||(selectedReport&&$('platform-main').getAttribute?.('data-pane')!==initialPane))return false;reports=data.reports;
   $('result-empty').hidden=reports.length>0;$('result-content').hidden=!reports.length;
   $('history-note').textContent=[data.skipped_reports?`${data.skipped_reports} 份未完成或无法读取的报告已跳过。`:'',data.has_more?'此处显示最近 50 次扫描；更早的结果可从结果文件夹打开。':''].filter(Boolean).join(' ');
   if(!reports.length)return;
@@ -155,7 +155,16 @@ function renderStatus(data){const folderState=JSON.stringify([data.folders,data.
   $('monitor-status').textContent=data.monitor?.enabled?(data.monitor.mode==='changes'?'已开启 · 每15秒检查，连续两次稳定后只读扫描；首次开启会更新一次。'+(data.watch_status||''):`已开启 · 每 ${data.monitor.minutes} 分钟更新；应用退出后停止。`):'未开启；目录合集会保存在本机。';
   const joined=data.logs.join('\n');if(lastLog!==joined){$('log').textContent=joined||'扫描记录会显示在这里。';$('log').scrollTop=$('log').scrollHeight;lastLog=joined;}
 }
-async function refresh(){if(stopped)return;try{const data=await request('status');if(stopped)return;renderStatus(data);const completed=previousRunning&&!data.running;const changed=knownLatest!==undefined&&knownLatest!==data.latest_report;if(['changes','timer'].includes(data.scan_origin)&&selectedReport&&knownLatest!==undefined){if(changed)$('pending-report-update').hidden=false;}else if(knownLatest===undefined||changed||completed)await loadReports((completed||changed)&&!!data.latest_report,data.scan_origin==='recovery');knownLatest=data.latest_report;previousRunning=data.running;}catch(error){notice('本机服务暂时无法连接；请确认启动的终端仍在运行。');}finally{if(!stopped)pollTimer=setTimeout(refresh,1200);}}
+async function refresh(){if(stopped)return;try{const data=await request('status');if(stopped)return;renderStatus(data);
+  const changed=knownLatest!==undefined&&knownLatest!==data.latest_report;
+  if(knownLatest===undefined)await loadReports();
+  else if(changed){
+    const keepCurrent=selectedReport&&data.latest_report&&(['changes','timer'].includes(data.scan_origin)||$('platform-main').getAttribute?.('data-pane')!=='scan');
+    if(keepCurrent)$('pending-report-update').hidden=false;
+    else if(!await loadReports(!!data.latest_report,data.scan_origin==='recovery')&&data.latest_report)$('pending-report-update').hidden=false;
+  }
+  knownLatest=data.latest_report;previousRunning=data.running;
+}catch(error){notice('本机服务暂时无法连接；请确认应用仍在运行。');}finally{if(!stopped)pollTimer=setTimeout(refresh,1200);}}
 async function act(path,body={}){notice();try{const data=await request(path,body);if(data.folders)renderStatus(data);return data;}catch(error){notice(error);return null;}}
 async function beginFirstScan(){showPane('scan');await $('add-folder').onclick();}
 $('nav-scan').onclick=()=>showPane('scan');$('first-scan').onclick=beginFirstScan;$('nav-results').onclick=()=>openView('home');$('nav-settings').onclick=()=>showPane('settings');
