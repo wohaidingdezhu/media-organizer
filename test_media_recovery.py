@@ -221,10 +221,10 @@ movie.preview='';await $('center-refresh').onclick();const card=$('center-conten
 const fs=require('fs'),vm=require('vm'),assert=require('assert'),html=fs.readFileSync(process.argv[1]+'/dashboard.html','utf8');
 const elements=new Map(),$=id=>{if(!elements.has(id))elements.set(id,{hidden:true});return elements.get(id);};
 let status={running:false,latest_report:'new-report',scan_origin:'changes'},loads=[],actions=[],handler;
-const scope={$: $,stopped:false,previousRunning:true,knownLatest:'old-report',selectedReport:'old-report',URL,
+const scope={$: $,stopped:false,scanControls:{epoch:0},previousRunning:true,knownLatest:'old-report',selectedReport:'old-report',URL,
 request:async()=>status,renderStatus(){},notice(){},setTimeout(){return 1;},loadReports:async(...args)=>loads.push(args),
 act:async(path,body)=>{actions.push({path,body});return {running:true};},window:{addEventListener:(name,fn)=>handler=fn}};
-vm.createContext(scope);vm.runInContext(html.slice(html.indexOf('async function refresh()'),html.indexOf('async function act(')),scope);
+scope.scanAction=scope.act;vm.createContext(scope);vm.runInContext(html.slice(html.indexOf('async function refresh()'),html.indexOf('async function act(')),scope);
 (async()=>{
 await scope.refresh();assert.equal(loads.length,0);assert.equal(scope.selectedReport,'old-report');assert(!$('pending-report-update').hidden);
 status={running:false,latest_report:'recovered',scan_origin:'recovery'};await scope.refresh();assert.equal(loads.length,0);assert(!$('pending-report-update').hidden);assert.equal(scope.selectedReport,'old-report');

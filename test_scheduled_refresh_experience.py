@@ -24,7 +24,7 @@ class ScheduledRefreshExperienceTests(unittest.TestCase):
     def test_timer_completion_keeps_current_view_and_offers_explicit_update(self):
         self.node(r'''
 const html=fs.readFileSync(root+'/dashboard.html','utf8'),loads=[];let status={running:false,latest_report:'new-report',scan_origin:'timer'};
-Object.assign(scope,{stopped:false,previousRunning:true,knownLatest:'old-report',selectedReport:'old-report',request:async()=>status,renderStatus(){},notice(){},setTimeout(){return 1;},loadReports:async(...args)=>loads.push(args)});
+Object.assign(scope,{stopped:false,scanControls:{epoch:0},previousRunning:true,knownLatest:'old-report',selectedReport:'old-report',request:async()=>status,renderStatus(){},notice(){},setTimeout(){return 1;},loadReports:async(...args)=>loads.push(args)});
 vm.runInContext(html.slice(html.indexOf('async function refresh()'),html.indexOf('async function act(')),scope);
 (async()=>{ $('pending-report-update').hidden=true;await scope.refresh();assert.equal(loads.length,0);assert.equal(scope.selectedReport,'old-report');assert(!$('pending-report-update').hidden);
 status={running:false,latest_report:'manual-report',scan_origin:'manual'};$('platform-main').setAttribute('data-pane','scan');scope.previousRunning=true;await scope.refresh();assert.deepEqual(loads,[[true,false]]);
@@ -34,7 +34,7 @@ status={running:false,latest_report:'manual-report',scan_origin:'manual'};$('pla
     def test_first_load_and_cancelled_timer_do_not_claim_new_results(self):
         self.node(r'''
 const html=fs.readFileSync(root+'/dashboard.html','utf8'),loads=[];let status={running:false,latest_report:'old-report',scan_origin:'timer'};
-Object.assign(scope,{stopped:false,previousRunning:true,knownLatest:'old-report',selectedReport:'old-report',request:async()=>status,renderStatus(){},notice(){},setTimeout(){return 1;},loadReports:async(...args)=>loads.push(args)});
+Object.assign(scope,{stopped:false,scanControls:{epoch:0},previousRunning:true,knownLatest:'old-report',selectedReport:'old-report',request:async()=>status,renderStatus(){},notice(){},setTimeout(){return 1;},loadReports:async(...args)=>loads.push(args)});
 vm.runInContext(html.slice(html.indexOf('async function refresh()'),html.indexOf('async function act(')),scope);
 (async()=>{ $('pending-report-update').hidden=true;await scope.refresh();assert.equal(loads.length,0);assert($('pending-report-update').hidden);scope.knownLatest=undefined;scope.selectedReport='';await scope.refresh();assert.deepEqual(loads,[[]]);})().catch(e=>{console.error(e);process.exitCode=1;});
 ''')
