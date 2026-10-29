@@ -227,7 +227,7 @@ act:async(path,body)=>{actions.push({path,body});return {running:true};},window:
 vm.createContext(scope);vm.runInContext(html.slice(html.indexOf('async function refresh()'),html.indexOf('async function act(')),scope);
 (async()=>{
 await scope.refresh();assert.equal(loads.length,0);assert.equal(scope.selectedReport,'old-report');assert(!$('pending-report-update').hidden);
-status={running:false,latest_report:'recovered',scan_origin:'recovery'};await scope.refresh();assert.deepEqual(loads,[[true,true]]);
+status={running:false,latest_report:'recovered',scan_origin:'recovery'};await scope.refresh();assert.equal(loads.length,0);assert(!$('pending-report-update').hidden);assert.equal(scope.selectedReport,'old-report');
 vm.runInContext(html.slice(html.indexOf("window.addEventListener('message'"),html.indexOf('async function loadReports(')),scope);
 const frame=$('result-frame');frame.src='http://127.0.0.1:12345/token/center.html';frame.contentWindow={};
 for(const event of [{source:{},origin:'http://127.0.0.1:12345',data:{type:'media-rescan'}},{source:frame.contentWindow,origin:'http://evil.test',data:{type:'media-rescan'}},{source:frame.contentWindow,origin:'http://127.0.0.1:12345',data:{type:'other'}}])await handler(event);
