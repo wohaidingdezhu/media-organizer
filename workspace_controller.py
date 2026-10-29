@@ -41,6 +41,13 @@ class WorkspaceController:
             self.folders = folders
             self.manual_scan_folders = None
             chosen = settings.get('manual_scan_folders')
+            indices = settings.get('manual_scan_indices')
+            if indices is not None:
+                if (isinstance(indices, list) and all(type(index) is int and 0 <= index < len(folders) for index in indices)
+                        and len(set(indices)) == len(indices)):
+                    chosen = [folders[index] for index in indices]
+                else:
+                    chosen = 'invalid'
             if chosen is not None:
                 if (isinstance(chosen, list) and all(isinstance(path, str) and path in folders for path in chosen)
                         and len(set(chosen)) == len(chosen)):
@@ -55,7 +62,8 @@ class WorkspaceController:
     def save_settings(self):
         with data_lock(self.output):
             write_json(self.output, 'workspace-settings.json', {'version': 1, 'folders': self.folders, 'monitor': self.monitor,
-                                                                'manual_scan_folders': self.manual_scan_folders})
+                                                                'manual_scan_indices': None if self.manual_scan_folders is None else
+                            [index for index, path in enumerate(self.folders) if path in self.manual_scan_folders]})
 
     def set_monitor(self, options):
         enabled, minutes = options.get('enabled'), options.get('minutes')

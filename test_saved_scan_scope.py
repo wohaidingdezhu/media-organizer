@@ -83,6 +83,22 @@ class SavedScanScopeTests(unittest.TestCase):
             self.assertEqual(restored.folders, self.state.folders)
             self.assertEqual(restored.snapshot()['manual_scan_folders'], self.state.folders)
 
+    def test_long_paths_are_not_duplicated_in_saved_scope(self):
+        import json
+        # Generated path strings only; no real folders or media are accessed.
+        self.state.folders = [str(self.root / (('目录' * 80) + str(n))) for n in range(100)]
+        self.state.manual_scan_folders = list(self.state.folders)
+        self.state.save_settings()
+        saved = workspace_data.read_json(self.output, 'workspace-settings.json', {}, 65536)
+        self.assertEqual(saved['manual_scan_indices'], list(range(100)))
+        self.assertNotIn('manual_scan_folders', saved)
+        self.assertLess(len(json.dumps(saved, ensure_ascii=False).encode('utf-8')), 65536)
+        self.assertEqual(self.new_state().snapshot()['manual_scan_folders'], self.state.folders)
+        for invalid in ([True], [-1], [100], [0, 0], 'invalid'):
+            saved['manual_scan_indices'] = invalid
+            workspace_data.write_json(self.output, 'workspace-settings.json', saved)
+            self.assertEqual(self.new_state().snapshot()['manual_scan_folders'], self.state.folders)
+
     def test_ui_restores_scope_but_preserves_unsaved_edits_during_polling(self):
         self.node(r'''
 const html=fs.readFileSync(root+'/dashboard.html','utf8');E.prototype.removeAttribute=function(key){delete this.attrs[key];};
