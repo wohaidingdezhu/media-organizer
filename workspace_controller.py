@@ -23,6 +23,7 @@ class WorkspaceController:
         self.pending_restore = None
         self.catalog_preview_entries = OrderedDict()
         self.scan_options = {}
+        self.manual_scan_folders = None
         self.scan_origin = 'manual'
         self.watch_baseline = self.watch_candidate = None
         self.watch_status = ''
@@ -38,6 +39,21 @@ class WorkspaceController:
                     or not isinstance(monitor.get('mode', 'timer'), str) or monitor.get('mode', 'timer') not in {'timer', 'changes'}):
                 raise ValueError('目录合集或定时更新设置无效')
             self.folders = folders
+            self.manual_scan_folders = None
+            chosen = settings.get('manual_scan_folders')
+            indices = settings.get('manual_scan_indices')
+            if indices is not None:
+                if (isinstance(indices, list) and all(type(index) is int and 0 <= index < len(folders) for index in indices)
+                        and len(set(indices)) == len(indices)):
+                    chosen = [folders[index] for index in indices]
+                else:
+                    chosen = 'invalid'
+            if chosen is not None:
+                if (isinstance(chosen, list) and all(isinstance(path, str) and path in folders for path in chosen)
+                        and len(set(chosen)) == len(chosen)):
+                    self.manual_scan_folders = list(chosen)
+                else:
+                    self.log('上次手动扫描范围无效，已恢复为全部目录；请核对勾选。')
             self.monitor = monitor
             self.next_scan = time.monotonic() + (15 if monitor.get('mode') == 'changes' else monitor['minutes'] * 60) if monitor['enabled'] else None
         except (OSError, ValueError, AttributeError) as error:
@@ -45,7 +61,9 @@ class WorkspaceController:
 
     def save_settings(self):
         with data_lock(self.output):
-            write_json(self.output, 'workspace-settings.json', {'version': 1, 'folders': self.folders, 'monitor': self.monitor})
+            write_json(self.output, 'workspace-settings.json', {'version': 1, 'folders': self.folders, 'monitor': self.monitor,
+                                                                'manual_scan_indices': None if self.manual_scan_folders is None else
+                            [index for index, path in enumerate(self.folders) if path in self.manual_scan_folders]})
 
     def set_monitor(self, options):
         enabled, minutes = options.get('enabled'), options.get('minutes')
