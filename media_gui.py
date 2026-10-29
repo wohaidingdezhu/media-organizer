@@ -239,6 +239,8 @@ class DashboardState(WorkspaceController):
             report = latest_library(self.output)
             return {"folders": list(self.folders), "running": self.running,
                     "cancel_requested": self.running and self.cancel_requested.is_set(),
+                    "manual_scan_folders": list(self.folders) if self.manual_scan_folders is None else
+                        [path for path in self.manual_scan_folders if path in self.folders],
                     "status": self.status, "logs": list(self.logs), "progress": self.progress,
                     "latest_report": report.name if report else None, "monitor": dict(self.monitor),
                     "workspace": self.output.name, "watch_status": self.watch_status, "scan_origin": self.scan_origin,
@@ -249,30 +251,52 @@ class DashboardState(WorkspaceController):
         with self.lock:
             if self.running:
                 raise ValueError("扫描进行中，不能更改文件夹")
+            folders = list(self.folders)
+            scope = None if self.manual_scan_folders is None else list(self.manual_scan_folders)
             for choice in choices:
                 path = Path(choice).expanduser().absolute()
                 if path.is_symlink() or getattr(path.lstat(), "st_file_attributes", 0) & 0x400 or not path.is_dir():
                     raise ValueError("请选择实际存在的普通文件夹，不要选择符号链接")
-                if str(path) not in self.folders:
-                    self.folders.append(str(path))
+                if str(path) not in folders:
+                    folders.append(str(path))
+                    if scope is not None:
+                        scope.append(str(path))
+            if len(folders) > 100:
+                raise ValueError("最多保存100个来源目录，请先移除不需要的目录记录")
+            previous = self.folders, self.manual_scan_folders, self.status
+            self.folders, self.manual_scan_folders = folders, scope
             if choices:
                 self.status = f"已选择 {len(self.folders)} 个文件夹，点击“开始只读扫描”建立或更新资料库。"
-            self.save_settings()
+            try:
+                self.save_settings()
+            except (OSError, ValueError):
+                self.folders, self.manual_scan_folders, self.status = previous
+                raise
         return self.snapshot()
 
-    def remove_folder(self, index):
+    def remove_folder(self, index, expected_path=None):
         with self.lock:
             if self.running:
                 raise ValueError("扫描进行中，不能更改文件夹")
             if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < len(self.folders):
-                raise ValueError("文件夹序号无效")
-            self.folders.pop(index)
+                raise ValueError("文件夹列表已变化，请刷新后重试")
+            if expected_path is not None and (not isinstance(expected_path, str) or self.folders[index] != expected_path):
+                raise ValueError("文件夹列表已变化，请刷新后重试")
+            previous = self.folders, self.manual_scan_folders, dict(self.monitor), self.next_scan, self.status
+            self.folders = list(self.folders)
+            removed = self.folders.pop(index)
+            if self.manual_scan_folders is not None:
+                self.manual_scan_folders = [path for path in self.manual_scan_folders if path != removed]
             if not self.folders:
                 self.monitor["enabled"] = False
                 self.next_scan = None
             self.status = (f"已选择 {len(self.folders)} 个文件夹，点击“开始只读扫描”更新资料库。"
                            if self.folders else "请先添加照片或视频文件夹。")
-            self.save_settings()
+            try:
+                self.save_settings()
+            except (OSError, ValueError):
+                self.folders, self.manual_scan_folders, self.monitor, self.next_scan, self.status = previous
+                raise
         return self.snapshot()
 
     def rescan_report(self, identifier):
@@ -314,6 +338,14 @@ class DashboardState(WorkspaceController):
             args = scan_arguments(selected_folders, output=self.output, image_analysis=image_analysis,
                                   video_covers=video_covers, video_headers=video_headers, refresh_media=options.get('refresh_media', False),
                                   video_rule=video_rule)
+            if chosen is not None:
+                previous_scope = self.manual_scan_folders
+                self.manual_scan_folders = list(chosen)
+                try:
+                    self.save_settings()
+                except (OSError, ValueError):
+                    self.manual_scan_folders = previous_scope
+                    raise
             # A one-time choice must not silently restrict future scheduled or
             # recovery scans.  Those use their own recorded roots.
             self.scan_options = {key: value for key, value in options.items() if key != 'scan_folders'}
@@ -541,7 +573,9 @@ def create_dashboard_server(output=REPORTS):
                 elif route == "api/folders/add":
                     result = state.add_folders()
                 elif route == "api/folders/remove":
-                    result = state.remove_folder(data["index"])
+                    if not isinstance(data.get("path"), str):
+                        raise ValueError("请刷新页面后重新选择要移除的文件夹")
+                    result = state.remove_folder(data["index"], data["path"])
                 elif route == "api/scan/start":
                     result = state.start_scan(data)
                 elif route == "api/reports/rescan":
