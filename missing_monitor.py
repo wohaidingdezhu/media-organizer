@@ -15,6 +15,7 @@ class MissingMonitor:
         self.unavailable = set()
         self.revision = 0
         self.running = False
+        self.paused = False
         self.checked = 0
         self.total = len(media.records)
         self.completed_at = 0.0
@@ -55,6 +56,7 @@ class MissingMonitor:
 
     def request_scan(self, *, force=False):
         with self.lock:
+            self.paused = False
             if (self.stopped.is_set() or self.running or not self.media.records or
                     not force and self.completed_at and time.monotonic() - self.completed_at < self.interval):
                 return False
@@ -66,6 +68,7 @@ class MissingMonitor:
     def recheck_missing(self):
         """Prioritize only hidden records without waiting for the full sweep."""
         with self.lock:
+            self.paused = False
             if self.stopped.is_set():
                 return 0
             self.priority.update(self.paths)
@@ -80,7 +83,7 @@ class MissingMonitor:
         records = iter(()) if only_priority else iter(self.media.records.items())
         finished = False
         try:
-            while not self.stopped.is_set():
+            while not self.stopped.is_set() and not self.paused:
                 with self.lock:
                     if self.priority:
                         path = self.priority.pop()
@@ -127,7 +130,13 @@ class MissingMonitor:
                 with self.lock:
                     self.running = False
                     if not only_priority:
-                        self.completed_at = time.monotonic()
+                        self.completed_at = 0.0
+
+    def pause(self):
+        """Stop an abandoned view's I/O; a later catalog request can resume it."""
+        with self.lock:
+            self.paused = True
+            self.completed_at = 0.0
 
     def stop(self):
         self.stopped.set()

@@ -464,6 +464,7 @@ class DashboardState(WorkspaceController):
                 self.report_servers[report.name] = (server, url)
                 threading.Thread(target=server.serve_forever, daemon=True).start()
             server, url = self.report_servers[report.name]
+            self.pause_other_checks(server)
             self.library_server, self.library_report, self.library_url = server, report, url
             return {'url': url.rsplit('/', 1)[0] + '/' + REPORT_VIEWS[view], 'report_id': 'all', 'report': summary}
 
@@ -481,9 +482,16 @@ class DashboardState(WorkspaceController):
                 self.report_servers[report_id] = (server, library_url)
                 threading.Thread(target=server.serve_forever, daemon=True).start()
             server, library_url = self.report_servers[report_id]
+            self.pause_other_checks(server)
             self.library_server, self.library_report, self.library_url = server, report, library_url
             return {"url": library_url.rsplit("/", 1)[0] + "/" + REPORT_VIEWS[view], "report_id": report_id,
                     "report": summary}
+
+    def pause_other_checks(self, current):
+        for server, _ in self.report_servers.values():
+            monitor = getattr(server, 'missing_monitor', None)
+            if server is not current and monitor is not None:
+                monitor.pause()
 
     def open_library(self):
         history = self.report_history()

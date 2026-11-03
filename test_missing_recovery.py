@@ -170,6 +170,35 @@ class MissingRecoveryTests(unittest.TestCase):
             self.assertEqual(monitor.snapshot()[1]['checked'], 1)
             self.assertFalse(monitor.request_scan(force=True))
 
+    def test_abandoned_view_pauses_slow_disk_checks_but_can_be_reopened(self):
+        from missing_monitor import MissingMonitor
+        manager = MediaActions(self.doc)
+        entered, release = threading.Event(), threading.Event()
+        def slow(_identifier):
+            entered.set()
+            release.wait(3)
+            return 'available'
+        monitor = MissingMonitor(manager, delay=0)
+        self.addCleanup(monitor.stop)
+        self.addCleanup(release.set)
+        with mock.patch.object(manager, 'availability', side_effect=slow) as available:
+            self.assertTrue(monitor.request_scan())
+            self.assertTrue(entered.wait(2))
+            monitor.pause()
+            release.set()
+            deadline = time.monotonic() + 3
+            while monitor.status()['scanning'] and time.monotonic() < deadline:
+                time.sleep(.005)
+            self.assertFalse(monitor.status()['scanning'])
+            self.assertEqual(available.call_count, 1)
+            self.assertTrue(monitor.request_scan())
+            deadline = time.monotonic() + 3
+            while monitor.status()['scanning'] and time.monotonic() < deadline:
+                time.sleep(.005)
+            self.assertEqual(monitor.status()['checked'], 2)
+            self.assertEqual(available.call_count, 3)
+            self.assertFalse(monitor.request_scan())
+
     def test_center_returns_while_background_file_check_is_blocked(self):
         entered, release = threading.Event(), threading.Event()
         self.addCleanup(release.set)

@@ -188,11 +188,15 @@ class UnifiedLibraryTests(unittest.TestCase):
         state = media_gui.DashboardState(self.output)
         self.addCleanup(state.close)
         dummy = mock.Mock()
+        old = mock.Mock()
+        state.report_servers['scan-old'] = (old, 'http://127.0.0.1:43210/old/library.html')
         with mock.patch.object(media_gui, 'create_library_server', return_value=(dummy, 'http://127.0.0.1:43210/token/library.html')):
             result = state.view_report('all', 'photos')
             self.assertEqual(result['report_id'], 'all')
             self.assertTrue(result['url'].endswith('center.html#photos'))
             self.assertEqual(result['report']['summary']['files'], 1)
+            old.missing_monitor.pause.assert_called_once()
+            dummy.missing_monitor.pause.assert_not_called()
             self.assertTrue(state.report_history()['library_available'])
             with self.assertRaises(ValueError):
                 state.view_report('all', 'overview')
