@@ -207,12 +207,17 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
         with data_lock(output_dir):
             result = center_catalog(current_document(), center_state.snapshot(), load_notes(note_path), set(history['handled']['trash']) | absent)
         result['missing_files'] = len(absent)
+        result['unavailable_files'] = availability.get('unavailable_count', 0)
         result['availability_revision'] = availability['revision']
         result['hidden_files'] -= len(absent - set(history['handled']['trash']))
         result['operation_state'] = {'running': any(job['status'] in {'running', 'external_running'} for job in history['jobs']),
-                                     'warnings': history['warnings']}
+                                     'warnings': history['warnings'],
+                                     'resumable': [{'id': job['id'], 'total': job['total'], 'created_at': job.get('created_at', '')}
+                                                   for job in history['jobs'] if job['status'] in {'stopped', 'cancelled'} and job.get('mode') == 'trash'
+                                                   and not job.get('error') and job.get('planned_items')]}
         return preview_repair.apply(result)
-    operations = FileOperations(report_dir, media, get_organization, document=current_document, options=organize_settings.snapshot)
+    operations = FileOperations(report_dir, media, get_organization, document=current_document, options=organize_settings.snapshot,
+                                operation_root=os.ensure_private_directory(output_dir / "library-actions") if document.get("unified_library") else None)
     from media_users import UserCatalog
     users = UserCatalog(output_dir, current_document)
     def current_keys():
@@ -425,6 +430,26 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 return
             if not (len(parts) == 1 and Path(route).suffix.lower() in {".html", ".json", ".csv"}
                     or len(parts) == 2 and parts[0] in {"covers", "previews", "stills"} and Path(route).suffix.lower() == ".png"):
+                self.send_error(404)
+                return
+            if route in document.get('preview_sources', {}):
+                from scan_cache import valid_thumbnail
+                for source in document['preview_sources'][route]:
+                    if (len(source) != 3 or not re.fullmatch(r'scan-[A-Za-z0-9_-]{1,120}', source[0])
+                            or source[1] not in {'previews', 'covers'} or not re.fullmatch(r'[A-Za-z0-9_-]+\.png', source[2])):
+                        continue
+                    try:
+                        body = os.read_private_file(output_dir, tuple(source), 2 * 1024 * 1024)
+                        if not valid_thumbnail(body):
+                            continue
+                    except (OSError, ValueError):
+                        continue
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'image/png')
+                    self.send_header('Content-Length', str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 self.send_error(404)
                 return
             try:

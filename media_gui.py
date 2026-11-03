@@ -232,7 +232,17 @@ class DashboardState(WorkspaceController):
                 reports.append(summary)
             active_ids = {candidate.name for candidate in candidates}
             self.report_cache = {key: value for key, value in self.report_cache.items() if key in active_ids}
-            return {"reports": reports, "skipped_reports": skipped, "has_more": has_more}
+            return {"reports": reports, "skipped_reports": skipped, "has_more": has_more,
+                    "library_available": bool(reports) or bool(self.pending_library_revision())}
+
+    def pending_library_revision(self):
+        if not self.running:
+            return ''
+        try:
+            info = (self.output / 'scan-pending.json').lstat()
+            return str(info.st_mtime_ns) + ':' + str(info.st_size) if stat.S_ISREG(info.st_mode) else ''
+        except FileNotFoundError:
+            return ''
 
     def snapshot(self):
         with self.lock:
@@ -242,7 +252,7 @@ class DashboardState(WorkspaceController):
                     "manual_scan_folders": list(self.folders) if self.manual_scan_folders is None else
                         [path for path in self.manual_scan_folders if path in self.folders],
                     "status": self.status, "logs": list(self.logs), "progress": self.progress,
-                    "latest_report": report.name if report else None, "monitor": dict(self.monitor),
+                    "latest_report": report.name if report else None, "pending_library": self.pending_library_revision(), "monitor": dict(self.monitor),
                     "workspace": self.output.name, "watch_status": self.watch_status, "scan_origin": self.scan_origin,
                     "next_update_seconds": max(0, int(self.next_scan - __import__("time").monotonic())) if self.next_scan else None}
 
@@ -350,6 +360,7 @@ class DashboardState(WorkspaceController):
             # recovery scans.  Those use their own recorded roots.
             self.scan_options = {key: value for key, value in options.items() if key != 'scan_folders'}
             self.scan_origin = 'manual'
+            (self.output / 'scan-pending.json').unlink(missing_ok=True)
             self.running = True
             self.cancel_requested.clear()
             self.logs.clear()
@@ -406,6 +417,7 @@ class DashboardState(WorkspaceController):
             self.log(error)
         finally:
             self.cancel_file.unlink(missing_ok=True)
+            (self.output / 'scan-pending.json').unlink(missing_ok=True)
             with self.lock:
                 self.process = None
                 self.running = False
@@ -432,9 +444,37 @@ class DashboardState(WorkspaceController):
         else:
             process.send_signal(signal.SIGINT)
 
+    def view_library(self, view):
+        from unified_library import build_library, PENDING
+        from workspace_data import read_json
+        with self.lock:
+            output, pending = self.output, read_json(self.output, PENDING) if self.running else None
+        report, document = build_library(output, pending)
+        summary = {'id': 'all', 'created_at': document['created_at'], 'roots': document['roots'],
+                   'has_library': True, 'summary': {'files': len(document['files']),
+                   'photos': sum(file['kind'] == '照片' for file in document['files']),
+                   'videos': sum(file['kind'] == '视频' for file in document['files']),
+                   'duplicate_groups': len(document['duplicates']), 'similar_pairs': len(document['similar']['pairs']),
+                   'issues': len(document['issues'])}}
+        with self.lock:
+            if output != self.output:
+                raise ValueError('资料库已切换，请重新打开')
+            if report.name not in self.report_servers:
+                server, url = create_library_server(report, output, dashboard_url=self.dashboard_url)
+                self.report_servers[report.name] = (server, url)
+                threading.Thread(target=server.serve_forever, daemon=True).start()
+            server, url = self.report_servers[report.name]
+            self.pause_other_checks(server)
+            self.library_server, self.library_report, self.library_url = server, report, url
+            return {'url': url.rsplit('/', 1)[0] + '/' + REPORT_VIEWS[view], 'report_id': 'all', 'report': summary}
+
     def view_report(self, report_id, view="overview"):
         if not isinstance(view, str) or view not in REPORT_VIEWS:
             raise ValueError("报告视图无效")
+        if report_id == 'all':
+            if not REPORT_VIEWS[view].startswith('center.html'):
+                raise ValueError('此工具需选择某次完整扫描记录')
+            return self.view_library(view)
         with self.lock:
             report, summary = self._report_summary(report_id)
             if report_id not in self.report_servers:
@@ -442,9 +482,16 @@ class DashboardState(WorkspaceController):
                 self.report_servers[report_id] = (server, library_url)
                 threading.Thread(target=server.serve_forever, daemon=True).start()
             server, library_url = self.report_servers[report_id]
+            self.pause_other_checks(server)
             self.library_server, self.library_report, self.library_url = server, report, library_url
             return {"url": library_url.rsplit("/", 1)[0] + "/" + REPORT_VIEWS[view], "report_id": report_id,
                     "report": summary}
+
+    def pause_other_checks(self, current):
+        for server, _ in self.report_servers.values():
+            monitor = getattr(server, 'missing_monitor', None)
+            if server is not current and monitor is not None:
+                monitor.pause()
 
     def open_library(self):
         history = self.report_history()

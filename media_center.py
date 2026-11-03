@@ -274,7 +274,8 @@ def center_catalog(document, state, notes=None, handled_trash=()):
     def file_item(path):
         record = records[path]
         return {'id': media_id(path), 'path': path, 'name': source_path(path).name,
-                'bytes': record.get('bytes', 0), 'mtime': record.get('mtime', 0),
+                'bytes': record.get('bytes', 0), 'mtime': record.get('mtime', 0), 'browse_only': bool(record.get('browse_only')),
+                'auto_preview': record.get('auto_preview', True),
                 'video': clean_video_metadata(record.get('video')) if record.get('kind') == '视频' else {}}
 
     def entry(identifier, kind, title, files, preview='', metadata=None, tags=None, tag_key=''):
@@ -394,4 +395,5 @@ def center_catalog(document, state, notes=None, handled_trash=()):
             'hidden_files': sum(item.get('path') in hidden for item in document.get('files', []) if isinstance(item, dict)),
             'directories': directories,
             'recent': [key for key in state['recent'] if key in by_id],
+            'unified_library': bool(document.get('unified_library')), 'pending_scan': bool(document.get('pending_scan')),
             'created_at': document.get('created_at', ''), 'restored': bool(document.get('restored_snapshot'))}

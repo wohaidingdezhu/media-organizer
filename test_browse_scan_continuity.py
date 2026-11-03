@@ -9,6 +9,15 @@ class BrowseScanContinuityTests(unittest.TestCase):
     node = dashboard_tests.CompactBrowsingTests.node
     run_ui = center_tests.MediaCenterTests.run_ui
 
+    def test_partial_scan_and_cancel_offer_refresh_without_interrupting_selection(self):
+        self.node(r'''
+const html=fs.readFileSync(root+'/dashboard.html','utf8');let loads=0,status={running:true,latest_report:'old',pending_library:'discovered'};
+Object.assign(scope,{stopped:false,scanControls:{epoch:0},previousRunning:true,knownLatest:'old',pendingLibrarySeen:'',selectedReport:'all',request:async()=>status,renderStatus(){},notice(){},setTimeout(){return 1;},loadReports:async()=>{loads++;}});
+vm.runInContext(html.slice(html.indexOf('async function refresh()'),html.indexOf('async function act(')),scope);
+(async()=>{$('platform-main').setAttribute('data-pane','results');await scope.refresh();assert.equal(loads,0);assert(!$('pending-report-update').hidden);assert($('pending-report-update').textContent.includes('先浏览'));
+$('pending-report-update').hidden=true;status={running:false,latest_report:'old',pending_library:''};await scope.refresh();assert.equal(loads,0);assert(!$('pending-report-update').hidden);assert($('pending-report-update').textContent.includes('刷新'));assert.equal(scope.selectedReport,'all');})().catch(e=>{console.error(e);process.exitCode=1;});
+''')
+
     def test_manual_completion_and_cancel_keep_existing_selection_and_iframe(self):
         self.node(r'''
 const html=fs.readFileSync(root+'/dashboard.html','utf8'),loads=[];let status={running:false,latest_report:'new',scan_origin:'manual'};

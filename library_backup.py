@@ -28,6 +28,8 @@ def allowed(name):
         return False
     if len(parts) == 1:
         return name in ROOT_FILES
+    if len(parts) == 3 and parts[:2] == ('library-actions', 'operations'):
+        return bool(re.fullmatch(r'[0-9a-f]{24}\.json', parts[2]))
     if not re.fullmatch(r'scan-[A-Za-z0-9_-]{1,120}', parts[0]):
         return False
     if len(parts) == 2:
@@ -42,6 +44,14 @@ def export_backup(root):
     root = fs.private_data_path(root)
     with maintenance_when_idle(root), data_lock(root):
         names = [name for name in sorted(fs.listdir(root)) if name in ROOT_FILES]
+        journal = root / 'library-actions' / 'operations'
+        if journal.exists():
+            descriptor = open_directory(journal)
+            try:
+                names.extend('library-actions/operations/' + name for name in fs.listdir(descriptor)
+                             if allowed('library-actions/operations/' + name))
+            finally:
+                fs.close(descriptor)
         for report in sorted(fs.listdir(root)):
             if not re.fullmatch(r'scan-[A-Za-z0-9_-]{1,120}', report):
                 continue
@@ -175,7 +185,7 @@ def validate_backup(body):
             if not re.fullmatch('[0-9a-f]{64}', key):
                 raise ValueError('备注标识无效')
             clean_note(note)
-    if any('/' in name and name.split('/')[0] not in reports for name in files):
+    if any('/' in name and name.split('/')[0] not in reports and not name.startswith('library-actions/operations/') for name in files):
         raise ValueError('备份含没有报告的孤立资源')
     return files, {'reports': len(reports), 'files': len(files), 'bytes': sum(map(len, files.values())),
                    'message': '恢复为独立资料库副本，不覆盖当前资料，也不改动原媒体。恢复后须重新扫描才能操作原文件。'}

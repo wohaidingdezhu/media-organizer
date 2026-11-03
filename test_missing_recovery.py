@@ -82,6 +82,7 @@ class MissingRecoveryTests(unittest.TestCase):
         self.run_check()
         self.assertEqual(self.center()['missing_files'], 0)
         self.assertEqual(len(self.center()['items']), 2)
+        self.assertEqual(self.center()['unavailable_files'], 0)
 
     def test_selected_missing_file_hides_but_disconnected_root_never_hides(self):
         self.paths[0].unlink()
@@ -95,6 +96,7 @@ class MissingRecoveryTests(unittest.TestCase):
         self.run_check()
         self.assertEqual(self.center()['missing_files'], 0)
         self.assertEqual(len(self.center()['items']), 2)
+        self.assertEqual(self.center()['unavailable_files'], 2)
 
     def test_permission_errors_and_changed_device_do_not_claim_missing(self):
         manager = MediaActions(self.doc)
@@ -167,6 +169,35 @@ class MissingRecoveryTests(unittest.TestCase):
             self.assertFalse(monitor.snapshot()[1]['scanning'])
             self.assertEqual(monitor.snapshot()[1]['checked'], 1)
             self.assertFalse(monitor.request_scan(force=True))
+
+    def test_abandoned_view_pauses_slow_disk_checks_but_can_be_reopened(self):
+        from missing_monitor import MissingMonitor
+        manager = MediaActions(self.doc)
+        entered, release = threading.Event(), threading.Event()
+        def slow(_identifier):
+            entered.set()
+            release.wait(3)
+            return 'available'
+        monitor = MissingMonitor(manager, delay=0)
+        self.addCleanup(monitor.stop)
+        self.addCleanup(release.set)
+        with mock.patch.object(manager, 'availability', side_effect=slow) as available:
+            self.assertTrue(monitor.request_scan())
+            self.assertTrue(entered.wait(2))
+            monitor.pause()
+            release.set()
+            deadline = time.monotonic() + 3
+            while monitor.status()['scanning'] and time.monotonic() < deadline:
+                time.sleep(.005)
+            self.assertFalse(monitor.status()['scanning'])
+            self.assertEqual(available.call_count, 1)
+            self.assertTrue(monitor.request_scan())
+            deadline = time.monotonic() + 3
+            while monitor.status()['scanning'] and time.monotonic() < deadline:
+                time.sleep(.005)
+            self.assertEqual(monitor.status()['checked'], 2)
+            self.assertEqual(available.call_count, 3)
+            self.assertFalse(monitor.request_scan())
 
     def test_center_returns_while_background_file_check_is_blocked(self):
         entered, release = threading.Event(), threading.Event()

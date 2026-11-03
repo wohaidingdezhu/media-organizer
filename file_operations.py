@@ -51,7 +51,9 @@ def maintenance_when_idle(output):
         raise ValueError('文件操作正在执行，请等待完成再维护资料库')
     descriptors = []
     try:
-        for report in sorted(Path(output).glob('scan-*')):
+        for report in sorted([*Path(output).glob('scan-*'), *Path(output).glob('library-*')]):
+            if not report.is_dir():
+                continue
             operations = report / 'operations'
             if not operations.exists():
                 continue
@@ -286,16 +288,17 @@ def trash_one(media, identifier, expected):
 
 
 class FileOperations:
-    def __init__(self, report_dir, media, plan, document=None, options=None):
+    def __init__(self, report_dir, media, plan, document=None, options=None, operation_root=None):
         self.options = options
         self.report_dir, self.media, self.plan = Path(report_dir), media, plan
         self.lock = _STATE_LOCK
-        self.report_key = os.path.abspath(self.report_dir)
+        self.operation_root = Path(operation_root) if operation_root is not None else self.report_dir
+        self.report_key = os.path.abspath(self.operation_root)
         self.previews, self.jobs = {}, {}
         self.document = document
 
     def _stop_requested(self, identifier):
-        parent = open_directory(self.report_dir / "operations")
+        parent = open_directory(self.operation_root / "operations")
         try:
             try:
                 fd = os.open(".stop-" + identifier, FLAGS, dir_fd=parent)
@@ -316,7 +319,7 @@ class FileOperations:
             job = self.snapshot(identifier)  # Validates the identifier and report scope.
             if job["status"] not in {"running", "external_running"}:
                 return job  # A late or repeated request never changes finished work.
-            parent = open_directory(self.report_dir / "operations")
+            parent = open_directory(self.operation_root / "operations")
             try:
                 try:
                     fd = os.open(".stop-" + identifier, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
@@ -332,7 +335,7 @@ class FileOperations:
             return self.snapshot(identifier)
 
     def _job_lock(self):
-        directory = self.report_dir / "operations"
+        directory = self.operation_root / "operations"
         if directory.is_symlink():
             raise ValueError("操作记录目录不能是符号链接")
         directory.mkdir(mode=0o700, exist_ok=True)
@@ -351,7 +354,7 @@ class FileOperations:
             raise
 
     def _record_is_active(self, identifier):
-        parent = open_directory(self.report_dir / "operations")
+        parent = open_directory(self.operation_root / "operations")
         try:
             try:
                 fd = os.open(".batch-lock", FLAGS, dir_fd=parent)
@@ -641,7 +644,7 @@ class FileOperations:
         body = json.dumps(job, ensure_ascii=False, allow_nan=False, indent=2).encode('utf-8')
         if len(body) > 4 * 1024 * 1024:
             raise ValueError('操作记录超过大小上限，已停止，请缩小整理范围')
-        directory = self.report_dir / "operations"
+        directory = self.operation_root / "operations"
         if directory.is_symlink():
             raise ValueError("操作记录目录不能是符号链接")
         directory.mkdir(mode=0o700, exist_ok=True)
@@ -686,6 +689,7 @@ class FileOperations:
             job = {"id": secrets.token_hex(12), "mode": preview["mode"], "status": "running",
                    "created_at": time.strftime("%Y-%m-%d %H:%M:%S"), "items": [], "total": len(preview["items"]),
                    "destination": preview.get('destination'),
+                   "source_report": self.report_dir.name,
                    "bundle": preview.get("bundle", False), "quick": preview.get("quick", False),
                    "bundle_kind": preview.get('bundle_kind'),
                    "planned_items": [{key: item[key] for key in ("path", "target", "bytes", "role")} for item in preview["items"]]}
@@ -804,7 +808,7 @@ class FileOperations:
                         _BATCH_LOCK.release()
 
     def _read_job(self, identifier, allow_queue=True):
-        descriptor = open_directory(self.report_dir / "operations")
+        descriptor = open_directory(self.operation_root / "operations")
         try:
             fd = os.open(identifier + ".json", FLAGS, dir_fd=descriptor)
             with os.fdopen(fd, "rb") as stream:
@@ -887,7 +891,7 @@ class FileOperations:
             return job
 
     def _history(self):
-        directory = self.report_dir / "operations"
+        directory = self.operation_root / "operations"
         try:
             descriptor = open_directory(directory)
         except FileNotFoundError:
@@ -915,7 +919,7 @@ class FileOperations:
         handled = {"copy": set(), "trash": set()}
         for job in history["jobs"]:
             for item in job["items"]:
-                if item["status"] == "success":
+                if item["status"] == "success" and (self.operation_root == self.report_dir or job.get("source_report") == self.report_dir.name):
                     handled[job["mode"]].add(item["path"])
         return {"jobs": history["jobs"][:20], "warnings": history["warnings"],
                 "record_count": len(history["jobs"]),

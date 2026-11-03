@@ -62,7 +62,7 @@ class MediaActions:
         if not isinstance(files, list):
             files = []
         for record in files:
-            if not isinstance(record, dict):
+            if not isinstance(record, dict) or record.get('browse_only'):
                 continue
             path = record.get("path")
             if not isinstance(path, str) or not path or "\x00" in path:
