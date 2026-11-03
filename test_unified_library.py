@@ -237,6 +237,53 @@ class UnifiedLibraryTests(unittest.TestCase):
         self.assertTrue(all(not file['auto_preview'] for item in catalog['items'] for file in item['files']))
         self.assertIn('未启用', catalog['review']['similar_note'])
 
+    def test_second_part_without_metadata_or_poster_keeps_known_movie_details(self):
+        one, two = self.record(self.a, 'Feature-CD1.mp4'), self.record(self.b, 'Feature-CD2.mp4')
+        for record in (one, two):
+            record.update(kind='视频', extension='.mp4')
+        key = 'c' * 64
+        group = {'group_key': key, 'tag_key': key, 'title': 'Feature', 'type': '名称'}
+        first = self.report(1, [self.a], [one], video_library={'groups': [{**group,
+            'files': [{'path': one['path']}], 'poster': 'covers/poster.png',
+            'metadata': {'title': 'Known film', 'actors': ['Known actor']}, 'tags': ['剧情']}]})
+        (first / 'covers').mkdir()
+        png = io.BytesIO()
+        Image.new('RGB', (12, 16), 'blue').save(png, format='PNG')
+        (first / 'covers' / 'poster.png').write_bytes(png.getvalue())
+        self.report(2, [self.b], [two], video_library={'groups': [{**group,
+            'files': [{'path': two['path']}], 'poster': '', 'metadata': {}, 'tags': []}]})
+        directory, doc = build_library(self.output)
+        merged = doc['video_library']['groups'][0]
+        self.assertEqual(merged['metadata']['title'], 'Known film')
+        self.assertEqual(merged['metadata']['actors'], ['Known actor'])
+        self.assertEqual(merged['tags'], ['剧情'])
+        self.assertEqual(len(merged['files']), 2)
+        server, prefix = self.server(directory)
+        headers, body = request(server, prefix + merged['poster'])
+        self.assertIn('200 OK', headers)
+        self.assertEqual(body, png.getvalue())
+
+    def test_interrupted_shared_batch_has_current_center_history_entry(self):
+        one, two = self.record(self.a), self.record(self.b)
+        self.report(1, [self.a, self.b], [one, two])
+        directory, _ = build_library(self.output)
+        server, prefix = self.server(directory)
+        from workspace_data import write_json
+        journal = self.output / 'library-actions' / 'operations'
+        journal.mkdir()
+        planned = [{'path': file['path'], 'target': 'trash'} for file in (one, two)]
+        identifier = 'b' * 24
+        write_json(journal, identifier + '.json', {'id': identifier, 'mode': 'trash',
+                   'status': 'running', 'total': 2, 'created_at': '2026-11-03', 'planned_items': planned,
+                   'items': [{**planned[0], 'status': 'success'}, {**planned[1], 'status': 'processing'}]})
+        headers, raw = request(server, prefix + 'api/center')
+        self.assertIn('200 OK', headers)
+        state = json.loads(raw)['operation_state']
+        self.assertEqual(state['resumable'], [])
+        self.assertEqual(state['unfinished'][0]['id'], identifier)
+        self.assertEqual(state['unfinished'][0]['status'], 'interrupted')
+        self.assertEqual(state['unfinished'][0]['completed'], 1)
+
 
 if __name__ == '__main__':
     unittest.main()

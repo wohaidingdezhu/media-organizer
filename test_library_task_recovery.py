@@ -16,6 +16,29 @@ import test_direct_cleanup
 
 
 class LibraryTaskRecoveryTests(unittest.TestCase):
+    def test_existing_running_batch_can_be_watched_and_closed_without_restarting_or_stopping(self):
+        test_direct_cleanup.DirectCleanupTests.node(self, r'''
+(async()=>{
+const body=new E();let closed=0,poll;const id='f'.repeat(24);
+Object.assign(scope,{document:{body,createElement:t=>new E(t),querySelector:()=>null},clearTimeout(){},setTimeout(fn){poll=fn;return 1;},fetch:async(path,options)=>{requests.push({path,options});return {ok:true,json:async()=>({id,mode:'trash',status:'running',total:200,items:[{path:a.path,status:'success'},{path:b.path,status:'processing'}]})};}});
+vm.runInContext(fs.readFileSync(root+'/report_actions.js','utf8'),scope);
+scope.reportTrashProgress(id,()=>closed++);await new Promise(setImmediate);
+const dialog=body.children[0],buttons=dialog.children.at(-1).children;assert(dialog.open);assert(buttons[2].hidden);assert(!buttons[1].hidden);assert(dialog.children[1].children[0].textContent.includes('1/200'));assert.equal(requests.length,1);assert.equal(requests[0].options?.method,undefined);
+buttons[0].onclick();assert(dialog.removed);assert.equal(closed,1);await poll();assert.equal(requests.length,1);
+scope.reportTrashProgress('../outside');assert.equal(body.children.length,1);
+})().catch(e=>{console.error(e);process.exitCode=1;});
+''')
+
+    def test_interrupted_batch_lists_success_unknown_and_unstarted_without_retry(self):
+        test_direct_cleanup.DirectCleanupTests.node(self, r'''
+(async()=>{
+const body=new E(),id='f'.repeat(24);Object.assign(scope,{document:{body,createElement:t=>new E(t),querySelector:()=>null},clearTimeout(){},setTimeout(){return 1;},fetch:async(path)=>{requests.push(path);return {ok:true,json:async()=>({id,mode:'trash',status:'interrupted',error:'需先核对结果',total:3,items:[{path:a.path,status:'success'},{path:b.path,status:'unknown',error:'结果未确认'}],planned_items:[{path:a.path},{path:b.path},{path:'/generated/unstarted.mp4'}]})};}});
+vm.runInContext(fs.readFileSync(root+'/report_actions.js','utf8'),scope);scope.reportTrashProgress(id);await new Promise(setImmediate);
+const dialog=body.children[0],content=dialog.children[1],buttons=dialog.children.at(-1).children,list=content.children.find(n=>n.tagName==='UL');
+assert(content.children[0].textContent.includes('需先核对结果'));assert.equal(list.children.length,3);assert(list.children[0].textContent.startsWith('已完成'));assert(list.children[1].textContent.includes('结果未确认'));assert(list.children[2].textContent.startsWith('未开始'));assert(buttons.find(n=>n.textContent==='继续核对未处理项').hidden);assert.equal(requests.length,1);
+})().catch(e=>{console.error(e);process.exitCode=1;});
+''')
+
     def test_200_file_safe_cancel_survives_restart_and_new_library_revision(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp).resolve()

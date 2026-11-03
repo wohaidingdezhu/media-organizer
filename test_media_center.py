@@ -384,6 +384,7 @@ let operationState={running:false,warnings:[]},review={exact:[],similar:[],warni
 const scope={console,location,IntersectionObserver:class{observe(){}unobserve(){}disconnect(){}},clearTimeout(){},setTimeout(fn){pendingRefresh=fn;return 1;},document:{body:new E(),createElement:tag=>new E(tag),getElementById:$},window:{scrollX:0,scrollY:350,scrollTo(x,y){this.scrollX=x;this.scrollY=y;},addEventListener:(k,v)=>events[k]=v},reportActionOpen:(action,ids,onClose,summary)=>operations.push({action,ids,onClose,summary}),fetch:async(path,options)=>{
 if(options?.body){const body=JSON.parse(options.body);calls.push({path,body});if(body.action==='favorite')state.favorites[body.id]=body.value;if(body.action==='recent')state.recent=[body.id];return {ok:true,json:async()=>state};}
 if(failCenter&&path==='api/center')return {ok:false,json:async()=>({error:'Disconnected'})};
+if(path==='api/operations')return {ok:true,json:async()=>({jobs:operationState.running?[{status:'running'}]:[],warnings:operationState.warnings})};
 return {ok:true,json:async()=>path==='api/media'?access:{items:items.map(i=>({...i,favorite:state.favorites[i.id]||false})),state,folders,directories,review,operation_state:operationState,hidden_files:hiddenFiles,recent:state.recent,restored:false}};
 }};
 '''+setup+r'''

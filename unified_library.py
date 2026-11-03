@@ -20,7 +20,7 @@ PENDING = 'scan-pending.json'
 def build_library(output, pending=None):
     with data_lock(output):
         index, warnings = sync_index(output, complete_only=True)
-        identity = {'scans': index['scans'], 'pending': pending, 'warnings': warnings, 'schema': 3}
+        identity = {'scans': index['scans'], 'pending': pending, 'warnings': warnings, 'schema': 4}
         revision = hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
         directory = fs.ensure_private_directory(Path(output) / ('library-' + revision))
         cached = read_json(directory, 'report.json')
@@ -63,6 +63,15 @@ def build_library(output, pending=None):
                     continue
                 poster = asset(name, group.get('poster', ''), media_id(members[0]['path']))
                 prior = groups.get(key)
+                if prior:
+                    # A later part/edition often has no local NFO or artwork.
+                    # Empty facts must not erase another part's known details.
+                    metadata = {**(prior.get('metadata') or {}),
+                                **{key: value for key, value in (group.get('metadata') or {}).items() if value}}
+                    if not re.fullmatch(r'(?:previews|covers)/[A-Za-z0-9_-]+\.png', group.get('poster', '')):
+                        poster = prior['poster']
+                    group = {**group, 'metadata': metadata,
+                             'tags': list(dict.fromkeys(prior.get('tags', []) + group.get('tags', [])))}
                 groups[key] = {**group, 'files': (prior['files'] if prior else []) + members, 'poster': poster}
             for pair in (doc.get('similar') or {}).get('pairs', []):
                 if all(path in selected and selected[path]['report_id'] == name for path in (pair.get('left'), pair.get('right'))):
