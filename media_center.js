@@ -113,7 +113,7 @@ async function reloadAfterSave(context){const refreshed=await load();if(refreshe
 async function update(payload,onSaved=null){const context=detailContext();if(busy)return false;busy=true;syncSelection();$('detail-feedback').textContent=$('detail-status').textContent='';try{const saved=await request('api/center',payload);if(onSaved)onSaved(saved);return await reloadAfterSave(context);}catch(error){message(error.message);detailNotice(context,'detail-status',error.message);return false;}finally{busy=false;syncSelection();}}
 let previewObserver=null,previewQueue=[],previewWorking=false,previewDone=0,previewFailed=0,previewTotal=0;
 const previewWork=new Map();
-function previewStatus(){const jobs=[...previewWork.values()];previewTotal=jobs.length;previewDone=jobs.filter(job=>job.state!=='queued').length;previewFailed=jobs.filter(job=>job.state==='failed').length;const active=previewWorking||previewQueue.length;const label=$('preview-progress-label'),meter=$('preview-progress');label.hidden=meter.hidden=!previewTotal;label.textContent=active?'正在补充预览 '+previewDone+'/'+previewTotal+'（'+Math.floor(previewDone*100/previewTotal)+'%）':'预览处理完成 '+previewDone+'/'+previewTotal+(previewFailed?' · '+previewFailed+' 项未生成，可点击补预览重试':'');meter.value=previewTotal?previewDone*100/previewTotal:0;}
+function previewStatus(){const jobs=[...previewWork.values()];previewTotal=jobs.length;previewDone=jobs.filter(job=>job.state!=='queued').length;previewFailed=jobs.filter(job=>job.state==='failed').length;const active=previewWorking||previewQueue.length;const label=$('preview-progress-label'),meter=$('preview-progress');label.hidden=meter.hidden=!previewTotal;label.textContent=active?'正在补充预览 '+previewDone+'/'+previewTotal+'（'+Math.floor(previewDone*100/previewTotal)+'%）':'预览处理完成 '+previewDone+'/'+previewTotal+(previewFailed?' · '+previewFailed+' 项未生成，可点击补预览重试':'');const warning=jobs.find(job=>job.warning)?.warning;if(warning)label.textContent+=' · '+warning;meter.value=previewTotal?previewDone*100/previewTotal:0;}
 function previewFile(item){return item.files?.[0]||byFile.get(item.id);}
 function previewAllowed(item){const file=previewFile(item);return file&&mediaAccess.available&&!catalog.restored&&mediaAccess.ids_by_path[file.path]===file.id;}
 function previewUnavailable(item){if(previewFile(item)?.browse_only)return '扫描处理中或备份记录：清单可浏览，完成核对后才能操作';return catalog.restored?'备份中没有预览，需重新扫描本机原文件':!mediaAccess.available?'原文件暂时无法访问，请检查磁盘连接后刷新':'原文件不在当前可访问列表，请重新扫描来源目录';}
@@ -153,7 +153,7 @@ async function runPreviewQueue(){
     if(!job.targets.length){previewWork.delete(job.id);job.resolve(false);previewStatus();continue;}
     previewStatus();
     try{
-      const result=await requestPreview(job.id);if(!centerArt(result.preview))throw Error('预览地址无效');job.state='done';job.preview=result.preview;
+      const result=await requestPreview(job.id);if(!centerArt(result.preview))throw Error('预览地址无效');job.state='done';job.preview=result.preview;job.warning=typeof result.warning==='string'?result.warning:'';
       // Rebuilt on each accepted catalog load: update only current records for
       // this file, including overlapping review groups and multipart movies.
       for(const record of previewRecords.get(job.id)||[]){record.preview=result.preview;delete record.preview_status;}
