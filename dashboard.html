@@ -59,14 +59,14 @@
   <section id="result-pane" aria-label="扫描结果">
     <div id="result-empty" class="panel result-empty"><h2>先扫描一个文件夹</h2><p>完成后可浏览照片、播放影片、在 文件管理器 定位清理文件，并核对分类目录。</p><button id="first-scan" class="primary">添加媒体文件夹…</button></div>
     <div id="result-content" hidden>
-      <div class="result-header"><div class="scan-heading"><h2 id="result-title">扫描结果</h2><p id="result-time"></p></div><label class="field history-picker">查看哪次扫描<select id="history" aria-label="选择历史扫描"></select></label></div>
+      <div class="result-header"><div class="scan-heading"><h2 id="result-title">扫描结果</h2><p id="result-time"></p></div><label class="field history-picker">浏览范围<select id="history" aria-label="选择历史扫描"></select></label></div>
       <div id="history-note" class="history-note"></div>
       <p id="current-sources" class="sub" style="overflow-wrap:anywhere"></p>
       <button id="scan-info-open" class="scan-info-open" type="button">扫描信息与导出</button><dialog id="scan-info-dialog" aria-labelledby="scan-info-title"><div class="scan-info-heading"><h2 id="scan-info-title">扫描信息与导出</h2><button id="scan-info-close" type="button">关闭</button></div><div class="scan-info-body"><details class="scan-overview"><summary>扫描概况</summary><div id="metrics" class="metrics"></div></details>
       <details class="sources"><summary id="source-summary">扫描来源</summary><ul id="source-list"></ul></details>
       <div class="result-toolbar">
 
-        <div class="row"><a id="standalone" class="button ghost small" target="_blank" rel="noopener">单独打开</a><details class="export-menu"><summary class="button ghost small">导出清单 ▾</summary><div class="export-links"><a data-export="inventory.csv" download>全部媒体 CSV</a><a data-export="duplicates.csv" download>精确重复 CSV</a><a data-export="similar.csv" download>相似候选 CSV</a><a data-export="issues.csv" download>读取问题 CSV</a></div></details></div>
+        <div class="row"><a id="standalone" class="button ghost small" target="_blank" rel="noopener">单独打开</a><details id="scan-exports" class="export-menu"><summary class="button ghost small">导出清单 ▾</summary><div class="export-links"><a data-export="inventory.csv" download>全部媒体 CSV</a><a data-export="duplicates.csv" download>精确重复 CSV</a><a data-export="similar.csv" download>相似候选 CSV</a><a data-export="issues.csv" download>读取问题 CSV</a></div></details></div>
       </div>
       <p class="sub">结果对应所选扫描时间；新增或移走媒体后，可新建扫描刷新清单。</p>
       </div></dialog>
@@ -76,7 +76,7 @@
   </section>
 
   <section id="scan-pane" aria-label="新建扫描" hidden><div class="grid">
-    <section class="panel"><h2>1. 选择扫描文件夹</h2><p class="sub">勾选本次要扫描的文件夹；取消勾选不会移除文件夹。提交扫描后记住本次范围，下次打开可继续使用。</p><ul id="folders" class="folder-list"><li class="empty">尚未选择文件夹</li></ul><button id="add-folder" class="ghost">＋ 添加文件夹…</button><p id="scan-scope" class="sub" role="status"></p><p class="sub">本次结果只显示勾选的目录；其他目录的记录仍可在历史扫描或“跨扫描索引”查看。自动更新开启时仍检查所有已添加目录。</p><p class="sub">Mac 可一次选择多个文件夹；Windows 可多次添加。首次建议先试一个较小目录。</p></section>
+    <section class="panel"><h2>1. 选择扫描文件夹</h2><p class="sub">勾选本次要扫描的文件夹；取消勾选不会移除文件夹。提交扫描后记住本次范围，下次打开可继续使用。</p><ul id="folders" class="folder-list"><li class="empty">尚未选择文件夹</li></ul><button id="add-folder" class="ghost">＋ 添加文件夹…</button><button id="browse-scanning" type="button" hidden>先浏览已发现的媒体</button><p id="scan-scope" class="sub" role="status"></p><p class="sub">本次只更新勾选的目录；统一资料库继续显示其他已扫描目录。自动更新开启时仍检查所有已添加目录。</p><p class="sub">Mac 可一次选择多个文件夹；Windows 可多次添加。首次建议先试一个较小目录。</p></section>
     <section class="panel"><h2>2. 扫描选项</h2>
       <label class="option"><input id="images" type="checkbox" checked><span>解析照片日期与相似候选<small>同时生成本地图片封面；完整 SHA-256 查重始终开启。</small></span></label>
       <label class="option"><input id="covers" type="checkbox" checked><span>读取视频时长、尺寸与封面<small>无本地封面时截帧；信息与封面只保存在资料库。</small></span></label>
@@ -100,7 +100,7 @@
 <script>
 const $ = id => document.getElementById(id);
 const descriptions = {review:'核对精确重复与相似照片，比较后再清理。',home:'本地电影、视频、照片的统一资料库。',videos:'浏览本地视频，点击卡片查看详情并播放。',collections:'目录相册与自定义合集，原文件保持原位置。',favorites:'收藏你喜欢的照片、电影和视频。',tags:'按标签集中浏览不同类型的媒体。',resources:'浏览本次媒体库全部文件。',users:'管理用户名，给照片和整部电影分配归属，预览对应用户目录的分类计划。',photos:'按年月和原文件夹浏览照片、并排比较，勾选后可核对分类计划或预览废纸篓 / 回收站清理。',organize:'按文件夹浏览，点击文件旁的查看、播放或删除。整理到新文件夹时会先预览。',overview:'本次扫描的完整汇总。选择上方分类，可直接定位需要核对的结果。',duplicates:'内容完全相同的文件。可逐项删除，或选择一份保留后清理其余副本。',similar:'点击“对比这两张”查看，或在文件旁点击“删除…”。相似照片可能内容不同，请自行核对。',library:'浏览影片封面、播放影片，编辑标签、评分和观看备注；可筛选已观看与收藏。',folders:'同名或整理后名称冲突的文件夹候选；请结合来源路径核对。',issues:'本次扫描遇到的读取问题与跳过项。没有问题不表示所有视频都已验证可播放。'};
-let reports=[], selectedReport='', selectedView='home', lastLog='', lastFolders='', previousRunning=false, knownLatest;
+let pendingLibrarySeen='', reports=[], selectedReport='', selectedView='home', lastLog='', lastFolders='', previousRunning=false, knownLatest;
 const folderSelection=new Map();
 let pollTimer=null, stopped=false, historyLoading=false, viewRequest=0;
 try { const saved=JSON.parse(sessionStorage.getItem('media-result-selection') || '{}'); selectedReport=saved.report || ''; if(descriptions[saved.view])selectedView=saved.view; } catch (_) {}
@@ -110,16 +110,16 @@ function notice(error){if(stopped)return;$('notice').textContent=error?String(er
 function showPane(name){$('platform-main').setAttribute('data-pane',name);for(const button of document.querySelectorAll('[data-view]'))button.setAttribute('aria-pressed','false');$('scan-pane').hidden=name!=='scan';$('result-pane').hidden=name!=='results';$('catalog-pane').hidden=name!=='catalog';$('settings-pane').hidden=name!=='settings';for(const pane of ['scan','results','catalog','settings']){if(pane===name)$('nav-'+pane).setAttribute('aria-current','page');else $('nav-'+pane).removeAttribute('aria-current');}}
 function formatTime(value){const date=new Date(value);return Number.isNaN(date.getTime())?'时间未记录':date.toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});}
 function renderSummary(){const report=reports.find(item=>item.id===selectedReport);if(!report)return;
-  $('history').value=report.id;$('result-title').textContent=report.id===reports[0].id?'最近一次扫描':'历史扫描';$('result-time').textContent=formatTime(report.created_at);
+  $('scan-exports').hidden=report.id==='all';$('history').value=report.id;$('result-title').textContent=report.id==='all'?'统一资料库':report.id===reports.find(item=>item.id!=='all')?.id?'最近一次扫描':'历史扫描';$('result-time').textContent=formatTime(report.created_at);
   const summary=report.summary, values=[['媒体文件',summary.files,'照片与视频'],['照片',summary.photos,'扫描清单'],['视频',summary.videos,'扫描清单'],['精确重复',summary.duplicate_groups,'组 · 完整 SHA-256'],['图片相似候选',summary.similar_pairs,'对 · 需人工核对'],['读取问题',summary.issues,'条 · 本次扫描']];
   $('metrics').replaceChildren();for(const [label,count,detail] of values){const card=document.createElement('div');card.className='metric';const name=document.createElement('span'),value=document.createElement('strong'),note=document.createElement('small');name.textContent=label;value.textContent=Number(count||0).toLocaleString('zh-CN');note.textContent=detail;card.append(name,value,note);$('metrics').append(card);}
   $('source-summary').textContent=`扫描来源 · ${report.roots.length} 个文件夹`;$('current-sources').textContent='当前展示的扫描来源：'+report.roots.join('、');$('source-list').replaceChildren();for(const path of report.roots){const li=document.createElement('li');li.textContent=path;$('source-list').append(li);}
 
 }
-async function openView(view,openFile=''){$('result-viewer').classList.remove('overlay-mode');showPane('results');if(!selectedReport)return;const ticket=++viewRequest;selectedView=view;saveSelection();notice();
+async function openView(view,openFile=''){if(selectedReport==='all'&&!['home','library','videos','photos','collections','favorites','resources','tags','review'].includes(view)){selectedReport=reports.find(item=>item.id!=='all')?.id||'';renderSummary();}$('result-viewer').classList.remove('overlay-mode');showPane('results');if(!selectedReport)return;const ticket=++viewRequest;selectedView=view;saveSelection();notice();
   $('nav-results').removeAttribute('aria-current');for(const button of document.querySelectorAll('[data-view]'))button.setAttribute('aria-pressed',String(button.dataset.view===view));
   $('view-description').textContent=descriptions[view];$('viewer-message').textContent='正在打开结果…';$('viewer-message').hidden=false;$('result-frame').hidden=true;
-  try{const data=await request('reports/view',{report_id:selectedReport,view});if(ticket!==viewRequest)return;const url=new URL(data.url);if(url.protocol!=='http:'||url.hostname!=='127.0.0.1')throw new Error('结果地址无效');if(/^[0-9a-f]{64}$/.test(openFile))url.searchParams.set('open_file',openFile);
+  try{const data=await request('reports/view',{report_id:selectedReport,view});if(ticket!==viewRequest)return;if(data.report_id==='all'&&data.report){const index=reports.findIndex(item=>item.id==='all');if(index>=0)reports[index]=data.report;renderSummary();}const url=new URL(data.url);if(url.protocol!=='http:'||url.hostname!=='127.0.0.1')throw new Error('结果地址无效');if(/^[0-9a-f]{64}$/.test(openFile))url.searchParams.set('open_file',openFile);
     $('standalone').href=url.href;for(const link of document.querySelectorAll('[data-export]'))link.href=new URL(link.dataset.export,url).href;
     $('result-frame').title=`${document.querySelector('[data-view="'+view+'"]').textContent} · ${formatTime(reports.find(item=>item.id===selectedReport).created_at)}`;
     $('result-frame').hidden=false;$('result-frame').src=url.href;$('viewer-message').hidden=true;return true;
@@ -134,15 +134,15 @@ function adoptCenterView(view,fragment){
   const url=new URL($('result-frame').src);url.hash=fragment;$('standalone').href=url.href;
   $('result-frame').title=`${document.querySelector('[data-view="'+view+'"]').textContent} · ${formatTime(reports.find(item=>item.id===selectedReport)?.created_at)}`;
 }
-window.addEventListener('message',async event=>{if(event.source!==$('result-frame').contentWindow||!$('result-frame').src||event.origin!==new URL($('result-frame').src).origin||!selectedReport)return;if(event.data?.type==='media-overlay'){if(typeof event.data.open==='boolean')$('result-viewer').classList.toggle('overlay-mode',event.data.open);return;}if(event.data?.type==='media-context'){if($('result-frame').hidden)return;const views={home:'home',movies:'library',videos:'videos',photos:'photos',collections:'collections',favorites:'favorites',resources:'resources',tags:'tags',review:'review'};if(Object.hasOwn(views,event.data.view))adoptCenterView(views[event.data.view],event.data.view);return;}if(event.data?.type==='media-navigate'){const views={movies:'library',videos:'videos',photos:'photos',favorites:'favorites',resources:'resources',tags:'tags'};if(Object.hasOwn(views,event.data.view))await openView(views[event.data.view]);return;}if(event.data?.type!=='media-rescan')return;const data=await scanAction('reports/rescan',{report_id:selectedReport});if(data)previousRunning=data.running;});
+window.addEventListener('message',async event=>{if(event.source!==$('result-frame').contentWindow||!$('result-frame').src||event.origin!==new URL($('result-frame').src).origin||!selectedReport)return;if(event.data?.type==='media-overlay'){if(typeof event.data.open==='boolean')$('result-viewer').classList.toggle('overlay-mode',event.data.open);return;}if(event.data?.type==='media-context'){if($('result-frame').hidden)return;const views={home:'home',movies:'library',videos:'videos',photos:'photos',collections:'collections',favorites:'favorites',resources:'resources',tags:'tags',review:'review'};if(Object.hasOwn(views,event.data.view))adoptCenterView(views[event.data.view],event.data.view);return;}if(event.data?.type==='media-navigate'){const views={movies:'library',videos:'videos',photos:'photos',favorites:'favorites',resources:'resources',tags:'tags'};if(Object.hasOwn(views,event.data.view))await openView(views[event.data.view]);return;}if(event.data?.type!=='media-rescan')return;if(selectedReport==='all'){showPane('scan');return;}const data=await scanAction('reports/rescan',{report_id:selectedReport});if(data)previousRunning=data.running;});
 
-async function loadReports(selectLatest=false,keepView=false){if(historyLoading)return;historyLoading=true;const initialPane=$('platform-main').getAttribute?.('data-pane'),initialViewRequest=viewRequest;try{const data=await request('reports');if(viewRequest!==initialViewRequest||(selectedReport&&$('platform-main').getAttribute?.('data-pane')!==initialPane))return false;reports=data.reports;
+async function loadReports(selectLatest=false,keepView=false){if(historyLoading)return;historyLoading=true;const initialPane=$('platform-main').getAttribute?.('data-pane'),initialViewRequest=viewRequest;try{const data=await request('reports');if(viewRequest!==initialViewRequest||(selectedReport&&$('platform-main').getAttribute?.('data-pane')!==initialPane))return false;reports=data.library_available?[{id:'all',created_at:'',roots:[],summary:{},has_library:true},...data.reports]:data.reports;
   $('result-empty').hidden=reports.length>0;$('result-content').hidden=!reports.length;
   $('history-note').textContent=[data.skipped_reports?`${data.skipped_reports} 份未完成或无法读取的报告已跳过。`:'',data.has_more?'此处显示最近 50 次扫描；更早的结果可从结果文件夹打开。':''].filter(Boolean).join(' ');
   if(!reports.length)return;
   if(selectLatest||!reports.some(item=>item.id===selectedReport))selectedReport=reports[0].id;
   if(selectLatest&&!keepView)selectedView='home';
-  $('history').replaceChildren();for(const report of reports){const option=document.createElement('option');option.value=report.id;option.textContent=`${formatTime(report.created_at)} · ${report.summary.files} 个媒体${report.id===reports[0].id?' · 最新':''}`;$('history').append(option);}
+  $('history').replaceChildren();for(const report of reports){const option=document.createElement('option');option.value=report.id;option.textContent=report.id==='all'?'全部已扫描目录 · 统一资料库':`${formatTime(report.created_at)} · ${report.summary.files} 个媒体${report.id===reports.find(item=>item.id!=='all')?.id?' · 最新':''}`;$('history').append(option);}
   renderSummary();if($('platform-main').getAttribute?.('data-pane')!==initialPane)return false;const opened=await openView(selectedView);if(opened&&selectLatest)$('pending-report-update').hidden=true;return !!opened;
 }catch(error){notice(error);}finally{historyLoading=false;}}
 function syncScanScope(data){const chosen=data.folders.filter(path=>folderSelection.get(path));$('scan').disabled=data.running||!!scanControls.pending||!chosen.length;$('scan-scope').textContent=data.folders.length?`本次扫描 ${chosen.length} / ${data.folders.length} 个文件夹。`:'请添加文件夹并选择扫描范围。';}
@@ -164,10 +164,13 @@ function renderStatus(data){scanControls.status=data;const locked=data.running||
   for(const id of ['scan-progress','scan-banner-progress']){if(known)$(id).value=stage.percent;else $(id).removeAttribute('value');}
   if(document.activeElement!==$('monitor-enabled')&&document.activeElement!==$('monitor-minutes')&&document.activeElement!==$('monitor-mode')&&!monitorEditing){$('monitor-enabled').checked=!!data.monitor?.enabled;$('monitor-minutes').value=data.monitor?.minutes||15;$('monitor-mode').value=data.monitor?.mode||'timer';}
   $('monitor-status').textContent=data.monitor?.enabled?(data.monitor.mode==='changes'?'已开启 · 每15秒检查，连续两次稳定后只读扫描；首次开启会更新一次。'+(data.watch_status||''):`已开启 · 每 ${data.monitor.minutes} 分钟更新；应用退出后停止。`):'未开启；目录合集会保存在本机。';
+  $('browse-scanning').hidden=!data.pending_library;
   const joined=data.logs.join('\n');if(lastLog!==joined){$('log').textContent=joined||'扫描记录会显示在这里。';$('log').scrollTop=$('log').scrollHeight;lastLog=joined;}
 }
 async function refresh(){if(stopped)return;const epoch=scanControls.epoch;try{const data=await request('status');if(stopped||epoch!==scanControls.epoch)return;renderStatus(data);
   const changed=knownLatest!==undefined&&knownLatest!==data.latest_report;
+  if(data.pending_library&&data.pending_library!==pendingLibrarySeen){pendingLibrarySeen=data.pending_library;$('pending-report-update').textContent='文件清单已就绪 · 先浏览，后台继续解析和查重';$('pending-report-update').hidden=false;}
+  if(!data.pending_library&&typeof pendingLibrarySeen!=='undefined'&&pendingLibrarySeen){pendingLibrarySeen='';$('pending-report-update').textContent='扫描阶段已结束 · 刷新资料库';$('pending-report-update').hidden=false;}
   if(knownLatest===undefined)await loadReports();
   else if(changed){
     const keepCurrent=selectedReport&&data.latest_report&&(['changes','timer'].includes(data.scan_origin)||$('platform-main').getAttribute?.('data-pane')!=='scan');
@@ -179,6 +182,7 @@ async function refresh(){if(stopped)return;const epoch=scanControls.epoch;try{co
 async function act(path,body={}){notice();try{const data=await request(path,body);if(data.folders)renderStatus(data);return data;}catch(error){notice(error);return null;}}
 async function beginFirstScan(){showPane('scan');await $('add-folder').onclick();}
 $('nav-scan').onclick=()=>showPane('scan');$('first-scan').onclick=beginFirstScan;$('nav-results').onclick=()=>openView('home');$('nav-settings').onclick=()=>showPane('settings');
+$('browse-scanning').onclick=()=>loadReports(true,true);
 $('history').onchange=()=>{selectedReport=$('history').value;renderSummary();openView(selectedView);};for(const button of document.querySelectorAll('[data-view]'))button.onclick=()=>openView(button.dataset.view);
 $('add-folder').onclick=()=>scanAction('folders/add');
 $('scan').onclick=async()=>{const data=await scanAction('scan/start',{image_analysis:$('images').checked,video_covers:$('covers').checked,video_headers:$('headers').checked,video_rule:$('rule').value,refresh_media:$('refresh-media').checked,scan_folders:[...folderSelection].filter(([,chosen])=>chosen).map(([path])=>path)});if(data){previousRunning=data.running;$('scan-details').open=true;}};

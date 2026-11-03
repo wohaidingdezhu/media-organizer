@@ -12,6 +12,7 @@ class MissingMonitor:
         self.lock = threading.Lock()
         self.stopped = threading.Event()
         self.paths = set()
+        self.unavailable = set()
         self.revision = 0
         self.running = False
         self.checked = 0
@@ -45,7 +46,7 @@ class MissingMonitor:
             return set(self.paths), self._status()
 
     def _status(self):
-        return {'revision': self.revision, 'missing_count': len(self.paths),
+        return {'revision': self.revision, 'missing_count': len(self.paths), 'unavailable_count': len(self.unavailable),
                 'scanning': self.running, 'checked': self.checked, 'total': self.total}
 
     def status(self):
@@ -106,6 +107,15 @@ class MissingMonitor:
                     state = self.media.availability(identifier)
                 except (OSError, ValueError):
                     state = 'unavailable'
+                with self.lock:
+                    if self.manual_epochs.get(path, 0) == epoch:
+                        was_unavailable = path in self.unavailable
+                        if state == 'unavailable':
+                            self.unavailable.add(path)
+                        else:
+                            self.unavailable.discard(path)
+                        if was_unavailable != (path in self.unavailable):
+                            self.revision += 1
                 self._set(path, state == 'missing', epoch)
                 if not priority:
                     with self.lock:

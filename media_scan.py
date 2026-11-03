@@ -1533,6 +1533,9 @@ def main(argv=None):
         folders_seen = []
         found_sidecars = []
         records, skipped = discover(roots, output, args.include_hidden, issues, folders_seen, found_sidecars)
+        if os.environ.get('MEDIA_ORGANIZER_PROGRESS') == '1':
+            from unified_library import publish_discovery
+            publish_discovery(output, roots, records)
         from scan_cache import ScanCache, analysis_fingerprint
         fingerprint = analysis_fingerprint(media_backend.helper('image_probe'), media_backend.helper('video_cover'))
         cache = ScanCache(output, roots, fingerprint, enabled=not args.refresh_media)

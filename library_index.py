@@ -4,6 +4,7 @@ import json
 from collections import Counter
 from pathlib import Path, PureWindowsPath, PurePosixPath
 import re
+import stat
 
 import portable_fs as fs
 from workspace_data import data_lock, read_json, write_json
@@ -38,10 +39,11 @@ def unavailable_during_discovery(document):
             and item['reason'].startswith(prefixes)]
 
 
-def sync_index(root):
+def sync_index(root, *, complete_only=False):
     root = fs.private_data_path(root)
     with data_lock(root):
-        index = read_json(root, INDEX, {'version': 1, 'scans': {}, 'items': {}})
+        index_name = 'library-complete-index.json' if complete_only else INDEX
+        index = read_json(root, index_name, {'version': 1, 'scans': {}, 'items': {}})
         if (not isinstance(index, dict) or index.get('version') != 1 or
                 not isinstance(index.get('scans'), dict) or not isinstance(index.get('items'), dict)):
             raise ValueError('长期资料库索引损坏；保留原文件，请从备份恢复')
@@ -55,6 +57,12 @@ def sync_index(root):
                 from file_operations import open_directory
                 parent = open_directory(Path(root) / name)
                 try:
+                    if complete_only:
+                        # report.json is written before HTML. A cancelled export
+                        # must not replace the last complete directory inventory.
+                        for page in ('report.html', 'library.html'):
+                            if not stat.S_ISREG(fs.stat(page, dir_fd=parent, follow_symlinks=False).st_mode):
+                                raise ValueError('扫描页面尚未完整发布')
                     info = fs.stat('report.json', dir_fd=parent, follow_symlinks=False)
                     stamp = [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns]
                 finally:
@@ -115,7 +123,7 @@ def sync_index(root):
             except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
                 warnings.append(f'{name} 未纳入长期索引：{error}')
         if changed:
-            write_json(root, INDEX, index)
+            write_json(root, index_name, index)
         return index, warnings
 
 

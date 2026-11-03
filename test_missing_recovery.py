@@ -82,6 +82,7 @@ class MissingRecoveryTests(unittest.TestCase):
         self.run_check()
         self.assertEqual(self.center()['missing_files'], 0)
         self.assertEqual(len(self.center()['items']), 2)
+        self.assertEqual(self.center()['unavailable_files'], 0)
 
     def test_selected_missing_file_hides_but_disconnected_root_never_hides(self):
         self.paths[0].unlink()
@@ -95,6 +96,7 @@ class MissingRecoveryTests(unittest.TestCase):
         self.run_check()
         self.assertEqual(self.center()['missing_files'], 0)
         self.assertEqual(len(self.center()['items']), 2)
+        self.assertEqual(self.center()['unavailable_files'], 2)
 
     def test_permission_errors_and_changed_device_do_not_claim_missing(self):
         manager = MediaActions(self.doc)

@@ -10,6 +10,15 @@ function reportOverlay(open){
   const link=document.querySelector?.('nav[aria-label="报告导航"] a');
   if(link)window.parent.postMessage({type:'media-overlay',open},new URL(link.href).origin);
 }
+async function reportResumeTrash(identifier,onClose,onStatus=()=>{},beforeOpen=()=>{}){
+  try{
+    const response=await fetch('api/operations/'+identifier+'/remaining'),result=await response.json();
+    if(!response.ok)throw Error(result.error||'无法读取未处理项');
+    if(result.mode!=='trash'||!Array.isArray(result.ids))throw Error('操作记录不匹配');
+    if(!result.ids.length){onStatus('没有可继续的未处理文件。已完成或结果需核对的项目不会重新提交。');return;}
+    beforeOpen();reportTrashOpen(result.ids,onClose,'继续核对未开始或安全取消的文件；跳过 '+(result.skipped||[]).length+' 项。仍需重新确认。');
+  }catch(error){onStatus(error.message);}
+}
 function reportTrashOpen(ids,onClose,summary=''){
   if(!Array.isArray(ids)||ids.length<1||ids.length>200||new Set(ids).size!==ids.length||ids.some(id=>!/^[0-9a-f]{64}$/.test(id)))return;
   const make=(tag,text)=>{const n=document.createElement(tag);if(text)n.textContent=text;return n;};
@@ -20,6 +29,7 @@ function reportTrashOpen(ids,onClose,summary=''){
   actions.style.cssText='display:flex;gap:12px;justify-content:flex-end;flex-wrap:wrap;flex:none;background:#fcfcfe;padding:14px 0 0';
   for(const b of [cancel,confirm,stop]){b.type='button';b.style.cssText='padding:10px 16px;border:1px solid #d7d3e3;border-radius:8px;cursor:pointer';}confirm.style.color='#a33b4a';confirm.disabled=true;stop.hidden=true;
   message.setAttribute('role','status');actions.append(cancel,stop,confirm);content.append(message,progress);dialog.append(title);if(summary){const kept=make('p',summary),notes=make('details'),caption=make('summary','保留文件与清理说明（展开查看）');kept.style.cssText='max-width:100%;overflow-wrap:anywhere;word-break:break-word';notes.append(caption,kept);content.append(notes);}content.append(list);dialog.append(content,actions);
+  const resume=make('button','继续核对未处理项');resume.type='button';resume.hidden=true;resume.style.cssText=cancel.style.cssText;actions.append(resume);
   const retry=make('button','重新检查');progress.max=ids.length;progress.value=0;progress.hidden=true;progress.setAttribute('aria-label','移到回收站的文件进度');progress.style.cssText='width:100%;margin:12px 0';retry.type='button';retry.style.cssText=cancel.style.cssText;retry.hidden=true;actions.append(retry);
   let preview=null,running=false,closed=false,jobId='',timer=null,previewTimer=null,checking=false,stopRequested=false;
   const bytes=value=>Number.isFinite(value)&&value>=0?(value>=1073741824?(value/1073741824).toFixed(1)+' GB':value>=1048576?(value/1048576).toFixed(1)+' MB':(value/1024).toFixed(0)+' KB'):'';
@@ -29,7 +39,7 @@ function reportTrashOpen(ids,onClose,summary=''){
     const completed=(job.items||[]).filter(item=>['success','complete'].includes(item.status)).length,total=Number.isInteger(job.total)&&job.total>0?job.total:ids.length,current=(job.items||[]).find(item=>item.status==='processing');progress.hidden=false;progress.max=total;progress.value=completed;
     if(job.status==='complete'){running=false;dialog.close();return;}
     if(['running','external_running'].includes(job.status)){message.textContent=(stopRequested||job.stop_requested?'正在安全停止；当前文件核对或系统回收结束后停止。':'正在核对并移到回收站。')+' 已完成 '+completed+'/'+total+' 个文件（'+Math.floor(completed*100/total)+'%）'+(current?'；当前：'+current.path:'');timer=setTimeout(poll,1000);return;}
-    finish();message.textContent='处理已停止，完成 '+completed+'/'+total+' 个文件。已完成的文件在回收站中，其余文件未自动重试。';list.replaceChildren();
+    finish();resume.hidden=!(['stopped','cancelled'].includes(job.status)&&!job.error&&job.planned_items);message.textContent='处理已停止，完成 '+completed+'/'+total+' 个文件。已完成的文件在回收站中，其余文件未自动重试。';list.replaceChildren();
     for(const item of job.items||[]){const row=make('li',(item.status==='complete'||item.status==='success'?'已完成：':'待核对：')+item.path+(item.error?' · '+item.error:''));list.append(row);}
   }catch(error){if(closed)return;message.textContent='连接暂时中断，正在核对处理结果，请勿重复删除：'+error.message;timer=setTimeout(poll,3000);}};
   cancel.onclick=()=>{if(!running)dialog.close();};
@@ -47,6 +57,7 @@ function reportTrashOpen(ids,onClose,summary=''){
     catch(error){if(!closed){message.textContent=error.message+'；所选文件已保留，处理原因后可重新检查。';cancel.textContent='返回列表';retry.hidden=false;}}
     finally{checking=false;clearTimeout(previewTimer);}
   };
+  resume.onclick=async()=>{if(resume.disabled)return;resume.disabled=true;await reportResumeTrash(jobId,onClose,text=>{message.textContent=text;},()=>dialog.close());if(!closed)resume.disabled=false;};
   retry.onclick=checkPreview;
   document.body.append(dialog);dialog.showModal();dialog.style.display='flex';reportOverlay(true);
   checkPreview();

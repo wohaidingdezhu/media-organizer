@@ -129,6 +129,11 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_backup_restore_keeps_current_data_and_disables_original_actions(self):
         report = self.scan()
+        journal = self.output / 'library-actions' / 'operations'
+        journal.mkdir(parents=True)
+        job_name = 'a' * 24 + '.json'
+        write_json(journal, job_name, {'id': 'a' * 24, 'mode': 'trash', 'status': 'cancelled',
+                   'total': 1, 'items': [], 'planned_items': [{'path': str(self.movie), 'target': 'trash'}]})
         key = json.loads((report / 'report.json').read_text(encoding='utf-8'))['video_library']['groups'][0]['tag_key']
         write_json(self.output, 'library-tags.json', {'version':1, 'groups':{key:['收藏','已观看']}})
         write_json(self.output, 'library-notes.json', {'version':1, 'groups':{key:{'rating':5,'note':'测试备注'}}})
@@ -140,6 +145,7 @@ class WorkspaceTests(unittest.TestCase):
         state.confirm_restore(preview['token'])
         self.assertNotEqual(state.output, self.output)
         restored = json.loads((state.output / report.name / 'report.json').read_text(encoding='utf-8'))
+        self.assertEqual(read_json(state.output / 'library-actions' / 'operations', job_name)['status'], 'cancelled')
         self.assertEqual(MediaActions(restored).records, {})
         self.assertEqual(read_json(state.output,'library-tags.json')['groups'][key], ['收藏','已观看'])
         self.assertEqual(read_json(state.output,'library-notes.json')['groups'][key]['rating'], 5)
