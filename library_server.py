@@ -212,6 +212,11 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
         result['hidden_files'] -= len(absent - set(history['handled']['trash']))
         result['operation_state'] = {'running': any(job['status'] in {'running', 'external_running'} for job in history['jobs']),
                                      'warnings': history['warnings'],
+                                     'unfinished': [{'id': job['id'], 'total': job['total'], 'status': job['status'],
+                                                     'completed': sum(item['status'] == 'success' for item in job['items']),
+                                                     'created_at': job.get('created_at', ''),
+                                                     'can_resume': job['status'] in {'stopped', 'cancelled'} and not job.get('error') and bool(job.get('planned_items'))}
+                                                    for job in history['jobs'] if job.get('mode') == 'trash' and job['status'] != 'complete'],
                                      'resumable': [{'id': job['id'], 'total': job['total'], 'created_at': job.get('created_at', '')}
                                                    for job in history['jobs'] if job['status'] in {'stopped', 'cancelled'} and job.get('mode') == 'trash'
                                                    and not job.get('error') and job.get('planned_items')]}
