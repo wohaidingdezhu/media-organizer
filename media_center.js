@@ -475,7 +475,7 @@ function announceCenterView(){
 }
 
 function switchCenterView(next){if(window.parent!==window&&dashboardLink)window.parent.postMessage({type:'media-navigate',view:next},new URL(dashboardLink.href).origin);else{location.hash='#'+next;navigate();}}
-if(window.parent!==window&&dashboardLink){$('center-rescan').hidden=false;$('center-rescan').onclick=()=>{window.parent.postMessage({type:'media-rescan'},new URL(dashboardLink.href).origin);message('已请求重新扫描当前资料库的来源目录；扫描期间可继续浏览。');};}
+if(window.parent!==window&&dashboardLink){$('center-rescan').hidden=false;$('center-rescan').onclick=()=>{window.parent.postMessage({type:'media-rescan'},new URL(dashboardLink.href).origin);message(catalog?.unified_library?'已打开扫描范围选择，请勾选目录并点击“开始只读扫描”。':'已请求重新扫描当前资料库的来源目录；扫描期间可继续浏览。');};}
 $('center-prev').onclick=()=>turnPage(-1);$('center-next').onclick=()=>turnPage(1);
 let centerRefreshPending=null;
 $('center-refresh').onclick=()=>{

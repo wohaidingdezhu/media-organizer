@@ -116,14 +116,32 @@ function renderSummary(){const report=reports.find(item=>item.id===selectedRepor
   $('source-summary').textContent=`扫描来源 · ${report.roots.length} 个文件夹`;$('current-sources').textContent='当前展示的扫描来源：'+report.roots.join('、');$('source-list').replaceChildren();for(const path of report.roots){const li=document.createElement('li');li.textContent=path;$('source-list').append(li);}
 
 }
-async function openView(view,openFile=''){if(selectedReport==='all'&&!['home','library','videos','photos','collections','favorites','resources','tags','review'].includes(view)){selectedReport=reports.find(item=>item.id!=='all')?.id||'';renderSummary();}$('result-viewer').classList.remove('overlay-mode');showPane('results');if(!selectedReport)return;const ticket=++viewRequest;selectedView=view;saveSelection();notice();
+async function openView(view,openFile='',refresh=false){
+  if(selectedReport==='all'&&!['home','library','videos','photos','collections','favorites','resources','tags','review'].includes(view)){selectedReport=reports.find(item=>item.id!=='all')?.id||'';renderSummary();}
+  showPane('results');if(!selectedReport)return;
+  const key=JSON.stringify([selectedReport,view,openFile,refresh]);
   $('nav-results').removeAttribute('aria-current');for(const button of document.querySelectorAll('[data-view]'))button.setAttribute('aria-pressed',String(button.dataset.view===view));
-  $('view-description').textContent=descriptions[view];$('viewer-message').textContent='正在打开结果…';$('viewer-message').hidden=false;$('result-frame').hidden=true;
-  try{const data=await request('reports/view',{report_id:selectedReport,view});if(ticket!==viewRequest)return;if(data.report_id==='all'&&data.report){const index=reports.findIndex(item=>item.id==='all');if(index>=0)reports[index]=data.report;renderSummary();}const url=new URL(data.url);if(url.protocol!=='http:'||url.hostname!=='127.0.0.1')throw new Error('结果地址无效');if(/^[0-9a-f]{64}$/.test(openFile))url.searchParams.set('open_file',openFile);
+  $('view-description').textContent=descriptions[view];
+  if(openView.pending?.key===key&&openView.pending.ticket===viewRequest)return openView.pending.promise;
+  const frame=$('result-frame'),previousView=selectedView,reportId=selectedReport,ticket=++viewRequest;
+  selectedView=view;saveSelection();notice();
+  const title=()=>`${document.querySelector('[data-view="'+view+'"]').textContent} · ${formatTime(reports.find(item=>item.id===reportId)?.created_at)}`;
+  if(!refresh&&!openFile&&!frame.hidden&&frame.src&&frame.getAttribute('data-report-id')===reportId){
+    if(previousView===view)return true;
+    const url=new URL(frame.src),fragments={home:'home',library:'movies',videos:'videos',photos:'photos',collections:'collections',favorites:'favorites',resources:'resources',tags:'tags',review:'review'};
+    if(url.pathname.endsWith('/center.html')&&fragments[view]){url.hash=fragments[view];frame.src=url.href;frame.title=title();$('standalone').href=url.href;return true;}
+  }
+  $('result-viewer').classList.remove('overlay-mode');$('viewer-message').textContent='正在打开结果…';$('viewer-message').hidden=false;frame.hidden=true;
+  const pending={key,ticket};openView.pending=pending;
+  pending.promise=(async()=>{try{
+    const data=await request('reports/view',{report_id:reportId,view});if(ticket!==viewRequest)return;
+    if(data.report_id==='all'&&data.report){const index=reports.findIndex(item=>item.id==='all');if(index>=0)reports[index]=data.report;renderSummary();}
+    const url=new URL(data.url);if(url.protocol!=='http:'||url.hostname!=='127.0.0.1')throw new Error('结果地址无效');if(/^[0-9a-f]{64}$/.test(openFile))url.searchParams.set('open_file',openFile);
     $('standalone').href=url.href;for(const link of document.querySelectorAll('[data-export]'))link.href=new URL(link.dataset.export,url).href;
-    $('result-frame').title=`${document.querySelector('[data-view="'+view+'"]').textContent} · ${formatTime(reports.find(item=>item.id===selectedReport).created_at)}`;
-    $('result-frame').hidden=false;$('result-frame').src=url.href;$('viewer-message').hidden=true;return true;
+    frame.title=title();frame.setAttribute('data-report-id',reportId);frame.hidden=false;frame.src=url.href;$('viewer-message').hidden=true;return true;
   }catch(error){if(ticket!==viewRequest)return;$('viewer-message').textContent='结果暂时无法打开，请重新选择扫描记录。';notice(error);return false;}
+  finally{if(openView.pending===pending)openView.pending=null;}})();
+  return pending.promise;
 }
 $('result-frame').addEventListener('load',()=>{$('viewer-message').hidden=true;$('result-viewer').classList.remove('overlay-mode');});
 $('scan-info-open').onclick=()=>$('scan-info-dialog').showModal();$('scan-info-close').onclick=()=>$('scan-info-dialog').close();
@@ -143,7 +161,7 @@ async function loadReports(selectLatest=false,keepView=false){if(historyLoading)
   if(selectLatest||!reports.some(item=>item.id===selectedReport))selectedReport=reports[0].id;
   if(selectLatest&&!keepView)selectedView='home';
   $('history').replaceChildren();for(const report of reports){const option=document.createElement('option');option.value=report.id;option.textContent=report.id==='all'?'全部已扫描目录 · 统一资料库':`${formatTime(report.created_at)} · ${report.summary.files} 个媒体${report.id===reports.find(item=>item.id!=='all')?.id?' · 最新':''}`;$('history').append(option);}
-  renderSummary();if($('platform-main').getAttribute?.('data-pane')!==initialPane)return false;const opened=await openView(selectedView);if(opened&&selectLatest)$('pending-report-update').hidden=true;return !!opened;
+  renderSummary();if($('platform-main').getAttribute?.('data-pane')!==initialPane)return false;const opened=await openView(selectedView,'',true);if(opened&&selectLatest)$('pending-report-update').hidden=true;return !!opened;
 }catch(error){notice(error);}finally{historyLoading=false;}}
 function syncScanScope(data){const chosen=data.folders.filter(path=>folderSelection.get(path));$('scan').disabled=data.running||!!scanControls.pending||!chosen.length;$('scan-scope').textContent=data.folders.length?`本次扫描 ${chosen.length} / ${data.folders.length} 个文件夹。`:'请添加文件夹并选择扫描范围。';}
 const scanControls={pending:'',status:null,epoch:0};
@@ -183,7 +201,7 @@ async function act(path,body={}){notice();try{const data=await request(path,body
 async function beginFirstScan(){showPane('scan');await $('add-folder').onclick();}
 $('nav-scan').onclick=()=>showPane('scan');$('first-scan').onclick=beginFirstScan;$('nav-results').onclick=()=>openView('home');$('nav-settings').onclick=()=>showPane('settings');
 $('browse-scanning').onclick=()=>loadReports(true,true);
-$('history').onchange=()=>{selectedReport=$('history').value;renderSummary();openView(selectedView);};for(const button of document.querySelectorAll('[data-view]'))button.onclick=()=>openView(button.dataset.view);
+$('history').onchange=()=>{selectedReport=$('history').value;renderSummary();openView(selectedView,'',true);};for(const button of document.querySelectorAll('[data-view]'))button.onclick=()=>openView(button.dataset.view);
 $('add-folder').onclick=()=>scanAction('folders/add');
 $('scan').onclick=async()=>{const data=await scanAction('scan/start',{image_analysis:$('images').checked,video_covers:$('covers').checked,video_headers:$('headers').checked,video_rule:$('rule').value,refresh_media:$('refresh-media').checked,scan_folders:[...folderSelection].filter(([,chosen])=>chosen).map(([path])=>path)});if(data){previousRunning=data.running;$('scan-details').open=true;}};
 $('cancel').onclick=()=>scanAction('scan/cancel');$('reports').onclick=()=>act('reports/open');
