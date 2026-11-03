@@ -398,6 +398,8 @@ Windows 在安装依赖后运行 `.\.venv\Scripts\python.exe -X utf8 -m unittest
 macOS 无共用媒体依赖时，Pillow / FFmpeg 专门测试会明确跳过；原生后端和其余业务测试仍运行。完整验证使用 `.venv` 并安装 `requirements.txt`。CI 两平台都安装同一套共用依赖，检查相同 PNG 样例的 dHash 参考值、MP4/MKV/AVI 封面生成、启动参数与缺依赖时的只读扫描；Mac 另测试保留的原生降级组件，不依赖本机跳过结果。
 未启用 Windows 符号链接权限时，相关符号链接测试明确跳过，目录联接测试仍运行。
 GitHub Actions 配置在 macOS/Windows 与 Python 3.9、3.12、3.14 上运行同一套测试；macOS 会先编译原生图片与视频组件。
+
+两平台的原生窗口检查会在原有时间限制内等待窗口和实际目录界面就绪。启动期间的窗口接口异常会记录并继续等待；到期或检查异常仍判为失败，并清理没有来源目录的检查后台，避免检查线程退出后遗留进程。实际窗口与目录浏览验证不会跳过。
 后续改动须遵守 [双平台开发规则](AGENTS.md) 和 [贡献说明](CONTRIBUTING.md)，通过 `Dual-platform compatibility` 汇总检查；另在 Apple Silicon Mac、Intel Mac 与 Windows 上构建安装包，实际运行打包后台的生成媒体检查及原生窗口冒烟测试。任一测试或打包任务失败均阻止汇总通过。原文件夹筛选和空间分析跳转使用后端提供的本机目录路径，支持 Windows 的反斜杠与 macOS 的斜杠。
 
 ### 预览可靠性（macOS / Windows）

@@ -66,10 +66,10 @@ def verify_catalog_ui(window, ready_url, timeout=90):
     opened = False
     while time.monotonic() < deadline:
         time.sleep(.5)
-        current = window.get_current_url()
-        if not current or not str(current).startswith(ready_url):
-            continue
         try:
+            current = window.get_current_url()
+            if not current or not str(current).startswith(ready_url):
+                continue
             if not opened:
                 present = native_value(window, "!!document.getElementById('nav-catalog') && !!document.getElementById('restore-file') && !!document.getElementById('monitor-save')")
                 if not present:
@@ -81,6 +81,31 @@ def verify_catalog_ui(window, ready_url, timeout=90):
         except Exception as error:
             print('UI verification error:', repr(error), flush=True)
     return False
+
+
+def verify_smoke_window(window, ready_url, process, allow_close, result=None):
+    """A failed smoke check must exit as failure instead of orphaning its backend."""
+    verified = False
+    try:
+        verified = verify_catalog_ui(window, ready_url)
+        if result is not None:
+            result[0] = verified  # Publish before shutdown can close the UI loop.
+        if verified:
+            print('UI verification: True', flush=True)
+            request_shutdown(ready_url)
+    except Exception as error:
+        verified = False
+        if result is not None:
+            result[0] = False
+        print('UI verification failed:', repr(error), flush=True)
+    finally:
+        if not verified:
+            print('UI verification did not complete; stopping smoke backend', flush=True)
+            allow_close.set()
+            if process.poll() is None:
+                process.terminate()
+            window.destroy()
+    return verified
 
 
 def main(argv=None):
@@ -154,16 +179,8 @@ def main(argv=None):
         return False
     if args.ui_smoke_test:
         def verify_ui():
-            ui_result[0] = verify_catalog_ui(window, url[0])
-            if ui_result[0]:
-                print('UI verification: True', flush=True)
-                request_shutdown(url[0])
-                return
-            # The smoke backend has no source folders and cannot perform file jobs.
-            print('UI verification timed out:', window.get_current_url(), flush=True)
-            process.terminate()
-            allow_close.set()
-            window.destroy()
+            # This backend has no sources and cannot perform file jobs.
+            verify_smoke_window(window, url[0], process, allow_close, ui_result)
         window.events.shown += lambda: threading.Thread(target=verify_ui, daemon=True).start()
     window.events.closing += closing
     webview.settings['ALLOW_DOWNLOADS'] = True
