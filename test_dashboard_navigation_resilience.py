@@ -8,6 +8,57 @@ import test_compact_browsing as dashboard_tests
 class DashboardNavigationResilienceTests(unittest.TestCase):
     node = dashboard_tests.CompactBrowsingTests.node
 
+    def test_native_window_startup_error_is_retried_until_real_catalog_is_ready(self):
+        window = mock.Mock()
+        window.get_current_url.side_effect = [RuntimeError('Main window not ready'), 'http://127.0.0.1:12345/token/']
+        with mock.patch('time.sleep'), mock.patch('time.monotonic', side_effect=[0, 0, 1]), mock.patch.object(desktop_entry, 'native_value', side_effect=[True, True]):
+            self.assertTrue(desktop_entry.verify_catalog_ui(window, 'http://127.0.0.1:12345/token/', timeout=10))
+        self.assertEqual(window.get_current_url.call_count, 2)
+        window.run_js.assert_called_once()
+
+    def test_native_smoke_failure_cleans_up_and_never_claims_success(self):
+        window, process, allow_close = mock.Mock(), mock.Mock(), mock.Mock()
+        process.poll.return_value = None
+        for outcome in (False, RuntimeError('Generated renderer failure')):
+            window.reset_mock(); process.reset_mock(); allow_close.reset_mock()
+            with mock.patch.object(desktop_entry, 'verify_catalog_ui', side_effect=outcome if isinstance(outcome, Exception) else None, return_value=False), mock.patch.object(desktop_entry, 'request_shutdown') as shutdown:
+                self.assertFalse(desktop_entry.verify_smoke_window(window, 'generated', process, allow_close))
+            process.terminate.assert_called_once()
+            allow_close.set.assert_called_once()
+            window.destroy.assert_called_once()
+            shutdown.assert_not_called()
+
+    def test_native_smoke_success_requires_real_verification_and_clean_shutdown(self):
+        window, process, allow_close = mock.Mock(), mock.Mock(), mock.Mock()
+        with mock.patch.object(desktop_entry, 'verify_catalog_ui', return_value=True), mock.patch.object(desktop_entry, 'request_shutdown') as shutdown:
+            self.assertTrue(desktop_entry.verify_smoke_window(window, 'generated', process, allow_close))
+        shutdown.assert_called_once_with('generated')
+        process.terminate.assert_not_called()
+        window.destroy.assert_not_called()
+
+    def test_native_startup_failure_at_deadline_still_fails_verification(self):
+        window = mock.Mock()
+        window.get_current_url.side_effect = RuntimeError('Generated permanent startup failure')
+        with mock.patch('time.sleep'), mock.patch('time.monotonic', side_effect=[0, 0, 2]), mock.patch.object(desktop_entry, 'native_value') as inspect:
+            self.assertFalse(desktop_entry.verify_catalog_ui(window, 'generated', timeout=1))
+        inspect.assert_not_called()
+
+    def test_native_smoke_shutdown_error_is_a_failure_with_cleanup(self):
+        window, process, allow_close = mock.Mock(), mock.Mock(), mock.Mock()
+        process.poll.return_value = None
+        with mock.patch.object(desktop_entry, 'verify_catalog_ui', return_value=True), mock.patch.object(desktop_entry, 'request_shutdown', side_effect=OSError('Generated shutdown failure')):
+            self.assertFalse(desktop_entry.verify_smoke_window(window, 'generated', process, allow_close))
+        process.terminate.assert_called_once()
+        window.destroy.assert_called_once()
+
+    def test_native_smoke_publishes_success_before_shutdown_closes_ui_loop(self):
+        window, process, allow_close = mock.Mock(), mock.Mock(), mock.Mock()
+        result = [False]
+        def shutdown(_url):
+            self.assertTrue(result[0])
+        with mock.patch.object(desktop_entry, 'verify_catalog_ui', return_value=True), mock.patch.object(desktop_entry, 'request_shutdown', side_effect=shutdown):
+            self.assertTrue(desktop_entry.verify_smoke_window(window, 'generated', process, allow_close, result))
+
     def test_slow_initial_load_does_not_override_user_navigation(self):
         self.node(r'''
 const html=fs.readFileSync(root+'/dashboard.html','utf8'),opened=[];let finish;

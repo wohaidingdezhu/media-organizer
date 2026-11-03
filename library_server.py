@@ -437,6 +437,18 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                     or len(parts) == 2 and parts[0] in {"covers", "previews", "stills"} and Path(route).suffix.lower() == ".png"):
                 self.send_error(404)
                 return
+            if route in preview_repair.cached_routes:
+                try:
+                    body = preview_repair.read_cached(route)
+                except (OSError, ValueError):
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header('Content-Type', 'image/png')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if route in document.get('preview_sources', {}):
                 from scan_cache import valid_thumbnail
                 for source in document['preview_sources'][route]:

@@ -1,5 +1,7 @@
 """Explicit, bounded cover regeneration; only report-local images are written."""
 from pathlib import Path
+import hashlib
+import json
 import re
 import secrets
 import subprocess
@@ -7,7 +9,7 @@ import threading
 
 import portable_fs as fs
 from media_actions import file_signature, media_id
-from scan_cache import valid_thumbnail
+from scan_cache import valid_thumbnail, analysis_fingerprint
 
 _DECODER_LOCK = threading.Lock()
 
@@ -16,6 +18,9 @@ class PreviewRepair:
     def __init__(self, report, media, document):
         self.report, self.media = Path(report), media
         self.previews = {}
+        self.cache_root = self.report.parent / 'preview-cache' if document.get('unified_library') else None
+        self.cached_routes = {}
+        self.fingerprint = None
         allowed = {media_id(file['path']) for file in document.get('files', [])
                    if isinstance(file, dict) and isinstance(file.get('path'), str) and file.get('kind') in {'照片', '视频'}}
         try:
@@ -35,6 +40,60 @@ class PreviewRepair:
                         continue
         except (OSError, ValueError):
             pass
+        if self.cache_root:
+            self._load_cache()
+
+    def _cache_name(self, identifier, record, signature=None):
+        signature = record.get('source_signature') if signature is None else signature
+        if (not self.cache_root or not isinstance(signature, list) or len(signature) != 5
+                or any(type(value) is not int for value in signature)):
+            return None
+        if self.fingerprint is None:
+            import media_backend
+            self.fingerprint = analysis_fingerprint(media_backend.helper('image_probe'), media_backend.helper('video_cover'))
+        key = [record['path'], signature, record['kind'], record.get('sha256', ''), self.fingerprint]
+        digest = hashlib.sha256(json.dumps(key, ensure_ascii=True).encode('utf-8')).hexdigest()
+        return 'repair-' + identifier + '-' + digest + '.png'
+
+    def _load_cache(self):
+        try:
+            from file_operations import open_directory
+            directory = open_directory(self.cache_root)
+            try:
+                names = set(fs.listdir(directory))
+            finally:
+                fs.close(directory)
+        except (OSError, ValueError):
+            return  # Optional cache cannot block browsing existing reports.
+        ids = {match[1] for name in names if (match := re.fullmatch(r'repair-([0-9a-f]{64})-[0-9a-f]{64}\.png', name))}
+        for identifier in ids & self.media.records.keys():
+            if identifier not in self.previews:
+                self._reuse_cached(identifier, self.media.records[identifier], names=names)
+
+    def _reuse_cached(self, identifier, record, *, signature=None, names=None):
+        try:
+            name = self._cache_name(identifier, record, signature)
+            if not name or (names is not None and name not in names):
+                return False
+            body = fs.read_private_file(self.cache_root, (name,), 2*1024*1024)
+            if not valid_thumbnail(body):
+                return False
+        except (OSError, ValueError):
+            return False
+        relative = 'covers/cached-' + name[-68:]
+        self.cached_routes[relative] = name
+        self.previews[identifier] = relative
+        return True
+
+    def read_cached(self, relative):
+        """Only identity-matched cache entries are exposed as report assets."""
+        name = self.cached_routes.get(relative)
+        if not name:
+            raise FileNotFoundError('预览不在当前资料库')
+        body = fs.read_private_file(self.cache_root, (name,), 2*1024*1024)
+        if not valid_thumbnail(body):
+            raise ValueError('预览缓存已损坏')
+        return body
 
     def apply(self, catalog):
         for item in catalog['items']:
@@ -61,12 +120,16 @@ class PreviewRepair:
                 raise ValueError('请选择本库的照片或视频')
             if identifier in self.previews:
                 try:
-                    body = fs.read_private_file(self.report, tuple(self.previews[identifier].split('/')), 2*1024*1024)
+                    relative = self.previews[identifier]
+                    body = (self.read_cached(relative) if relative in self.cached_routes else
+                            fs.read_private_file(self.report, tuple(relative.split('/')), 2*1024*1024))
                     if valid_thumbnail(body):
                         return {'preview': self.previews[identifier]}
                 except (OSError, ValueError):
                     pass
                 self.previews.pop(identifier, None)
+            if self.cache_root and self._reuse_cached(identifier, record, signature=file_signature(info)):
+                return {'preview': self.previews[identifier]}
             helper = media_backend.helper('image_probe' if record['kind'] == '照片' else 'video_cover')
             if not helper_available(helper):
                 raise ValueError('媒体解码组件未安装，请先安装项目声明的媒体依赖')
@@ -91,7 +154,19 @@ class PreviewRepair:
             except (OSError, ValueError) as error:
                 raise ValueError('预览无法保存，请检查报告目录权限及同名文件是否为普通文件') from error
             self.previews[identifier] = 'covers/' + name
-            return {'preview': self.previews[identifier]}
+            result = {'preview': self.previews[identifier]}
+            if self.cache_root:
+                try:
+                    cache_name = self._cache_name(identifier, record, file_signature(info))
+                    if not cache_name:
+                        return result
+                    fs.ensure_private_directory(self.cache_root)
+                    fs.write_private_file(self.cache_root, cache_name, body)
+                except (OSError, ValueError) as error:
+                    # The valid report-local preview remains usable even when
+                    # the optional shared cache is unavailable.
+                    result['warning'] = '预览已生成，但复用缓存未保存：' + str(error)
+            return result
         finally:
             if worker:
                 worker.close()
