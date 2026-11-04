@@ -244,6 +244,19 @@ class DashboardState(WorkspaceController):
         except FileNotFoundError:
             return ''
 
+    def pending_library(self):
+        from scan_feed import ScanFeedReader
+        with self.lock:
+            if not self.running:
+                reader = getattr(self, '_scan_feed_reader', None)
+                if reader and reader.output == self.output and self.progress and self.progress.get('stage') == 'done' and reader.cached:
+                    return {**reader.cached, 'finished': True, 'revision': reader.cached['revision'] + ':done'}
+                return None
+            if not hasattr(self, '_scan_feed_reader') or self._scan_feed_reader.output != self.output:
+                self._scan_feed_reader = ScanFeedReader(self.output)
+            reader = self._scan_feed_reader
+        return reader.snapshot()
+
     def snapshot(self):
         with self.lock:
             report = latest_library(self.output)
@@ -361,6 +374,8 @@ class DashboardState(WorkspaceController):
             self.scan_options = {key: value for key, value in options.items() if key != 'scan_folders'}
             self.scan_origin = 'manual'
             (self.output / 'scan-pending.json').unlink(missing_ok=True)
+            from scan_feed import ScanFeedReader
+            self._scan_feed_reader = ScanFeedReader(self.output)
             self.running = True
             self.cancel_requested.clear()
             self.logs.clear()
@@ -396,6 +411,10 @@ class DashboardState(WorkspaceController):
                 code = process.wait()
             with self.lock:
                 if code == 0:
+                    try:
+                        self.pending_library()  # Retain the last batch before retiring its manifest.
+                    except (OSError, ValueError, KeyError, TypeError) as error:
+                        self.log('临时浏览清单未更新，完整结果仍可打开：' + str(error))
                     from scan_progress import progress
                     self.progress = progress('done', 1, 1)
                     history = self.report_history()["reports"]
@@ -445,11 +464,11 @@ class DashboardState(WorkspaceController):
             process.send_signal(signal.SIGINT)
 
     def view_library(self, view):
-        from unified_library import build_library, PENDING
-        from workspace_data import read_json
+        from unified_library import build_library, with_pending
         with self.lock:
-            output, pending = self.output, read_json(self.output, PENDING) if self.running else None
-        report, document = build_library(output, pending)
+            output = self.output
+        report, document = build_library(output)
+        document = with_pending(document, self.pending_library() if self.running else None)
         summary = {'id': 'all', 'created_at': document['created_at'], 'roots': document['roots'],
                    'has_library': True, 'summary': {'files': len(document['files']),
                    'photos': sum(file['kind'] == '照片' for file in document['files']),
@@ -460,7 +479,8 @@ class DashboardState(WorkspaceController):
             if output != self.output:
                 raise ValueError('资料库已切换，请重新打开')
             if report.name not in self.report_servers:
-                server, url = create_library_server(report, output, dashboard_url=self.dashboard_url)
+                server, url = create_library_server(report, output, dashboard_url=self.dashboard_url,
+                                                    pending_provider=lambda: self.pending_library() if self.output == output else None)
                 self.report_servers[report.name] = (server, url)
                 threading.Thread(target=server.serve_forever, daemon=True).start()
             server, url = self.report_servers[report.name]

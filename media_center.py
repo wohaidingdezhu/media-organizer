@@ -396,4 +396,5 @@ def center_catalog(document, state, notes=None, handled_trash=()):
             'directories': directories,
             'recent': [key for key in state['recent'] if key in by_id],
             'unified_library': bool(document.get('unified_library')), 'pending_scan': bool(document.get('pending_scan')),
+            'scan_complete': bool(document.get('scan_complete')),
             'created_at': document.get('created_at', ''), 'restored': bool(document.get('restored_snapshot'))}

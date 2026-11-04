@@ -205,7 +205,8 @@ class UnifiedLibraryTests(unittest.TestCase):
         self.record(self.a)
         observed = []
         def stop_after_discovery(records, issues):
-            pending = json.loads((self.output / PENDING).read_text(encoding='utf-8'))
+            from scan_feed import ScanFeedReader
+            pending = ScanFeedReader(self.output).snapshot()
             observed.extend(pending['files'])
             _, doc = build_library(self.output, pending)
             self.assertEqual(len(self.catalog(doc)['items']), 1)

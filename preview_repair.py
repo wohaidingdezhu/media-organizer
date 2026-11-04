@@ -98,7 +98,7 @@ class PreviewRepair:
     def apply(self, catalog):
         for item in catalog['items']:
             # A repair may replace a nonempty but unreadable scan-time URL.
-            preview = next((self.previews[file['id']] for file in item['files'] if file['id'] in self.previews), '')
+            preview = next((self.previews[file['id']] for file in item['files'] if not file.get('browse_only') and file['id'] in self.previews), '')
             if preview:
                 item['preview'] = preview
                 item.pop('preview_status', None)

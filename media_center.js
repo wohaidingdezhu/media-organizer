@@ -46,21 +46,22 @@ function message(value,kind='error'){const node=$('center-error');node.textConte
 function globalSearch(){return !!$('query').value.trim()&&$('search-scope').value==='all';}
 async function request(path,body){const response=await fetch(path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const result=await response.json();if(!response.ok){const error=Error(result.error||'操作未完成');error.status=response.status;throw error;}return result;}
 let operationRefreshPending=false;
+let scanRefreshPending=false,scanPolling=false;
 function autoRefreshSafe(operationsDone=false){const active=document.activeElement;return !busy&&!manage&&!selected.size&&!reviewSelected.size&&(operationsDone||!catalog?.operation_state?.running)&&!document.querySelector?.('dialog[open]')&&!$('media-detail').open&&!$('collection-form').open&&!(active&&(active.isContentEditable||['INPUT','TEXTAREA','SELECT'].includes(active.tagName)))&&document.visibilityState!=='hidden';}
-function availabilityNotice(){const base=operationRefreshPending?centerStatusBase.replace('文件操作正在进行，状态将自动更新。',''):centerStatusBase;const text=[base,operationRefreshPending?(catalog?.operation_state?.warnings?.length?'操作记录待核对，已暂停清理；当前选择与编辑已保留，请刷新后核对。':'批次状态有待刷新；当前选择与编辑已保留，可点击刷新页面核对结果。'):'',availabilityPending?'检测到媒体文件变化；当前选择或编辑会保留，完成后将自动更新列表。':''].filter(Boolean).join(' ');$('center-status').hidden=!text;$('center-status').textContent=text;}
-async function load(automatic=false,operationsDone=false){
+function availabilityNotice(){const base=operationRefreshPending?centerStatusBase.replace('文件操作正在进行，状态将自动更新。',''):centerStatusBase;const text=[base,operationRefreshPending?(catalog?.operation_state?.warnings?.length?'操作记录待核对，已暂停清理；当前选择与编辑已保留，请刷新后核对。':'批次状态有待刷新；当前选择与编辑已保留，可点击刷新页面核对结果。'):'',scanRefreshPending?'扫描有新结果；当前选择、编辑和预览会保留，操作结束后自动更新。':'',availabilityPending?'检测到媒体文件变化；当前选择或编辑会保留，完成后将自动更新列表。':''].filter(Boolean).join(' ');$('center-status').hidden=!text;$('center-status').textContent=text;}
+async function load(automatic=false,operationsDone=false,scanUpdate=false){
   clearTimeout(centerOperationTimer);const ticket=++loadTicket;loadsInFlight++;
-  try{const [data,access]=await Promise.all([request('api/center'),request('api/media')]);if(ticket!==loadTicket)return null;if(automatic===true&&!autoRefreshSafe(operationsDone)){availabilityPending=true;if(operationsDone){operationRefreshPending=true;centerOperationTimer=setTimeout(pollOperations,1500);}availabilityNotice();return null;}
-    centerStale=false;availabilityPending=false;operationRefreshPending=false;catalog=data;previewRecords=new Map();
+  try{const data=await request('api/center'),access=data.media_access||await request('api/media');if(ticket!==loadTicket)return null;if(automatic===true&&!autoRefreshSafe(operationsDone)){if(!scanUpdate)availabilityPending=true;if(operationsDone){operationRefreshPending=true;centerOperationTimer=setTimeout(pollOperations,1500);}availabilityNotice();return null;}
+    centerStale=false;availabilityPending=false;operationRefreshPending=false;scanRefreshPending=false;catalog=data;previewRecords=new Map();
     const indexPreview=(id,record)=>{if(!previewRecords.has(id))previewRecords.set(id,new Set());previewRecords.get(id).add(record);};
     for(const item of data.items)for(const file of item.files)indexPreview(file.id,item);
     for(const key of ['exact','similar','dismissed_similar'])for(const group of data.review?.[key]||[])for(const file of group.files)indexPreview(file.id,file);
-    byId=new Map(data.items.map(item=>[item.id,item]));byFile=new Map(data.items.flatMap(item=>item.files.map(file=>[file.id,{...file,kind:item.kind}])));mediaAccess=access;for(const id of reviewSelected)if(!byFile.has(id))reviewSelected.delete(id);
+    byId=new Map(data.items.map(item=>[item.id,item]));byFile=new Map(data.items.flatMap(item=>item.files.map(file=>[file.id,{...file,kind:item.kind}])));mediaAccess=data.media_access||access;for(const id of reviewSelected)if(!byFile.has(id))reviewSelected.delete(id);
     if(directory&&!data.directories?.[directory])directory='';fillFilters();for(const id of selected)if(!byId.has(id))selected.delete(id);
     const scroll=[window.scrollX||0,window.scrollY||0];message();render();if(typeof window.scrollTo==='function')window.scrollTo(...scroll);
     if($('media-detail').open){const current=detailSequence[detailIndex]?.id;detailSequence=detailSequence.map(item=>byId.get(item.id)).filter(Boolean);detailIndex=detailSequence.findIndex(item=>item.id===current);if(detailIndex<0)$('media-detail').close();else refreshDetail(current);}
     if(data.operation_state?.running)centerOperationTimer=setTimeout(pollOperations,1000);return true;
-  }catch(error){if(ticket===loadTicket){if(automatic===true){availabilityPending=true;if(operationsDone){operationRefreshPending=true;centerOperationTimer=setTimeout(pollOperations,3000);}availabilityNotice();return false;}centerStale=true;if(catalog)render();message(error.message);$('center-subtitle').textContent='资料库暂时无法读取，请点击刷新重试。';if(catalog?.operation_state?.running)centerOperationTimer=setTimeout(pollOperations,3000);return false;}return null;}finally{loadsInFlight--;}
+  }catch(error){if(ticket===loadTicket){if(automatic===true){if(!scanUpdate)availabilityPending=true;if(operationsDone){operationRefreshPending=true;centerOperationTimer=setTimeout(pollOperations,3000);}availabilityNotice();return false;}centerStale=true;if(catalog)render();message(error.message);$('center-subtitle').textContent='资料库暂时无法读取，请点击刷新重试。';if(catalog?.operation_state?.running)centerOperationTimer=setTimeout(pollOperations,3000);return false;}return null;}finally{loadsInFlight--;}
 }
 async function pollOperations(){
   const ticket=loadTicket;
@@ -83,6 +84,15 @@ async function pollAvailability(){
   }catch(_error){/* A temporary monitor failure must not interrupt browsing. */}finally{availabilityPolling=false;}
 }
 if(typeof setInterval==='function')setInterval(pollAvailability,10000);
+async function pollScan(){
+  if(scanPolling||loadsInFlight||!catalog?.unified_library||document.visibilityState==='hidden')return;
+  scanPolling=true;
+  try{const state=await request('api/scan');if(typeof state.revision!=='string')return;
+    if(state.revision===(catalog.scan_revision||'')){scanRefreshPending=false;availabilityNotice();return;}
+    scanRefreshPending=true;availabilityNotice();if(!loadsInFlight&&autoRefreshSafe())await load(true,false,true);
+  }catch(_error){/* Retain the current view and retry on the next bounded poll. */}finally{scanPolling=false;}
+}
+if(typeof setInterval==='function')setInterval(pollScan,3000);
 function canTrash(ids){return !busy&&!centerStale&&mediaAccess.available&&!catalog?.restored&&!catalog?.operation_state?.running&&!catalog?.operation_state?.warnings?.length&&ids.length>0&&ids.length<=200&&ids.every(id=>{const file=byFile.get(id);return file&&mediaAccess.ids_by_path[file.path]===id;});}
 function openFileReview(action,ids,summary=''){
   if(busy)return;if(action==='delete'&&!canTrash(ids))return;if(action==='delete'&&$('media-detail').open)$('media-detail').close();
@@ -321,7 +331,8 @@ function render(){if(!catalog)return;announceCenterView();syncMediaFilters();pre
   $('recursive-label').hidden=view!=='resources'||!directory||all;const filters=[kind,$('filter-duration').value,$('filter-resolution').value,$('filter-year').value,$('filter-genre').value,$('media-order').value&&$('media-order').value!=='recent'].filter(Boolean).length;$('center-options-summary').textContent=filters?`筛选与排序 · ${filters} 项`:'筛选与排序';$('reset-filters').hidden=!filters;
   $('center-content').replaceChildren();$('center-breadcrumb').replaceChildren();$('center-pager').hidden=true;
   const status=[];if(catalog.hidden_files)status.push(`已按本次扫描的回收站成功记录隐藏 ${catalog.hidden_files} 个文件；如已恢复，请重新扫描。`);if(catalog.missing_files)status.push(`已暂时隐藏 ${catalog.missing_files} 个确认不在原位置的文件；恢复后点“刷新页面”，后台核对完成后会重新显示。`);if(collection&&!all){const missing=(catalog.state.collections[collection]?.ids||[]).filter(id=>!byId.has(id)).length;if(missing)status.push(`此合集另有 ${missing} 项不在本次扫描结果或已隐藏；合集记录仍保留，可切换扫描结果或重新扫描对应目录。`);}if(catalog.unavailable_files)status.push(`${catalog.unavailable_files} 个文件暂时无法访问，记录已保留；请检查磁盘连接或权限。`);if(catalog.operation_state?.running)status.push('文件操作正在进行，状态将自动更新。');if(catalog.operation_state?.warnings?.length)status.push('操作记录待核对，已暂停清理。请从整理工具查看操作记录。');centerStatusBase=status.join(' ');availabilityNotice();
-  if(catalog.pending_scan){const hint=make('p','muted','扫描仍在后台继续。新发现的媒体暂只供浏览，完整解析与查重完成后更新；其他已扫描目录保持可用。');$('center-content').append(hint);}
+  if(catalog.pending_scan){const hint=make('p','muted','扫描仍在后台继续，清单、时长和已生成的小图会分批更新。新发现或变化的媒体暂只供浏览；其他已扫描目录保持可用。');$('center-content').append(hint);}
+  if(catalog.scan_complete){$('center-content').append(make('p','muted','扫描已完成。当前浏览与选择已保留；返回主界面点击“查看新结果”后可操作本轮新增或变化的文件。'));}
   if(catalog.unified_library&&view==='review')$('center-content').append(make('p','muted','这里汇总已有完整校验和相似候选；要完整检查不同扫描目录之间的重复，请勾选这些目录一起扫描。'));
   for(const job of catalog.operation_state?.unfinished||catalog.operation_state?.resumable?.map(job=>({...job,can_resume:true}))||[]){
     const row=make('div','actions batch-recovery'),labels={running:'处理中',external_running:'处理中',interrupted:'异常中断，需核对',stopped:'已停止',cancelled:'已取消'};

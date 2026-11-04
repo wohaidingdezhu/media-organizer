@@ -25,7 +25,7 @@ revision=1;missing=0;await scope.poll();assert($('center-status').textContent.in
 assert($('selected-count').textContent.includes('1'));
 $('manage-toggle').onclick();await scope.poll();
 assert(!$('center-status').textContent.includes('暂时隐藏'));assert.equal(operations.length,0);
-''', setup='scope.setInterval=fn=>{scope.poll=fn;};')
+''', setup='scope.setInterval=(fn,ms)=>{if(ms===10000)scope.poll=fn;};')
 
 
 if __name__ == '__main__':
