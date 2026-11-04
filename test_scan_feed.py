@@ -74,6 +74,14 @@ class ScanFeedTests(unittest.TestCase):
         self.assertEqual([file['name'] for file in walked], ['0.jpg'])
         self.assertEqual(build_library(self.output)[1]['files'], [])
 
+    def test_command_line_cancel_before_discovery_leaves_no_report_directory(self):
+        generated = self.raw()
+        original = Path(generated['path']).read_bytes()
+        with mock.patch.dict('os.environ', {'MEDIA_ORGANIZER_PROGRESS': '0'}), mock.patch.object(media_scan, 'discover', side_effect=KeyboardInterrupt), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(media_scan.main([str(self.a), '--output', str(self.output)]), 130)
+        self.assertFalse(list(self.output.glob('scan-*')))
+        self.assertEqual(Path(generated['path']).read_bytes(), original)
+
     def test_overlay_shows_metadata_art_and_retains_completed_authority_only(self):
         old = self.record(self.b)
         self.report(1, [self.b], [old])

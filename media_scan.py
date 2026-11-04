@@ -1549,10 +1549,10 @@ def main(argv=None):
         photo_enabled = not args.no_image_metadata and not args.no_photo_analysis
         video_enabled = not args.no_image_metadata and not args.no_video_covers
         directory = output / dt.datetime.now().strftime("scan-%Y%m%d-%H%M%S-%f")
-        directory.mkdir(parents=True, exist_ok=False, mode=0o700)
         feed = None
         if os.environ.get('MEDIA_ORGANIZER_PROGRESS') == '1':
             from scan_feed import ScanFeed
+            directory.mkdir(parents=True, exist_ok=False, mode=0o700)
             feed = ScanFeed(output, directory, roots, photo_enabled, video_enabled)
         records, skipped = discover(roots, output, args.include_hidden, issues, folders_seen, found_sidecars,
                                     on_record=feed.record if feed else None)
@@ -1595,6 +1595,8 @@ def main(argv=None):
         if not args.no_local_metadata:
             enrich_library(video_library["groups"], sidecars, issues)
         video_library["issues"].extend({"path": item["path"], "reason": item["reason"], "type": "影片资料"} for item in issues[metadata_issue_start:])
+        if not feed:
+            directory.mkdir(parents=True, exist_ok=False, mode=0o700)
         if feed:
             for group in video_library['groups']:
                 feed.group(group)
