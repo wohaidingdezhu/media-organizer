@@ -133,7 +133,7 @@ def _open_report_file(report_dir, parts):
         os.close(directory)
 
 
-def create_library_server(report_dir, output_dir, *, dashboard_url=None):
+def create_library_server(report_dir, output_dir, *, dashboard_url=None, pending_provider=None):
     dashboard_link = _dashboard_link(dashboard_url)
     report_dir = Path(report_dir).resolve(strict=True)
     output_dir = Path(output_dir).resolve(strict=True)
@@ -157,23 +157,41 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
             return organization
     library = document.get("video_library")
     library_page = None
+    live_assets, live_revision, live_document = {}, None, document
+    live_lock = threading.Lock()
 
-    def current_document():
+    def browsing_document():
+        nonlocal live_revision, live_document
+        if not document.get('unified_library') or pending_provider is None:
+            return document
+        with live_lock:
+            pending = pending_provider()
+            revision = pending.get('revision', '') if pending else ''
+            if revision != live_revision:
+                from unified_library import with_pending
+                live_document = with_pending(document, pending)
+                live_assets.update(live_document.get('preview_sources', {}))
+                live_revision = revision
+            return live_document
+
+    def current_document(source=None):
         from movie_grouping import load_assignments, apply_grouping, assignments_revision
         from movie_attachments import attach_summaries
         from media_scan import build_video_library
         values = load_assignments(output_dir)
-        records = document.get('files', [])
+        source = document if source is None else source
+        art = source.get('video_library')
+        records = source.get('files', [])
         if not records or not all(all(key in file for key in ('root', 'name', 'mtime', 'hash_status', 'suggested_path')) for file in records):
-            return {**document, 'video_library': {**(library or {}), 'grouping_revision': assignments_revision(values)}}
-        base = build_video_library(records, document.get('sidecars', []), document.get('duplicates', []),
-                                   document.get('issues', []), document.get('folder_groups', []), load_tags(tag_path))
-        grouped = apply_grouping(base, values, art_library=library)
+            return {**source, 'video_library': {**(art or {}), 'grouping_revision': assignments_revision(values)}}
+        base = build_video_library(records, source.get('sidecars', []), source.get('duplicates', []),
+                                   source.get('issues', []), source.get('folder_groups', []), load_tags(tag_path))
+        grouped = apply_grouping(base, values, art_library=art)
         tags = load_tags(tag_path)
         for group in grouped['groups']:
             group['tags'] = tags.get(group['tag_key'], [])
         grouped['grouping_revision'] = assignments_revision(values)
-        return attach_summaries({**document, 'video_library': grouped})
+        return attach_summaries({**source, 'video_library': grouped})
 
     def current_library_page():
         nonlocal library_page
@@ -204,8 +222,15 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
         history = operations.history()
         missing_monitor.request_scan()
         absent, availability = missing_monitor.snapshot()
+        source = browsing_document()
+        blocked = {file['path'] for file in source['files'] if file.get('browse_only')}
+        absent -= blocked
         with data_lock(output_dir):
-            result = center_catalog(current_document(), center_state.snapshot(), load_notes(note_path), set(history['handled']['trash']) | absent)
+            result = center_catalog(current_document(source), center_state.snapshot(), load_notes(note_path), set(history['handled']['trash']) | absent)
+        result['scan_revision'] = source.get('scan_revision', '')
+        if source.get('pending_scan') or source.get('scan_complete'):
+            access = media.snapshot()
+            result['media_access'] = {**access, 'ids_by_path': {path: identifier for path, identifier in access['ids_by_path'].items() if path not in blocked}}
         result['missing_files'] = len(absent)
         result['unavailable_files'] = availability.get('unavailable_count', 0)
         result['availability_revision'] = availability['revision']
@@ -354,6 +379,15 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 except (OSError, ValueError, KeyError, TypeError) as error:
                     self.send_json(400, {'error': str(error)})
                 return
+            if route == 'api/scan':
+                try:
+                    pending = pending_provider() if document.get('unified_library') and pending_provider else None
+                    if pending and pending.get('finished') and pending.get('report') in document.get('source_reports', []):
+                        pending = None
+                    self.send_json(200, {'revision': pending.get('revision', '') if pending else ''})
+                except (OSError, ValueError, KeyError, TypeError) as error:
+                    self.send_json(400, {'error': str(error)})
+                return
             if route in {"api/users", "api/photos", "api/duplicates", "api/storage", "api/basket", "api/roots", "api/changes", "api/notes", "api/operations", "api/organize-settings", "api/organized-results"} or route.startswith(("api/operations/", "api/photo-bundles/", "api/movie-bundles/")):
                 try:
                     if route == 'api/organize-settings':
@@ -449,9 +483,9 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None):
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            if route in document.get('preview_sources', {}):
+            if route in document.get('preview_sources', {}) or route in live_assets:
                 from scan_cache import valid_thumbnail
-                for source in document['preview_sources'][route]:
+                for source in live_assets.get(route, document.get('preview_sources', {}).get(route, [])):
                     if (len(source) != 3 or not re.fullmatch(r'scan-[A-Za-z0-9_-]{1,120}', source[0])
                             or source[1] not in {'previews', 'covers'} or not re.fullmatch(r'[A-Za-z0-9_-]+\.png', source[2])):
                         continue

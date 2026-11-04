@@ -29,6 +29,15 @@ status.latest_report='new';$('platform-main').setAttribute('data-pane','scan');s
 })().catch(e=>{console.error(e);process.exitCode=1;});
 ''')
 
+    def test_live_batches_do_not_offer_reopening_the_already_updating_page(self):
+        self.node(r'''
+const html=fs.readFileSync(root+'/dashboard.html','utf8');let status={running:true,latest_report:'old',pending_library:'batch-1'},loads=0;
+Object.assign(scope,{stopped:false,scanControls:{epoch:0},previousRunning:true,knownLatest:'old',pendingLibrarySeen:'',selectedReport:'all',request:async()=>status,renderStatus(){},notice(){},setTimeout(){return 1;},loadReports:async()=>{loads++;}});
+vm.runInContext(html.slice(html.indexOf('async function refresh()'),html.indexOf('async function act(')),scope);
+(async()=>{$('platform-main').setAttribute('data-pane','results');$('result-frame').hidden=false;$('result-frame').setAttribute('data-report-id','all');await scope.refresh();assert($('pending-report-update').hidden);status.pending_library='batch-2';await scope.refresh();assert($('pending-report-update').hidden);assert.equal(loads,0);
+status={running:false,latest_report:'new',pending_library:'',scan_origin:'manual'};await scope.refresh();assert(!$('pending-report-update').hidden);assert($('pending-report-update').textContent.includes('查看新结果'));assert.equal(loads,0);})().catch(e=>{console.error(e);process.exitCode=1;});
+''')
+
     def test_failed_or_superseded_completion_load_can_be_retried(self):
         self.node(r'''
 const html=fs.readFileSync(root+'/dashboard.html','utf8');let loads=0;
