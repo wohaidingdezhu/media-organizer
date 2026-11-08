@@ -86,8 +86,8 @@ async function pollAvailability(){
 if(typeof setInterval==='function')setInterval(pollAvailability,10000);
 async function pollScan(){
   if(scanPolling||loadsInFlight||!catalog?.unified_library||document.visibilityState==='hidden')return;
-  scanPolling=true;
-  try{const state=await request('api/scan');if(typeof state.revision!=='string')return;
+  scanPolling=true;const ticket=loadTicket;
+  try{const state=await request('api/scan');if(ticket!==loadTicket||typeof state.revision!=='string')return;
     if(state.revision===(catalog.scan_revision||'')){
       if(scanRefreshPending){scanRefreshPending=false;availabilityNotice();}
       return;
