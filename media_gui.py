@@ -244,7 +244,7 @@ class DashboardState(WorkspaceController):
         except FileNotFoundError:
             return ''
 
-    def pending_library(self):
+    def pending_library(self, *, revision_only=False):
         from scan_feed import ScanFeedReader
         with self.lock:
             if not self.running:
@@ -255,7 +255,7 @@ class DashboardState(WorkspaceController):
             if not hasattr(self, '_scan_feed_reader') or self._scan_feed_reader.output != self.output:
                 self._scan_feed_reader = ScanFeedReader(self.output)
             reader = self._scan_feed_reader
-        return reader.snapshot()
+        return reader.snapshot(revision_only=revision_only)
 
     def snapshot(self):
         with self.lock:
@@ -411,10 +411,8 @@ class DashboardState(WorkspaceController):
                 code = process.wait()
             with self.lock:
                 if code == 0:
-                    try:
-                        self.pending_library()  # Retain the last batch before retiring its manifest.
-                    except (OSError, ValueError, KeyError, TypeError) as error:
-                        self.log('临时浏览清单未更新，完整结果仍可打开：' + str(error))
+                    # Keep the batches already browsed. The final report supplies
+                    # the full list when the user chooses to open the new result.
                     from scan_progress import progress
                     self.progress = progress('done', 1, 1)
                     history = self.report_history()["reports"]
@@ -479,8 +477,11 @@ class DashboardState(WorkspaceController):
             if output != self.output:
                 raise ValueError('资料库已切换，请重新打开')
             if report.name not in self.report_servers:
+                def pending_provider(*, revision_only=False):
+                    if self.output == output:
+                        return self.pending_library(revision_only=revision_only)
                 server, url = create_library_server(report, output, dashboard_url=self.dashboard_url,
-                                                    pending_provider=lambda: self.pending_library() if self.output == output else None)
+                                                    pending_provider=pending_provider)
                 self.report_servers[report.name] = (server, url)
                 threading.Thread(target=server.serve_forever, daemon=True).start()
             server, url = self.report_servers[report.name]

@@ -381,7 +381,7 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None, pending
                 return
             if route == 'api/scan':
                 try:
-                    pending = pending_provider() if document.get('unified_library') and pending_provider else None
+                    pending = pending_provider(revision_only=True) if document.get('unified_library') and pending_provider else None
                     if pending and pending.get('finished') and pending.get('report') in document.get('source_reports', []):
                         pending = None
                     self.send_json(200, {'revision': pending.get('revision', '') if pending else ''})
