@@ -17,6 +17,72 @@ from workspace_data import data_lock, read_json, write_json
 PENDING = 'scan-pending.json'
 
 
+def with_pending(document, pending):
+    """Overlay browse-only scan facts without opening media or writing snapshots."""
+    if not pending or pending.get('finished') and pending.get('report') in document.get('source_reports', []):
+        return {**document, 'scan_revision': ''}
+    files = {record['path']: record for record in document['files']}
+    previews = dict(document.get('previews', {}))
+    assets = dict(document.get('preview_sources', {}))
+    for record in pending.get('files', []):
+        prior = files.get(record['path'])
+        same = prior and prior.get('source_signature') == record.get('source_signature')
+        files[record['path']] = {**(prior if same else {}), **record,
+                                 'browse_only': bool(prior.get('browse_only')) if same else True,
+                                 'source_report': prior.get('source_report', '') if same else '',
+                                 'auto_preview': prior.get('auto_preview', True) if same else False}
+        if same:
+            for key in ('sha256', 'hash_status', 'suggested_path', 'date_source', 'reason'):
+                if not record.get(key):
+                    files[record['path']][key] = prior.get(key, '')
+        if not same:
+            previews.pop(record['path'], None)
+    report = pending.get('report', '')
+
+    def asset(relative):
+        if (not re.fullmatch(r'scan-[A-Za-z0-9_-]{1,120}', report)
+                or not isinstance(relative, str) or not re.fullmatch(r'(?:previews|covers)/[A-Za-z0-9_-]+\.png', relative)):
+            return ''
+        route = 'previews/live-' + hashlib.sha256((report + '/' + relative).encode()).hexdigest() + '.png'
+        assets[route] = [[report, *relative.split('/')]]
+        return route
+
+    for path, relative in pending.get('previews', {}).items():
+        if path in files:
+            route = asset(relative)
+            if route:
+                previews[path] = route
+    staged_groups = pending.get('groups', [])
+    covered = {file['path'] for group in staged_groups for file in group.get('files', [])}
+    groups = {}
+    known_groups = {group.get('group_key') or group.get('tag_key'): group
+                    for group in document.get('video_library', {}).get('groups', [])
+                    if any(files[file['path']].get('source_report') for file in group['files'])}
+    for group in document.get('video_library', {}).get('groups', []):
+        members = [member for member in group['files'] if member['path'] not in covered and files[member['path']].get('source_report')]
+        if members:
+            groups[group.get('group_key') or group.get('tag_key')] = {**group, 'files': members}
+    for group in staged_groups:
+        members = [file for file in group.get('files', []) if file['path'] in files]
+        if members:
+            key = group.get('group_key') or group.get('tag_key')
+            prior = known_groups.get(key, {})
+            metadata = {**prior.get('metadata', {}), **{name: value for name, value in group.get('metadata', {}).items() if value}}
+            groups[key] = {**prior, **group, 'metadata': metadata,
+                           'tags': list(dict.fromkeys(prior.get('tags', []) + group.get('tags', []))),
+                           'files': groups.get(key, {}).get('files', []) + members,
+                           'poster': asset(group.get('poster', '')) or prior.get('poster', '')}
+    safe = {path for path, record in files.items() if not record.get('browse_only')}
+    return {**document, 'files': list(files.values()), 'roots': sorted(set(document['roots']) | set(pending.get('roots', []))),
+            'previews': previews, 'preview_sources': assets, 'pending_scan': not pending.get('finished', False),
+            'scan_complete': bool(pending.get('finished')),
+            'scan_revision': pending.get('revision', ''),
+            'duplicates': [group for group in document.get('duplicates', []) if all(path in safe for path in group['paths'])],
+            'similar': {**document.get('similar', {}), 'pairs': [pair for pair in document.get('similar', {}).get('pairs', [])
+                                                             if pair['left'] in safe and pair['right'] in safe]},
+            'video_library': {**document.get('video_library', {}), 'groups': list(groups.values())}}
+
+
 def build_library(output, pending=None):
     with data_lock(output):
         index, warnings = sync_index(output, complete_only=True)

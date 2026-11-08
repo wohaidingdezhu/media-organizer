@@ -81,7 +81,7 @@ def normalize_roots(paths, output):
     return roots
 
 
-def discover(roots, output, include_hidden, issues, folders=None, sidecars=None):
+def discover(roots, output, include_hidden, issues, folders=None, sidecars=None, on_record=None):
     scan_progress('discover')
     records, identities = [], {}
     skipped = collections.Counter()
@@ -146,6 +146,8 @@ def discover(roots, output, include_hidden, issues, folders=None, sidecars=None)
                     }
                     identities.setdefault(identity, str(path))
                     records.append(record)
+                    if on_record:
+                        on_record(record)
                     if len(records) == 1 or len(records) % 50 == 0:
                         scan_progress('discover', len(records), current=name)
                     if len(records) % 1000 == 0:
@@ -431,7 +433,7 @@ class ImageProbeWorker:
             return result
 
 
-def inspect_images(records, helper, issues, enabled, cache=None):
+def inspect_images(records, helper, issues, enabled, cache=None, on_record=None):
     available = helper_available(helper)
     if not enabled or not available:
         return {"available": available, "enabled": enabled, "inspected": 0,
@@ -470,6 +472,8 @@ def inspect_images(records, helper, issues, enabled, cache=None):
                     else:
                         record["image"] = metadata
                         success += 1
+                        if on_record:
+                            on_record(record)
     finally:
         for worker in workers:
             worker.close()
@@ -477,7 +481,7 @@ def inspect_images(records, helper, issues, enabled, cache=None):
             "note": "使用 ImageIO 或 Pillow；动画仅比较第一帧，支持格式取决于已安装的解码器。"}
 
 
-def inspect_video_metadata(records, issues, enabled=True, cache=None):
+def inspect_video_metadata(records, issues, enabled=True, cache=None, on_record=None):
     """Optional bounded header probing, independent of poster presence/count."""
     from video_metadata import clean_video_metadata
     helper = media_backend.video_metadata_helper()
@@ -522,6 +526,8 @@ def inspect_video_metadata(records, issues, enabled=True, cache=None):
                     else:
                         record['video'] = facts
                         summary['inspected'] += 1
+                        if on_record:
+                            on_record(record)
                     if index == 1 or index % 50 == 0 or index == len(videos):
                         print(f'读取视频信息 {index}/{len(videos)}…', flush=True)
                     now = time.monotonic()
@@ -960,7 +966,7 @@ def write_csv(path, fields, rows):
             writer.writerow([csv_cell(row.get(key, "")) for key, _ in fields])
 
 
-def export_previews(directory, records, similarity, helper, issues, displayed_pairs=300, photo_limit=500, cache=None):
+def export_previews(directory, records, similarity, helper, issues, displayed_pairs=300, photo_limit=500, cache=None, on_preview=None):
     """Create report-local previews only for images shown in the HTML report."""
     paths = dict.fromkeys(path for pair in similarity["pairs"][:displayed_pairs]
                           for path in (pair["left"], pair["right"]))
@@ -1012,6 +1018,8 @@ def export_previews(directory, records, similarity, helper, issues, displayed_pa
                         issue(issues, path, f"图片浏览预览未生成：{error}")
                     elif relative:
                         previews[path] = relative
+                        if on_preview:
+                            on_preview(path, relative)
     finally:
         for worker in workers:
             worker.close()
@@ -1024,7 +1032,7 @@ def local_cover_candidates(groups, records):
     return cover_candidates(groups, records)
 
 
-def export_local_covers(directory, groups, records, helper, issues, enabled=True, cache=None):
+def export_local_covers(directory, groups, records, helper, issues, enabled=True, cache=None, on_group=None):
     for group in groups:
         group["poster"] = ""
         group["poster_source"] = ""
@@ -1078,6 +1086,8 @@ def export_local_covers(directory, groups, records, helper, issues, enabled=True
                             count += 1
                         elif error:
                             issue(issues, candidates[index][0]["path"], error)
+                        if on_group:
+                            on_group(groups[index])
             except BaseException:
                 cancelled.set()
                 raise
@@ -1087,7 +1097,7 @@ def export_local_covers(directory, groups, records, helper, issues, enabled=True
     return count
 
 
-def export_video_frame_covers(directory, groups, records, helper, issues, limit=500, enabled=True, cache=None):
+def export_video_frame_covers(directory, groups, records, helper, issues, limit=500, enabled=True, cache=None, on_group=None):
     """Attempt the same video extensions on both platforms, bounded by group count."""
     if not enabled or not helper_available(helper):
         return 0
@@ -1110,6 +1120,8 @@ def export_video_frame_covers(directory, groups, records, helper, issues, limit=
                     group['poster_source'] = '视频截帧：' + record['path']
                     count += 1
                     reused = True
+                    if on_group:
+                        on_group(group)
                     break
             if reused:
                 continue
@@ -1161,6 +1173,8 @@ def export_video_frame_covers(directory, groups, records, helper, issues, limit=
                             groups[index]["poster_status"] = "无法生成视频封面；视频是否可播放仍需人工确认"
                             if error:
                                 issue(issues, groups[index]["files"][0]["path"], f"视频封面未生成：{error}")
+                        if on_group:
+                            on_group(groups[index])
             except BaseException:
                 cancelled.set()
                 raise
@@ -1532,19 +1546,31 @@ def main(argv=None):
         print("只读扫描开始。可按 Ctrl+C 取消；原文件不会修改。", flush=True)
         folders_seen = []
         found_sidecars = []
-        records, skipped = discover(roots, output, args.include_hidden, issues, folders_seen, found_sidecars)
+        photo_enabled = not args.no_image_metadata and not args.no_photo_analysis
+        video_enabled = not args.no_image_metadata and not args.no_video_covers
+        directory = output / dt.datetime.now().strftime("scan-%Y%m%d-%H%M%S-%f")
+        feed = None
         if os.environ.get('MEDIA_ORGANIZER_PROGRESS') == '1':
-            from unified_library import publish_discovery
-            publish_discovery(output, roots, records)
+            from scan_feed import ScanFeed
+            directory.mkdir(parents=True, exist_ok=False, mode=0o700)
+            feed = ScanFeed(output, directory, roots, photo_enabled, video_enabled)
+        records, skipped = discover(roots, output, args.include_hidden, issues, folders_seen, found_sidecars,
+                                    on_record=feed.record if feed else None)
+        if feed:
+            feed.flush(True)
         from scan_cache import ScanCache, analysis_fingerprint
         fingerprint = analysis_fingerprint(media_backend.helper('image_probe'), media_backend.helper('video_cover'))
         cache = ScanCache(output, roots, fingerprint, enabled=not args.refresh_media)
         duplicates = exact_duplicates(records, issues)
         video_inspection = inspect_video_headers(records, issues, args.check_video_headers)
-        photo_enabled = not args.no_image_metadata and not args.no_photo_analysis
-        video_enabled = not args.no_image_metadata and not args.no_video_covers
-        image_inspection = inspect_images(records, media_backend.helper("image_probe"), issues, photo_enabled, cache=cache)
-        video_metadata_inspection = inspect_video_metadata(records, issues, video_enabled, cache=cache)
+        image_inspection = inspect_images(records, media_backend.helper("image_probe"), issues, photo_enabled, cache=cache,
+                                          on_record=feed.record if feed else None)
+        if feed:
+            feed.flush(True)
+        video_metadata_inspection = inspect_video_metadata(records, issues, video_enabled, cache=cache,
+                                                           on_record=feed.record if feed else None)
+        if feed:
+            feed.flush(True)
         classify(records, args.video_rule)
         sidecars = associate_sidecars(found_sidecars, records)
         similarity = similar_images(records, args.distance, args.max_similar, not args.no_similar and photo_enabled and image_inspection["available"])
@@ -1569,18 +1595,31 @@ def main(argv=None):
         if not args.no_local_metadata:
             enrich_library(video_library["groups"], sidecars, issues)
         video_library["issues"].extend({"path": item["path"], "reason": item["reason"], "type": "影片资料"} for item in issues[metadata_issue_start:])
-        directory = output / dt.datetime.now().strftime("scan-%Y%m%d-%H%M%S-%f")
-        directory.mkdir(parents=True, exist_ok=False, mode=0o700)
+        if not feed:
+            directory.mkdir(parents=True, exist_ok=False, mode=0o700)
+        if feed:
+            for group in video_library['groups']:
+                feed.group(group)
+            feed.flush(True)
         previews = export_previews(directory, records, similarity, media_backend.helper("image_probe"), issues,
-                                   photo_limit=500 if photo_enabled and image_inspection["available"] else 0, cache=cache)
+                                   photo_limit=500 if photo_enabled and image_inspection["available"] else 0, cache=cache,
+                                   on_preview=feed.preview if feed else None)
+        if feed:
+            feed.flush(True)
         cover_issue_start = len(issues)
         video_library["poster_count"] = export_local_covers(directory, video_library["groups"], records,
                                                              media_backend.helper("image_probe"), issues,
-                                                             enabled=photo_enabled or video_enabled, cache=cache)
+                                                             enabled=photo_enabled or video_enabled, cache=cache,
+                                                             on_group=feed.group if feed else None)
+        if feed:
+            feed.flush(True)
         video_library["frame_count"] = export_video_frame_covers(directory, video_library["groups"], records,
                                                                   media_backend.helper("video_cover"), issues,
                                                                   limit=args.max_video_covers,
-                                                                  enabled=video_enabled, cache=cache)
+                                                                  enabled=video_enabled, cache=cache,
+                                                                  on_group=feed.group if feed else None)
+        if feed:
+            feed.flush(True)
         video_library["still_count"] = export_stills(directory, video_library["groups"], records, previews, media_backend.helper("image_probe"), issues, enabled=photo_enabled and not args.no_local_metadata)
         video_library["poster_count"] += video_library["frame_count"]
         video_library["issues"].extend({"path": item["path"], "reason": item["reason"], "type": "封面"}

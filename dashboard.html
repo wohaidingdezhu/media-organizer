@@ -187,8 +187,8 @@ function renderStatus(data){scanControls.status=data;const locked=data.running||
 }
 async function refresh(){if(stopped)return;const epoch=scanControls.epoch;try{const data=await request('status');if(stopped||epoch!==scanControls.epoch)return;renderStatus(data);
   const changed=knownLatest!==undefined&&knownLatest!==data.latest_report;
-  if(data.pending_library&&data.pending_library!==pendingLibrarySeen){pendingLibrarySeen=data.pending_library;$('pending-report-update').textContent='文件清单已就绪 · 先浏览，后台继续解析和查重';$('pending-report-update').hidden=false;}
-  if(!data.pending_library&&typeof pendingLibrarySeen!=='undefined'&&pendingLibrarySeen){pendingLibrarySeen='';$('pending-report-update').textContent='扫描阶段已结束 · 刷新资料库';$('pending-report-update').hidden=false;}
+  if(data.pending_library&&data.pending_library!==pendingLibrarySeen){pendingLibrarySeen=data.pending_library;const watching=selectedReport==='all'&&$('platform-main').getAttribute?.('data-pane')==='results'&&!$('result-frame').hidden&&$('result-frame').getAttribute('data-report-id')==='all';$('pending-report-update').textContent='文件清单已就绪 · 先浏览，后台继续解析和查重';$('pending-report-update').hidden=watching;}
+  if(!data.pending_library&&typeof pendingLibrarySeen!=='undefined'&&pendingLibrarySeen){pendingLibrarySeen='';$('pending-report-update').textContent=changed?'扫描已完成 · 查看新结果':'扫描阶段已结束 · 刷新资料库';$('pending-report-update').hidden=false;}
   if(knownLatest===undefined)await loadReports();
   else if(changed){
     const keepCurrent=selectedReport&&data.latest_report&&(['changes','timer'].includes(data.scan_origin)||$('platform-main').getAttribute?.('data-pane')!=='scan');
