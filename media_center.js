@@ -88,8 +88,12 @@ async function pollScan(){
   if(scanPolling||loadsInFlight||!catalog?.unified_library||document.visibilityState==='hidden')return;
   scanPolling=true;
   try{const state=await request('api/scan');if(typeof state.revision!=='string')return;
-    if(state.revision===(catalog.scan_revision||'')){scanRefreshPending=false;availabilityNotice();return;}
-    scanRefreshPending=true;availabilityNotice();if(!loadsInFlight&&autoRefreshSafe())await load(true,false,true);
+    if(state.revision===(catalog.scan_revision||'')){
+      if(scanRefreshPending){scanRefreshPending=false;availabilityNotice();}
+      return;
+    }
+    if(!scanRefreshPending){scanRefreshPending=true;availabilityNotice();}
+    if(!loadsInFlight&&autoRefreshSafe())await load(true,false,true);
   }catch(_error){/* Retain the current view and retry on the next bounded poll. */}finally{scanPolling=false;}
 }
 if(typeof setInterval==='function')setInterval(pollScan,3000);

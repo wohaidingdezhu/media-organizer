@@ -189,6 +189,31 @@ class ScanFeedTests(unittest.TestCase):
         state.progress = {'stage': 'done'}
         self.assertIsNone(state.pending_library())  # Even an empty successful scan has no old batches.
 
+    def test_finishing_scan_keeps_visible_batch_without_loading_unseen_batches(self):
+        feed, reader = self.feed(), ScanFeedReader(self.output)
+        first, second = self.raw(), self.raw('next.jpg')
+        feed.record(first)
+        visible = reader.snapshot()
+        feed.record(second)
+        feed.flush(True)
+        self.report(2, [self.a], [
+            {**file, 'source_signature': list(file['_signature'])} for file in (first, second)
+        ])
+        state = media_gui.DashboardState(self.output)
+        self.addCleanup(state.close)
+        state.running = True
+        state._scan_feed_reader = reader
+        process = mock.Mock(stdout=io.StringIO())
+        process.wait.return_value = 0
+        with mock.patch.object(media_gui, 'compile_helpers'), mock.patch.object(media_gui.subprocess, 'Popen', return_value=process), mock.patch.object(reader, 'snapshot', side_effect=AssertionError('No catch-up read at scan completion')):
+            state._run_scan(['media_scan.py'], False, False)
+        finished = state.pending_library()
+        self.assertTrue(finished['finished'])
+        self.assertIs(finished['files'], visible['files'])
+        self.assertFalse(state.running)
+        self.assertEqual(state.snapshot()['latest_report'], 'scan-002')
+        self.assertEqual(len(build_library(self.output)[1]['files']), 2)
+
     def test_changed_movie_does_not_reuse_old_art_and_unchanged_facts_stay_visible(self):
         record = self.record(self.a, 'Feature2025.mp4')
         record.update(kind='视频', extension='mp4', image={'width': 20}, suggested_path='known/path')
@@ -232,7 +257,10 @@ class ScanFeedTests(unittest.TestCase):
         fresh['image'] = {'width': 20, 'height': 16}
         feed.record(fresh)
         feed.flush(True)
-        _, status = request(server, prefix + 'api/scan')
+        from portable_fs import read_private_file
+        with mock.patch('scan_feed.fs.read_private_file', wraps=read_private_file) as reads:
+            _, status = request(server, prefix + 'api/scan')
+        self.assertEqual([call.args[1] for call in reads.call_args_list], [('scan-pending.json',)])
         self.assertNotEqual(json.loads(status)['revision'], first['scan_revision'])
         _, body = request(server, prefix + 'api/center')
         second = json.loads(body)
@@ -259,6 +287,7 @@ class ScanFeedUITests(unittest.TestCase):
 location.hash='#photos';events.hashchange();$('manage-toggle').onclick();$('select-page').onclick();
 const wall=$('center-content').children.find(n=>n.className.includes('photo-wall'));const reads=()=>readCount;
 revision='batch-2';items.push({...photo,id:'9'.repeat(64),title:'New photo'});await poll();assert.equal(reads(),1);assert($('selected-count').textContent.includes('1 项'));assert($('center-status').textContent.includes('扫描有新结果'));assert.equal($('center-content').children.find(n=>n.className.includes('photo-wall')),wall);
+const notice=$('center-status');let noticeWrites=0,text=notice.textContent;Object.defineProperty(notice,'textContent',{get:()=>text,set:value=>{text=value;noticeWrites++;}});await poll();assert.equal(noticeWrites,0);
 $('clear-selection').onclick();$('manage-toggle').onclick();$('query').value='Photo';scope.document.activeElement={tagName:'INPUT'};await poll();assert.equal(reads(),1);assert.equal($('query').value,'Photo');
 scope.document.activeElement=null;$('media-detail').open=true;await poll();assert.equal(reads(),1);$('media-detail').open=false;
 await poll();assert.equal(reads(),2);assert.equal($('query').value,'Photo');assert.equal(scope.window.scrollY,350);assert(!$('center-status').textContent.includes('扫描有新结果'));

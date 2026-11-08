@@ -56,17 +56,27 @@ class ScanFeedReader:
         self.report, self.count, self.files, self.previews, self.groups = '', 0, {}, {}, {}
         self.cached = None
 
-    def snapshot(self):
+    def _manifest(self):
+        manifest = read_json(self.output, PENDING)
+        if manifest is not None and not isinstance(manifest, dict):
+            raise ValueError('扫描中的文件清单格式无效')
+        if manifest is None or 'files' in manifest:  # Earlier discovery-only snapshots.
+            return manifest
+        report, count = manifest.get('report'), manifest.get('chunks')
+        if (not isinstance(report, str) or not re.fullmatch(r'scan-[A-Za-z0-9_-]{1,120}', report)
+                or type(count) is not int or not 0 <= count <= 1000000):
+            raise ValueError('扫描中的文件清单无效')
+        return {**manifest, 'revision': report + ':' + str(count)}
+
+    def snapshot(self, *, revision_only=False):
+        if revision_only:
+            # Status checks neither read batches nor wait for their reader lock.
+            return self._manifest()
         with self.lock:
-            manifest = read_json(self.output, PENDING, limit=128 * 1024 * 1024)
-            if manifest is not None and not isinstance(manifest, dict):
-                raise ValueError('扫描中的文件清单格式无效')
-            if manifest is None or 'files' in manifest:  # Earlier discovery-only snapshots.
+            manifest = self._manifest()
+            if manifest is None or 'files' in manifest:
                 return manifest
-            report, count = manifest.get('report'), manifest.get('chunks')
-            if (not isinstance(report, str) or not re.fullmatch(r'scan-[A-Za-z0-9_-]{1,120}', report)
-                    or type(count) is not int or not 0 <= count <= 1000000):
-                raise ValueError('扫描中的文件清单无效')
+            report, count = manifest['report'], manifest['chunks']
             if report != self.report or count < self.count:
                 self.report, self.count, self.files, self.previews, self.groups = report, 0, {}, {}, {}
                 self.cached = None
@@ -84,6 +94,6 @@ class ScanFeedReader:
                 self.previews.update(chunk['previews'])
                 self.groups.update(chunk['groups'])
                 self.count = number
-            self.cached = {**manifest, 'revision': report + ':' + str(count), 'files': list(self.files.values()),
+            self.cached = {**manifest, 'files': list(self.files.values()),
                            'previews': dict(self.previews), 'groups': list(self.groups.values())}
             return self.cached
