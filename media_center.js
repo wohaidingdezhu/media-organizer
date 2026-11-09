@@ -76,18 +76,18 @@ async function pollOperations(){
   finally{if(ticket===loadTicket&&(catalog?.operation_state?.running||operationRefreshPending))centerOperationTimer=setTimeout(pollOperations,1500);}
 }
 async function pollAvailability(){
-  if(availabilityPolling||loadsInFlight||!catalog||document.visibilityState==='hidden')return;availabilityPolling=true;
-  try{const state=await request('api/media/availability');if(!Number.isInteger(state.revision)||!Number.isInteger(catalog.availability_revision))return;
+  if(availabilityPolling||loadsInFlight||!catalog||document.visibilityState==='hidden')return;availabilityPolling=true;const ticket=loadTicket;
+  try{const state=await request('api/media/availability');if(ticket!==loadTicket||!Number.isInteger(state.revision)||!Number.isInteger(catalog.availability_revision))return;
     if(state.revision===catalog.availability_revision){if(availabilityPending){availabilityPending=false;availabilityNotice();}return;}
-    if(loadsInFlight||!autoRefreshSafe()){availabilityPending=true;availabilityNotice();return;}
+    if(loadsInFlight||!autoRefreshSafe()){if(!availabilityPending){availabilityPending=true;availabilityNotice();}return;}
     await load(true);
   }catch(_error){/* A temporary monitor failure must not interrupt browsing. */}finally{availabilityPolling=false;}
 }
 if(typeof setInterval==='function')setInterval(pollAvailability,10000);
 async function pollScan(){
   if(scanPolling||loadsInFlight||!catalog?.unified_library||document.visibilityState==='hidden')return;
-  scanPolling=true;
-  try{const state=await request('api/scan');if(typeof state.revision!=='string')return;
+  scanPolling=true;const ticket=loadTicket;
+  try{const state=await request('api/scan');if(ticket!==loadTicket||typeof state.revision!=='string')return;
     if(state.revision===(catalog.scan_revision||'')){
       if(scanRefreshPending){scanRefreshPending=false;availabilityNotice();}
       return;

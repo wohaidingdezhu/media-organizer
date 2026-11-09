@@ -282,6 +282,18 @@ class ScanFeedTests(unittest.TestCase):
 class ScanFeedUITests(unittest.TestCase):
     run_ui = test_media_center.MediaCenterTests.run_ui
 
+    def test_old_scan_status_cannot_reload_a_newer_manual_refresh(self):
+        self.run_ui(r'''
+const pending=poll();await new Promise(resolve=>setImmediate(resolve));
+revision='batch-2';await $('center-refresh').onclick();assert.equal(readCount,2);
+releaseStatus({revision:'batch-1'});await pending;
+assert.equal(readCount,2);assert(!$('center-status').textContent.includes('扫描有新结果'));
+''', setup=r'''
+const intervals=[];scope.setInterval=(fn,ms)=>intervals.push({fn,ms});const poll=()=>intervals.find(i=>i.ms===3000).fn();
+let revision='batch-1',readCount=0,releaseStatus;const original=scope.fetch;
+scope.fetch=async(path,options)=>{if(path==='api/scan')return {ok:true,json:()=>new Promise(resolve=>releaseStatus=resolve)};const result=await original(path,options);if(path!=='api/center')return result;readCount++;return {...result,json:async()=>({...await result.json(),unified_library:true,scan_revision:revision})};};
+''')
+
     def test_new_batches_defer_for_selection_preview_and_drafts_then_update_same_page(self):
         self.run_ui(r'''
 location.hash='#photos';events.hashchange();$('manage-toggle').onclick();$('select-page').onclick();
