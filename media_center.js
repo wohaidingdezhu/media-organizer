@@ -289,7 +289,11 @@ function renderReview(){
   $('center-content').append(make('p','muted',reviewMode==='exact'?'这些文件经完整 SHA-256 确认内容相同。可选一份保留，勾选其余副本；也可逐项删除，至少保留一份。':'这些只是视觉相似候选，可能是不同照片。先并排对比，再决定保留或删除。'));
   if(reviewMode==='similar'&&catalog.review?.similar_note)$('center-content').append(make('p','notice',catalog.review.similar_note));
   for(const warning of catalog.review?.warnings||[])$('center-content').append(make('p','notice',warning));
-  if(reviewMode==='similar'){const hidden=catalog.review?.dismissed_similar||[];tabs.append(button((showDismissedSimilar?'返回待核对':'已确认不相似')+' · '+hidden.length,()=>{showDismissedSimilar=!showDismissedSimilar;applyBrowseFilters();}));}
+  if(reviewMode==='similar'){
+    const reviewed=catalog.review?.dismissed_similar||[];
+    const toggle=button(showDismissedSimilar?'返回待核对':'已核对 · '+reviewed.length,()=>{showDismissedSimilar=!showDismissedSimilar;applyBrowseFilters();});
+    tabs.append(toggle);
+  }
   const reviewData=showDismissedSimilar&&reviewMode==='similar'?{...catalog.review,similar:catalog.review.dismissed_similar||[]}:catalog.review;
   const query=$('query').value.trim(),groups=centerReviewGroups(reviewData,{mode:reviewMode,query,kind:$('media-kind').value,year:$('filter-year').value,genre:$('filter-genre').value,order:$('media-order').value,owners:byId,duration:$('filter-duration').value,resolution:$('filter-resolution').value}),pages=Math.max(1,Math.ceil(groups.length/10));page=Math.max(0,Math.min(page,pages-1));$('center-subtitle').textContent=(query?'在当前分组中搜索 · ':'')+groups.length+' 组 · 显示整组供核对';
   const selectedBefore=reviewSelected.size;retainSelection(reviewSelected,groups.flatMap(group=>group.files.map(file=>file.id)));if(reviewSelected.size!==selectedBefore)reviewFeedback='';
@@ -303,7 +307,20 @@ function renderReview(){
   const canSelect=()=>!!groups.length&&!busy&&!centerStale&&mediaAccess.available&&!catalog.restored&&!catalog.operation_state?.running&&!catalog.operation_state?.warnings?.length;trackAvailability(selectAll,canSelect);trackAvailability(invert,canSelect);controls.append(selectAll,invert);$('center-content').append(controls);
   for(const [index,group]of groups.slice(page*10,page*10+10).entries()){
     const section=make('section','review-group');section.append(make('h2','',(reviewMode==='exact'?'精确重复':'相似照片')+' · 第 '+(page*10+index+1)+' 组'));
-    const groupActions=make('div','actions review-group-actions');if(reviewMode==='similar')groupActions.append(metadataButton(showDismissedSimilar?'恢复到待核对':'确认不相似',()=>update({action:'review_similarity',id:group.id,dismissed:!showDismissedSimilar})));
+    const groupActions=make('div','actions review-group-actions');
+    if(reviewMode==='similar'){
+      const payload={action:'review_similarity',id:group.id,dismissed:!showDismissedSimilar};
+      if(showDismissedSimilar){
+        section.append(make('p','muted',group.decision==='keep_both'?'相似，保留两张':'已确认不相似'));
+        groupActions.append(metadataButton('恢复到待核对',()=>update(payload)));
+      }else{
+        groupActions.append(metadataButton('确认不相似',()=>update(payload)));
+        groupActions.append(metadataButton('相似，保留两张',()=>update({...payload,decision:'keep_both'},()=>{
+          for(const file of group.files)reviewSelected.delete(file.id);
+          reviewFeedback='';
+        })));
+      }
+    }
     const first=group.files[0];if(reviewMode==='exact')section.append(make('p','muted',group.files.length+' 个文件 · 每个 '+size(first.bytes)));
     if(reviewMode==='exact'&&group.files.length>201)section.append(make('p','muted','其余副本超过 200 个文件，请分批勾选清理，每次都会保留至少一份。'));
     const canKeep=()=>reviewMode==='exact'&&group.files.length>1&&group.files.length<=201&&group.files.every(file=>canTrash([file.id]));
@@ -317,7 +334,15 @@ function renderReview(){
     }section.append(files);$('center-content').append(section);
   }
   const batch=make('div','actions review-batch');batch.hidden=!reviewSelected.size&&!reviewFeedback;const count=make('strong');batch.append(count);const clear=button('清空选择',()=>{reviewSelected.clear();reviewFeedback='';syncReviewSelection();});clear.disabled=!reviewSelected.size;const trash=button('删除所选…',()=>{const complete=(catalog.review?.exact||[]).some(group=>group.files.every(file=>reviewSelected.has(file.id)));if(complete){reviewFeedback='精确重复组至少保留一份，请取消勾选要保留的文件。';message(reviewFeedback);syncReviewSelection();return;}if(!canTrash([...reviewSelected])){reviewFeedback='所选文件暂时无法处理，请检查磁盘连接或刷新后重试；选择会保留。';syncReviewSelection();return;}const kept=(catalog.review?.exact||[]).filter(group=>group.files.some(file=>reviewSelected.has(file.id))).flatMap(group=>group.files.filter(file=>!reviewSelected.has(file.id)).map(file=>file.path));openFileReview('delete',[...reviewSelected],kept.length?'将保留：'+kept.join('、')+'；清理所选 '+reviewSelected.size+' 份。':'');},'danger');trackAvailability(trash,()=>canTrash([...reviewSelected]));batch.append(clear,trash);const feedback=make('p','review-selection-feedback');feedback.setAttribute('role','status');batch.append(feedback);reviewSelectionView={batch,count,clear,feedback};syncReviewSelection();$('center-content').append(batch);
-  if(!groups.length){const reviewed=reviewMode==='similar'&&!query&&!$('media-kind').value&&!$('filter-year').value&&!$('filter-genre').value&&!$('filter-duration').value&&!$('filter-resolution').value;const note=reviewed?(showDismissedSimilar?'没有已确认不相似的照片。':(catalog.review.dismissed_similar||[]).length?'当前相似候选已全部核对，可从“已确认不相似”恢复。':'当前没有待核对的相似照片。'):'没有匹配的'+(reviewMode==='exact'?'精确重复':'相似照片')+'分组。可清除筛选，或重新扫描更新结果。';$('center-content').append(make('p','empty',note));}
+  if(!groups.length){
+    const unfilteredSimilar=reviewMode==='similar'&&!query&&!$('media-kind').value&&!$('filter-year').value&&!$('filter-genre').value&&!$('filter-duration').value&&!$('filter-resolution').value;
+    let note='没有匹配的'+(reviewMode==='exact'?'精确重复':'相似照片')+'分组。可清除筛选，或重新扫描更新结果。';
+    if(unfilteredSimilar){
+      note=showDismissedSimilar?'还没有已核对的相似照片。':'当前没有待核对的相似照片。';
+      if(!showDismissedSimilar&&catalog.review.dismissed_similar?.length)note+='可从“已核对”恢复。';
+    }
+    $('center-content').append(make('p','empty',note));
+  }
   $('center-pager').hidden=!groups.length;$('center-page').textContent=`第 ${page+1}/${pages} 页 · 共 ${groups.length} 组`;$('center-prev').disabled=page===0;$('center-next').disabled=page>=pages-1;syncSelection();
 }
 function syncMediaFilters(){

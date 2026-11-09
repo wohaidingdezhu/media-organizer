@@ -29,7 +29,8 @@ def validate_state(value):
     if not isinstance(recent, list) or len(recent) > 100 or any(not valid_id(key) for key in recent):
         raise ValueError('最近打开记录无效')
     labels = value.setdefault('labels', {})
-    for name, choices in (('dismissed_similar', {True}), ('media_kinds', {'movie', 'video'})):
+    # Older builds can still load the library without interpreting kept pairs as dissimilar.
+    for name, choices in (('dismissed_similar', {True}), ('kept_similar', {True}), ('media_kinds', {'movie', 'video'})):
         mapping = value.setdefault(name, {})
         if (not isinstance(mapping, dict) or len(mapping) > 20000
                 or any(not valid_id(key) or not isinstance(flag, (str, bool)) or flag not in choices for key, flag in mapping.items())):
@@ -117,12 +118,15 @@ class CenterState:
             previous = (center_catalog(document, value)['items']
                         if document is not None and action in {'media_kind', 'folder_kind'} else None)
             if action == 'review_similarity':
-                if not valid_id(identifier) or identifier not in pairs or type(payload.get('dismissed')) is not bool:
+                decision = payload.get('decision', 'not_similar')
+                if (not valid_id(identifier) or identifier not in pairs or type(payload.get('dismissed')) is not bool
+                        or decision not in ('not_similar', 'keep_both')):
                     raise ValueError('请选择本次扫描中的相似照片候选')
+                value['dismissed_similar'].pop(identifier, None)
+                value['kept_similar'].pop(identifier, None)
                 if payload['dismissed']:
-                    value['dismissed_similar'][identifier] = True
-                else:
-                    value['dismissed_similar'].pop(identifier, None)
+                    key = 'kept_similar' if decision == 'keep_both' else 'dismissed_similar'
+                    value[key][identifier] = True
             elif action == 'media_kind':
                 ids, kind = payload.get('ids'), payload.get('kind')
                 if (not isinstance(kind, str) or kind not in {'movie', 'video', 'auto'} or not isinstance(ids, list)
@@ -358,6 +362,8 @@ def center_catalog(document, state, notes=None, handled_trash=()):
         if len(members) >= 2:
             review['exact'].append({'number': group['number'], 'sha256': group['sha256'], 'files': members})
     seen_pairs, invalid_pairs = set(), 0
+    dismissed = state.get('dismissed_similar', {})
+    kept = state.get('kept_similar', {})
     for pair in similarity.get('pairs', []):
         if (not isinstance(pair, dict) or not isinstance(pair.get('left'), str) or not isinstance(pair.get('right'), str)
                 or pair['left'] == pair['right'] or type(pair.get('distance')) is not int or not 0 <= pair['distance'] <= 64):
@@ -372,8 +378,12 @@ def center_catalog(document, state, notes=None, handled_trash=()):
         # are used; acknowledging a pair never reads or modifies original media.
         identity = [[path, records[path].get('source_signature'), records[path].get('bytes'), records[path].get('mtime')] for path in key]
         identifier = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode('utf-8')).hexdigest()
-        target = 'dismissed_similar' if state.get('dismissed_similar', {}).get(identifier) else 'similar'
-        review[target].append({'id': identifier, 'distance': pair['distance'], 'files': members})
+        candidate = {'id': identifier, 'distance': pair['distance'], 'files': members}
+        if dismissed.get(identifier):
+            candidate['decision'] = 'not_similar'
+        elif kept.get(identifier):
+            candidate['decision'] = 'keep_both'
+        review['dismissed_similar' if 'decision' in candidate else 'similar'].append(candidate)
     if invalid_pairs:
         review['warnings'].append(f'{invalid_pairs} 条相似候选记录无效，请核对报告或重新扫描。')
     folders = {}

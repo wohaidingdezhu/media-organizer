@@ -47,12 +47,16 @@ class MediaFeedbackTests(unittest.TestCase):
     def test_acknowledgement_persists_restores_and_changed_identity_returns_for_review(self):
         pair = self.catalog()['review']['similar'][0]
         self.state.update({'action':'review_similarity','id':pair['id'],'dismissed':True},set(),pairs={pair['id']})
-        self.assertFalse(self.catalog()['review']['similar']);self.assertEqual(len(self.catalog()['review']['dismissed_similar']),1)
+        self.assertFalse(self.catalog()['review']['similar'])
+        self.assertEqual(self.catalog()['review']['dismissed_similar'][0]['decision'], 'not_similar')
         self.state = CenterState(self.output);self.doc['similar']['pairs'][0].update(left=str(self.photos[1]),right=str(self.photos[0]))
         self.assertFalse(self.catalog()['review']['similar'])
         self.state.update({'action':'review_similarity','id':pair['id'],'dismissed':False},set(),pairs={pair['id']})
         self.assertEqual(len(self.catalog()['review']['similar']),1)
-        self.state.update({'action':'review_similarity','id':pair['id'],'dismissed':True},set(),pairs={pair['id']})
+        self.state.update({'action':'review_similarity','id':pair['id'],'dismissed':True,'decision':'keep_both'},set(),pairs={pair['id']})
+        self.state = CenterState(self.output)
+        self.assertFalse(self.catalog()['review']['similar'])
+        self.assertEqual(self.catalog()['review']['dismissed_similar'][0]['decision'], 'keep_both')
         self.records[0]['source_signature'][-1] += 1
         self.assertNotEqual(self.catalog()['review']['similar'][0]['id'],pair['id']);self.assert_unchanged()
 
@@ -81,11 +85,14 @@ class MediaFeedbackTests(unittest.TestCase):
         (self.report/'report.json').write_text(json.dumps(self.doc),encoding='utf-8')
         with mock.patch.object(library_server,'ThreadingHTTPServer',MemoryServer):server,url=library_server.create_library_server(self.report,self.output)
         prefix=urlsplit(url).path.removesuffix('library.html');pair=self.catalog()['review']['similar'][0]
-        payload={'action':'review_similarity','id':pair['id'],'dismissed':True}
+        payload={'action':'review_similarity','id':pair['id'],'dismissed':True,'decision':'keep_both'}
         self.assertIn('403',request(server,prefix+'api/center','POST',payload,origin='http://foreign.invalid')[0])
+        self.assertIn('400',request(server,prefix+'api/center','POST',{**payload,'decision':[]},origin='http://127.0.0.1:43210')[0])
         self.assertIn('200',request(server,prefix+'api/center','POST',payload,origin='http://127.0.0.1:43210')[0])
         current=json.loads(request(server,prefix+'api/center')[1]);self.assertFalse(current['review']['similar'])
+        self.assertEqual(current['review']['dismissed_similar'][0]['decision'], 'keep_both')
         self.assertIn('200',request(server,prefix+'api/center','POST',{'action':'review_similarity','id':pair['id'],'dismissed':False},origin='http://127.0.0.1:43210')[0])
+        self.assertEqual(self.catalog()['review']['similar'][0]['id'], pair['id'])
         self.assertIn('400',request(server,prefix+'api/center','POST',{**payload,'id':'f'*64},origin='http://127.0.0.1:43210')[0])
         self.assertIn('400',request(server,prefix+'api/center','POST',{'action':'media_kind','kind':'movie','ids':[media_id(str(self.photos[0]))]},origin='http://127.0.0.1:43210')[0]);self.assert_unchanged()
 
@@ -197,7 +204,8 @@ fail=false;await repair.onclick();await new Promise(r=>setImmediate(r));assert.e
         self.assertFalse(state.running);self.assertEqual(state.progress['percent'],50);self.assertIn('取消',state.status);self.assertTrue(process.stdout.closed)
 
     def test_invalid_acknowledgement_storage_is_rejected(self):
-        for name,value in (('dismissed_similar',{'x':True}),('dismissed_similar',{'a'*64:'true'}),('media_kinds',{'a'*64:'photo'})):
+        for name,value in (('dismissed_similar',{'x':True}),('dismissed_similar',{'a'*64:'true'}),
+                           ('kept_similar',{'a'*64:False}),('media_kinds',{'a'*64:'photo'})):
             data=self.state.snapshot();data[name]=value
             with self.subTest(name=name,value=value),self.assertRaises(ValueError):validate_state(data)
 
@@ -208,12 +216,37 @@ fail=false;await repair.onclick();await new Promise(r=>setImmediate(r));assert.e
 scope.IntersectionObserver=class{constructor(){throw Error('Disabled analysis must not enqueue decoding');}};const originalFetch=scope.fetch;scope.fetch=async(path,options)=>{const response=await originalFetch(path,options);if(path==='api/center'&&!options?.body){const body=await response.json();return {ok:true,json:async()=>({...body,preview_policy:{images:false,videos:false}})};}return response;};photo.preview='';items=[photo];await $('center-refresh').onclick();location.hash='#photos';events.hashchange();assert(!$('center-error').textContent);assert.equal(calls.filter(c=>c.path==='api/media/cover').length,0);
 ''')
 
-    def test_ui_acknowledge_hides_pair_and_restore_does_not_delete(self):
+    def test_ui_keep_both_unchecks_shared_photo_and_can_restore_pair(self):
         self.run_ui(r'''
 const other={...photo,id:'f'.repeat(64),files:[{...photo.files[0],id:'9'.repeat(64),path:'/other.jpg'}]};items.push(other);access.ids_by_path['/other.jpg']=other.files[0].id;
-const pair={id:'1'.repeat(64),files:[photo,other].map(p=>({...p.files[0],kind:'photo',media_kind:'photo',owner:p.id,metadata:p.metadata})),distance:3};review.similar=[pair];review.dismissed_similar=[];
-const originalFetch=scope.fetch;scope.fetch=async(path,options)=>{if(options?.body){const body=JSON.parse(options.body);if(body.action==='review_similarity'){review.similar=body.dismissed?[]:[pair];review.dismissed_similar=body.dismissed?[pair]:[];}}return originalFetch(path,options);};
-location.hash='#review';events.hashchange();await $('center-refresh').onclick();$('center-content').children[0].children[1].onclick();const section=()=>$('center-content').children.find(n=>n.className==='review-group');await section().children.find(n=>n.className==='actions review-group-actions').children.find(n=>n.textContent==='确认不相似').onclick();assert(!section());assert.equal(operations.length,0);$('center-content').children[0].children.find(n=>n.textContent.startsWith('已确认不相似')).onclick();await section().children.find(n=>n.className==='actions review-group-actions').children.find(n=>n.textContent==='恢复到待核对').onclick();assert.equal(review.similar.length,1);assert.equal(operations.length,0);
+const third={...other,id:'e'.repeat(64),files:[{...other.files[0],id:'8'.repeat(64),path:'/third.jpg'}]};items.push(third);access.ids_by_path['/third.jpg']=third.files[0].id;
+const file=p=>({...p.files[0],kind:'photo',media_kind:'photo',owner:p.id,metadata:p.metadata});
+const pair={id:'1'.repeat(64),files:[file(photo),file(other)],distance:3};
+const overlapping={id:'2'.repeat(64),files:[file(photo),file(third)],distance:4};
+review.similar=[pair,overlapping];review.dismissed_similar=[];
+const originalFetch=scope.fetch;
+scope.fetch=async(path,options)=>{
+  if(options?.body){
+    const body=JSON.parse(options.body);
+    if(body.action==='review_similarity'&&body.id===pair.id){
+      review.similar=body.dismissed?[overlapping]:[pair,overlapping];
+      review.dismissed_similar=body.dismissed?[{...pair,decision:body.decision}]:[];
+    }
+  }
+  return originalFetch(path,options);
+};
+location.hash='#review';events.hashchange();await $('center-refresh').onclick();$('center-content').children[0].children[1].onclick();
+const sections=()=>$('center-content').children.filter(n=>n.className==='review-group');
+const action=(section,text)=>section.children.find(n=>n.className==='actions review-group-actions').children.find(n=>n.textContent===text);
+const checkbox=section=>section.children.find(n=>n.className==='review-files').children[0].children[0].children[0];
+const selected=checkbox(sections()[0]);selected.checked=true;selected.onchange();assert(checkbox(sections()[1]).checked);
+await action(sections()[0],'相似，保留两张').onclick();
+assert.equal(sections().length,1);assert(!checkbox(sections()[0]).checked);
+$('center-content').children[0].children.find(n=>n.textContent==='已核对 · 1').onclick();
+assert(sections()[0].children.some(n=>n.textContent==='相似，保留两张'));
+await action(sections()[0],'恢复到待核对').onclick();assert.equal(sections().length,0);
+$('center-content').children[0].children.find(n=>n.textContent==='返回待核对').onclick();
+assert.equal(sections().length,2);assert.equal(operations.length,0);
 ''')
 
     def test_ui_empty_tags_and_movies_have_actions_without_rescan(self):
