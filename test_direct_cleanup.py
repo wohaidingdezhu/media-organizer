@@ -98,6 +98,37 @@ const body=new E(),photos=[a,b].map(file=>({kind:'photo',files:[file],metadata:{
 })().catch(e=>{console.error(e);process.exitCode=1;});
 """)
 
+    def test_similarity_comparison_can_retry_and_closes_after_saving_once(self):
+        self.node(r"""
+(async()=>{
+const body=new E(),photos=[a,b].map(file=>({kind:'photo',files:[file],metadata:{},preview:'previews/sample.png'}));
+Object.assign(scope,{document:{body,createElement:t=>new E(t),querySelector:()=>null},fetch:async path=>({
+  ok:true,json:async()=>path==='api/center'?{items:photos}:{available:true,ids_by_path:scope.mediaIds}
+})});
+vm.runInContext(fs.readFileSync(root+'/report_actions.js','utf8'),scope);
+let finish,reloads=0;const decisions=[],deleted=[];
+scope.reportTrashOpen=ids=>deleted.push(ids);
+scope.reportActionOpen('compare',[a.id,b.id],()=>reloads++,'',async(decision,onSaved)=>{
+  decisions.push(decision);
+  if(decisions.length===1)await new Promise(resolve=>{finish=resolve;});
+  else onSaved();
+});
+await new Promise(setImmediate);
+const dialog=body.children[0],status=dialog.children[1],trash=dialog.children[2].children[0].children.at(-1);
+const [back,different,keep]=dialog.children.at(-1).children;
+assert.equal(different.textContent,'确认不相似');assert.equal(keep.textContent,'相似，保留两张');
+assert.deepEqual(decisions,[]);
+const pending=keep.onclick();await different.onclick();trash.onclick();back.onclick();
+let prevented=false;dialog.events.cancel({preventDefault(){prevented=true;}});
+assert(prevented&&dialog.open&&trash.disabled&&different.disabled);
+assert.deepEqual(decisions,['keep_both']);assert.deepEqual(deleted,[]);
+finish();await pending;
+assert(dialog.open&&!keep.disabled&&!trash.disabled);assert(status.textContent.includes('未能保存'));
+await keep.onclick();
+assert(dialog.removed);assert.equal(reloads,0);assert.deepEqual(decisions,['keep_both','keep_both']);
+})().catch(e=>{console.error(e);process.exitCode=1;});
+""")
+
     def test_completion_notification_matches_only_the_submitted_job_and_fires_once(self):
         self.node(r"""
 (async()=>{

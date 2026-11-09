@@ -98,10 +98,10 @@ async function pollScan(){
 }
 if(typeof setInterval==='function')setInterval(pollScan,3000);
 function canTrash(ids){return !busy&&!centerStale&&mediaAccess.available&&!catalog?.restored&&!catalog?.operation_state?.running&&!catalog?.operation_state?.warnings?.length&&ids.length>0&&ids.length<=200&&ids.every(id=>{const file=byFile.get(id);return file&&mediaAccess.ids_by_path[file.path]===id;});}
-function openFileReview(action,ids,summary=''){
+function openFileReview(action,ids,summary='',onReview){
   if(busy)return;if(action==='delete'&&!canTrash(ids))return;if(action==='delete'&&$('media-detail').open)$('media-detail').close();
   if(action==='compare'&&(ids.length!==2||ids.some(id=>byFile.get(id)?.kind!=='photo')))return;
-  reportActionOpen(action,ids,load,summary);
+  reportActionOpen(action,ids,load,summary,onReview);
 }
 const pendingMediaActions=new Set();
 function canOpenFile(file,action='open'){return !busy&&!centerStale&&mediaAccess.available&&!catalog.restored&&mediaAccess.ids_by_path[file.path]===file.id&&!pendingMediaActions.has(action+':'+file.id);}
@@ -308,23 +308,28 @@ function renderReview(){
   for(const [index,group]of groups.slice(page*10,page*10+10).entries()){
     const section=make('section','review-group');section.append(make('h2','',(reviewMode==='exact'?'精确重复':'相似照片')+' · 第 '+(page*10+index+1)+' 组'));
     const groupActions=make('div','actions review-group-actions');
+    let decide;
     if(reviewMode==='similar'){
       const payload={action:'review_similarity',id:group.id,dismissed:!showDismissedSimilar};
       if(showDismissedSimilar){
         section.append(make('p','muted',group.decision==='keep_both'?'相似，保留两张':'已确认不相似'));
         groupActions.append(metadataButton('恢复到待核对',()=>update(payload)));
       }else{
-        groupActions.append(metadataButton('确认不相似',()=>update(payload)));
-        groupActions.append(metadataButton('相似，保留两张',()=>update({...payload,decision:'keep_both'},()=>{
-          for(const file of group.files)reviewSelected.delete(file.id);
-          reviewFeedback='';
-        })));
+        decide=(decision,onSaved)=>update({...payload,decision},()=>{
+          if(decision==='keep_both'){
+            for(const file of group.files)reviewSelected.delete(file.id);
+            reviewFeedback='';
+          }
+          onSaved?.();
+        });
+        groupActions.append(metadataButton('确认不相似',()=>decide('not_similar')));
+        groupActions.append(metadataButton('相似，保留两张',()=>decide('keep_both')));
       }
     }
     const first=group.files[0];if(reviewMode==='exact')section.append(make('p','muted',group.files.length+' 个文件 · 每个 '+size(first.bytes)));
     if(reviewMode==='exact'&&group.files.length>201)section.append(make('p','muted','其余副本超过 200 个文件，请分批勾选清理，每次都会保留至少一份。'));
     const canKeep=()=>reviewMode==='exact'&&group.files.length>1&&group.files.length<=201&&group.files.every(file=>canTrash([file.id]));
-    if(group.files.length===2&&group.files.every(file=>file.kind==='photo'))groupActions.append(button('对比这两张',()=>openFileReview('compare',group.files.map(file=>file.id))));section.append(groupActions);
+    if(group.files.length===2&&group.files.every(file=>file.kind==='photo'))groupActions.append(button('对比这两张',()=>openFileReview('compare',group.files.map(file=>file.id),'',decide)));section.append(groupActions);
     const files=make('div','review-files');for(const file of group.files){
       const card=make('article','review-file'),preview=button('',()=>{const owner=byId.get(file.owner);if(owner)openDetail(owner);},'cover');preview.setAttribute('aria-label','预览 '+file.name);image({title:file.name,preview:file.preview,kind:file.kind,files:[file]},preview);
       const pick=make('label','review-pick'),check=make('input');check.type='checkbox';check.checked=reviewSelected.has(file.id);trackAvailability(check,()=>canTrash([file.id]));check.setAttribute('aria-label','选择清理 '+file.path);if(!reviewChecks.has(file.id))reviewChecks.set(file.id,[]);reviewChecks.get(file.id).push(check);check.onchange=()=>{if(!canTrash([file.id])){check.checked=reviewSelected.has(file.id);return;}if(check.checked&&reviewSelected.size>=200){check.checked=false;reviewFeedback='每批最多 200 个文件，请分批处理。';syncReviewSelection();return;}if(check.checked)reviewSelected.add(file.id);else reviewSelected.delete(file.id);reviewFeedback='';syncReviewSelection();};pick.append(check,make('span','','选择清理'));card.append(pick);

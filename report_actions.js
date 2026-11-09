@@ -92,17 +92,43 @@ function focusReportSection(){
   }
   if(section.id==='similar')pageReportPairs(section);
 }
-function reportActionOpen(action,ids,onClose,summary=''){
+function reportActionOpen(action,ids,onClose,summary='',onReview){
   if(action==='delete')return reportTrashOpen(ids,onClose,summary);
   if(action!=='compare'||!Array.isArray(ids)||ids.length!==2||ids[0]===ids[1]||ids.some(id=>!/^[0-9a-f]{64}$/.test(id)))return;
-  const make=(tag,text)=>{const node=document.createElement(tag);if(text)node.textContent=text;return node;},dialog=make('dialog'),title=make('h2','对比照片'),status=make('p','正在读取照片…'),grid=make('div'),close=make('button','返回列表');
-  dialog.setAttribute('aria-label','对比照片');dialog.style.cssText='width:min(1100px,94vw);max-height:90vh;overflow-x:hidden;overflow-y:auto;overflow-wrap:anywhere;padding:24px;border:1px solid #d7d3e3;border-radius:16px;background:#fcfcfe;color:#272a36';grid.style.cssText='display:grid;grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr));gap:20px';close.style.cssText='margin:16px 0;padding:10px 16px';close.onclick=()=>dialog.close();let closed=false,handoff=false;
-  dialog.append(title,status,grid,close);dialog.addEventListener('close',()=>{closed=true;dialog.remove();reportOverlay(false);if(!handoff&&typeof onClose==='function')onClose();});document.body.append(dialog);dialog.showModal();reportOverlay(true);
+  const make=(tag,text)=>{const node=document.createElement(tag);if(text)node.textContent=text;return node;},dialog=make('dialog'),title=make('h2','对比照片'),status=make('p','正在读取照片…'),grid=make('div'),footer=make('div'),close=make('button','返回列表');
+  dialog.setAttribute('aria-label','对比照片');dialog.style.cssText='width:min(1100px,94vw);max-height:90vh;overflow-x:hidden;overflow-y:auto;overflow-wrap:anywhere;padding:24px;border:1px solid #d7d3e3;border-radius:16px;background:#fcfcfe;color:#272a36';grid.style.cssText='display:grid;grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr));gap:20px';
+  footer.style.cssText='display:flex;flex-wrap:wrap;gap:8px;margin-top:16px';close.style.cssText='padding:10px 16px';status.setAttribute('role','status');
+  let closed=false,handoff=false,saving=false;
+  const controls=[close];
+  close.onclick=()=>{if(!saving)dialog.close();};
+  dialog.addEventListener('cancel',event=>{if(saving)event.preventDefault();});
+  footer.append(close);dialog.append(title,status,grid,footer);dialog.addEventListener('close',()=>{closed=true;dialog.remove();reportOverlay(false);if(!handoff&&typeof onClose==='function')onClose();});document.body.append(dialog);dialog.showModal();reportOverlay(true);
   Promise.all(['api/center','api/media'].map(async path=>{const response=await fetch(path),value=await response.json();if(!response.ok)throw Error(value.error||'读取失败');return value;})).then(([data,access])=>{
-    if(closed)return;const photos=data.items.filter(item=>item.kind==='photo').flatMap(item=>item.files.map(file=>({...file,preview:item.preview,metadata:item.metadata})));const chosen=ids.map(id=>photos.find(file=>file.id===id));if(chosen.some(file=>!file))throw Error('照片已不在当前清单，请刷新列表。');status.textContent='并排核对后选择要删除的照片。相似不代表内容完全相同。';
+    if(closed)return;const photos=data.items.filter(item=>item.kind==='photo').flatMap(item=>item.files.map(file=>({...file,preview:item.preview,metadata:item.metadata})));const chosen=ids.map(id=>photos.find(file=>file.id===id));if(chosen.some(file=>!file))throw Error('照片已不在当前清单，请刷新列表。');
+    status.textContent=(onReview?'并排核对后，可保存结论或选择要删除的照片。':'并排核对后选择要删除的照片。')+'相似不代表内容完全相同。';
     for(const file of chosen){const card=make('section');card.append(make('h3',file.name));if(/^(previews|covers)\/[A-Za-z0-9_-]+\.png$/.test(file.preview||'')){const image=make('img');image.src=file.preview;image.alt=file.name;image.style.cssText='display:block;width:100%;height:45vh;object-fit:contain;background:#eeebf4';card.append(image);}else card.append(make('p','尚未生成图片预览'));
       const path=make('p',file.path);path.style.cssText='overflow-wrap:anywhere;font-size:12px';card.append(path);const trash=make('button','删除这张…');trash.style.cssText='margin:8px 0;padding:10px 16px';trash.disabled=!access.available||data.restored||data.operation_state?.running||data.operation_state?.warnings?.length||access.ids_by_path[file.path]!==file.id;
-      trash.onclick=()=>{if(trash.disabled)return;handoff=true;dialog.close();reportTrashOpen([file.id],onClose);};card.append(trash);grid.append(card);
+      trash.onclick=()=>{if(trash.disabled)return;handoff=true;dialog.close();reportTrashOpen([file.id],onClose);};controls.push(trash);card.append(trash);grid.append(card);
+    }
+    if(onReview)for(const [decision,label]of [['not_similar','确认不相似'],['keep_both','相似，保留两张']]){
+      const control=make('button',label);control.style.cssText=close.style.cssText;
+      control.onclick=async()=>{
+        if(closed||saving)return;
+        saving=true;
+        const enabled=controls.filter(button=>!button.disabled);
+        for(const button of enabled)button.disabled=true;
+        status.textContent='正在保存核对结论…';
+        try{
+          await onReview(decision,()=>{handoff=true;dialog.close();});
+          if(!handoff)status.textContent='未能保存核对结论，请重试或返回列表刷新。';
+        }catch(error){
+          status.textContent=error.message;
+        }finally{
+          saving=false;
+          for(const button of enabled)button.disabled=false;
+        }
+      };
+      controls.push(control);footer.append(control);
     }
   }).catch(error=>{if(!closed)status.textContent=error.message;});
 }

@@ -216,7 +216,7 @@ fail=false;await repair.onclick();await new Promise(r=>setImmediate(r));assert.e
 scope.IntersectionObserver=class{constructor(){throw Error('Disabled analysis must not enqueue decoding');}};const originalFetch=scope.fetch;scope.fetch=async(path,options)=>{const response=await originalFetch(path,options);if(path==='api/center'&&!options?.body){const body=await response.json();return {ok:true,json:async()=>({...body,preview_policy:{images:false,videos:false}})};}return response;};photo.preview='';items=[photo];await $('center-refresh').onclick();location.hash='#photos';events.hashchange();assert(!$('center-error').textContent);assert.equal(calls.filter(c=>c.path==='api/media/cover').length,0);
 ''')
 
-    def test_ui_keep_both_unchecks_shared_photo_and_can_restore_pair(self):
+    def test_ui_comparison_keep_both_unchecks_shared_photo_and_can_restore_pair(self):
         self.run_ui(r'''
 const other={...photo,id:'f'.repeat(64),files:[{...photo.files[0],id:'9'.repeat(64),path:'/other.jpg'}]};items.push(other);access.ids_by_path['/other.jpg']=other.files[0].id;
 const third={...other,id:'e'.repeat(64),files:[{...other.files[0],id:'8'.repeat(64),path:'/third.jpg'}]};items.push(third);access.ids_by_path['/third.jpg']=third.files[0].id;
@@ -240,10 +240,13 @@ const sections=()=>$('center-content').children.filter(n=>n.className==='review-
 const action=(section,text)=>section.children.find(n=>n.className==='actions review-group-actions').children.find(n=>n.textContent===text);
 const checkbox=section=>section.children.find(n=>n.className==='review-files').children[0].children[0].children[0];
 const selected=checkbox(sections()[0]);selected.checked=true;selected.onchange();assert(checkbox(sections()[1]).checked);
-await action(sections()[0],'相似，保留两张').onclick();
+action(sections()[0],'对比这两张').onclick();
+const comparison=operations.pop();assert.equal(comparison.action,'compare');assert.equal(calls.length,0);
+let saved=false;await comparison.onReview('keep_both',()=>{saved=true;});assert(saved);
 assert.equal(sections().length,1);assert(!checkbox(sections()[0]).checked);
 $('center-content').children[0].children.find(n=>n.textContent==='已核对 · 1').onclick();
 assert(sections()[0].children.some(n=>n.textContent==='相似，保留两张'));
+action(sections()[0],'对比这两张').onclick();assert.equal(operations.pop().onReview,undefined);
 await action(sections()[0],'恢复到待核对').onclick();assert.equal(sections().length,0);
 $('center-content').children[0].children.find(n=>n.textContent==='返回待核对').onclick();
 assert.equal(sections().length,2);assert.equal(operations.length,0);
