@@ -79,7 +79,7 @@ async function pollAvailability(){
   if(availabilityPolling||loadsInFlight||!catalog||document.visibilityState==='hidden')return;availabilityPolling=true;const ticket=loadTicket;
   try{const state=await request('api/media/availability');if(ticket!==loadTicket||!Number.isInteger(state.revision)||!Number.isInteger(catalog.availability_revision))return;
     if(state.revision===catalog.availability_revision){if(availabilityPending){availabilityPending=false;availabilityNotice();}return;}
-    if(loadsInFlight||!autoRefreshSafe()){availabilityPending=true;availabilityNotice();return;}
+    if(loadsInFlight||!autoRefreshSafe()){if(!availabilityPending){availabilityPending=true;availabilityNotice();}return;}
     await load(true);
   }catch(_error){/* A temporary monitor failure must not interrupt browsing. */}finally{availabilityPolling=false;}
 }

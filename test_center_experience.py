@@ -76,6 +76,7 @@ let revision=0,centerReads=0;const original=scope.fetch;scope.fetch=async(path,o
 revision=1;items=[movie];await availabilityPoll();assert.equal(centerReads,2);assert($('center-subtitle').textContent.includes('0 项媒体'));
 items=[movie,photo];revision=2;await availabilityPoll();assert.equal(centerReads,3);assert($('center-subtitle').textContent.includes('1 项媒体'));
 $('manage-toggle').onclick();$('select-page').onclick();revision=3;items=[movie];await availabilityPoll();assert.equal(centerReads,3);assert($('selected-count').textContent.includes('1'));assert($('center-status').textContent.includes('当前选择或编辑会保留'));
+const notice=$('center-status');let writes=0,text=notice.textContent;Object.defineProperty(notice,'textContent',{get:()=>text,set:value=>{text=value;writes++;}});await availabilityPoll();assert.equal(writes,0);
 $('clear-selection').onclick();$('manage-toggle').onclick();$('media-detail').open=true;await availabilityPoll();assert.equal(centerReads,3);$('media-detail').open=false;await availabilityPoll();assert.equal(centerReads,4);assert($('center-subtitle').textContent.includes('0 项媒体'));assert(!$('center-status').textContent.includes('当前选择或编辑会保留'));
 ''',setup="let availabilityPoll=null;scope.setInterval=(fn,ms)=>{if(ms===10000)availabilityPoll=fn;};")
 
