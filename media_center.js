@@ -76,8 +76,8 @@ async function pollOperations(){
   finally{if(ticket===loadTicket&&(catalog?.operation_state?.running||operationRefreshPending))centerOperationTimer=setTimeout(pollOperations,1500);}
 }
 async function pollAvailability(){
-  if(availabilityPolling||loadsInFlight||!catalog||document.visibilityState==='hidden')return;availabilityPolling=true;
-  try{const state=await request('api/media/availability');if(!Number.isInteger(state.revision)||!Number.isInteger(catalog.availability_revision))return;
+  if(availabilityPolling||loadsInFlight||!catalog||document.visibilityState==='hidden')return;availabilityPolling=true;const ticket=loadTicket;
+  try{const state=await request('api/media/availability');if(ticket!==loadTicket||!Number.isInteger(state.revision)||!Number.isInteger(catalog.availability_revision))return;
     if(state.revision===catalog.availability_revision){if(availabilityPending){availabilityPending=false;availabilityNotice();}return;}
     if(loadsInFlight||!autoRefreshSafe()){availabilityPending=true;availabilityNotice();return;}
     await load(true);
