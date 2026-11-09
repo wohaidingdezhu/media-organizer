@@ -370,6 +370,17 @@ movie.files[0].video={duration_seconds:75,width:1920,height:1080};directories={'
 state.collections['1'.repeat(32)]={name:'Collection',ids:[movie.id,photo.id]};location.hash='#collections';events.hashchange();$('filter-duration').value='long';$('filter-duration').onchange();assert.equal($('center-content').children[0].children.length,0);$('reset-filters').onclick();assert($('center-content').children[0].children.length>0);assert.equal(operations.length,0);
 ''')
 
+    def test_directory_page_only_expands_visible_folders_without_filters(self):
+        self.run_ui(r'''
+directories=Object.fromEntries(Array.from({length:100},(_,n)=>['/generated/folder-'+n,{name:'folder-'+n,parent:'',children:[],ids:[photo.id]}]));
+await $('center-refresh').onclick();let callsToFolders=0;const original=scope.centerFolderIds;
+scope.centerFolderIds=(...args)=>{callsToFolders++;return original(...args);};
+location.hash='#resources';events.hashchange();assert.equal(callsToFolders,48);
+const pager=$('center-content').children.find(node=>node.className==='pager');assert(pager);
+pager.children.find(node=>node.textContent==='下一页文件夹').onclick();assert.equal(callsToFolders,96);
+assert.equal(operations.length,0);
+''')
+
     def run_ui(self, assertions, setup=""):
         node=shutil.which('node');self.assertIsNotNone(node)
         code=r'''
