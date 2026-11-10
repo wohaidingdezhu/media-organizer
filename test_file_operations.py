@@ -560,6 +560,32 @@ class OperationTests(unittest.TestCase):
             self.assertFalse(any(path.name.startswith('.media-copy-') for path in self.destination.rglob('*')))
             self.assertEqual(Path(record['path']).read_bytes(), self.before[record['path']][0])
 
+    def test_stop_at_verification_start_does_not_read_the_copy(self):
+        record = self.records[0]
+        stop = threading.Event()
+        fdopen = operations.os.fdopen
+        class VerificationStream:
+            def __init__(self, stream):
+                self.stream = stream
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                self.stream.close()
+            def read(self, size):
+                self_test.fail('停止后不应继续读取副本')
+        self_test = self
+        def tracked_open(descriptor, mode, *args, **kwargs):
+            stream = fdopen(descriptor, mode, *args, **kwargs)
+            return VerificationStream(stream) if mode == 'rb' and stop.is_set() else stream
+        def progress(amount, phase):
+            if phase == 'verifying':
+                stop.set()
+        with mock.patch.object(operations.os, 'fdopen', side_effect=tracked_open), self.assertRaises(operations.OperationCancelled):
+            operations.copy_one(self.media, self.ids[0], str(self.destination), record['suggested_path'],
+                                record['source_signature'], progress=progress, cancelled=stop.is_set)
+        self.assertFalse(any(path.name.startswith('.media-copy-') for path in self.destination.rglob('*')))
+        self.assertEqual(Path(record['path']).read_bytes(), self.before[record['path']][0])
+
     def test_stop_before_first_file_keeps_complete_pending_list(self):
         preview = self.ops.preview('copy', self.ids, str(self.destination))
         queued = []

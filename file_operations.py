@@ -188,10 +188,14 @@ def copy_one(media, identifier, destination, relative, expected, dest_identity=N
         verified, next_update = 0, 0
         if progress:
             progress(0, "verifying")
+        check_cancelled()
         descriptor = os.open(temporary, FLAGS, dir_fd=parent)
         with os.fdopen(descriptor, "rb") as stream:
-            for chunk in iter(lambda: stream.read(4 * 1024 * 1024), b""):
+            while True:
                 check_cancelled()
+                chunk = stream.read(4 * 1024 * 1024)
+                if not chunk:
+                    break
                 verify.update(chunk)
                 verified += len(chunk)
                 if progress and time.monotonic() >= next_update:
