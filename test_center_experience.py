@@ -76,6 +76,7 @@ let revision=0,centerReads=0;const original=scope.fetch;scope.fetch=async(path,o
 revision=1;items=[movie];await availabilityPoll();assert.equal(centerReads,2);assert($('center-subtitle').textContent.includes('0 项媒体'));
 items=[movie,photo];revision=2;await availabilityPoll();assert.equal(centerReads,3);assert($('center-subtitle').textContent.includes('1 项媒体'));
 $('manage-toggle').onclick();$('select-page').onclick();revision=3;items=[movie];await availabilityPoll();assert.equal(centerReads,3);assert($('selected-count').textContent.includes('1'));assert($('center-status').textContent.includes('当前选择或编辑会保留'));
+const notice=$('center-status');let writes=0,text=notice.textContent;Object.defineProperty(notice,'textContent',{get:()=>text,set:value=>{text=value;writes++;}});await availabilityPoll();assert.equal(writes,0);
 $('clear-selection').onclick();$('manage-toggle').onclick();$('media-detail').open=true;await availabilityPoll();assert.equal(centerReads,3);$('media-detail').open=false;await availabilityPoll();assert.equal(centerReads,4);assert($('center-subtitle').textContent.includes('0 项媒体'));assert(!$('center-status').textContent.includes('当前选择或编辑会保留'));
 ''',setup="let availabilityPoll=null;scope.setInterval=(fn,ms)=>{if(ms===10000)availabilityPoll=fn;};")
 
@@ -83,6 +84,22 @@ $('clear-selection').onclick();$('manage-toggle').onclick();$('media-detail').op
         self.run_ui(r'''
 let revision=0,hold=false,release;const original=scope.fetch;scope.fetch=async(path,options)=>{if(path==='api/media/availability')return {ok:true,json:async()=>({revision})};const response=await original(path,options);if(path!=='api/center'||options?.body)return response;const data=await response.json();if(hold)await new Promise(resolve=>{release=resolve;});return {ok:true,json:async()=>({...data,availability_revision:revision})};};await $('center-refresh').onclick();location.hash='#photos';events.hashchange();revision=1;hold=true;const pending=availabilityPoll();await new Promise(setImmediate);$('manage-toggle').onclick();$('select-page').onclick();assert($('selected-count').textContent.includes('1'));release();await pending;assert($('selected-count').textContent.includes('1'));assert($('center-status').textContent.includes('当前选择或编辑会保留'));
 ''',setup="let availabilityPoll=null;scope.setInterval=(fn,ms)=>{if(ms===10000)availabilityPoll=fn;};")
+
+    def test_old_availability_response_does_not_refresh_newer_catalog(self):
+        self.run_ui(r'''
+const pending=availabilityPoll();await new Promise(setImmediate);
+revision=2;await $('center-refresh').onclick();assert.equal(centerReads,2);
+release({revision:1});await pending;
+assert.equal(centerReads,2);assert(!$('center-status').textContent.includes('媒体文件变化'));
+''',setup=r'''
+let availabilityPoll=null,revision=1,centerReads=0,release;
+scope.setInterval=(fn,ms)=>{if(ms===10000)availabilityPoll=fn;};
+const original=scope.fetch;scope.fetch=async(path,options)=>{
+  if(path==='api/media/availability')return {ok:true,json:()=>new Promise(resolve=>release=resolve)};
+  const response=await original(path,options);if(path!=='api/center'||options?.body)return response;
+  centerReads++;return {...response,json:async()=>({...await response.json(),availability_revision:revision})};
+};
+''')
 
     def test_stream_range_identity_and_snapshot_restrictions(self):
         with tempfile.TemporaryDirectory() as temporary:

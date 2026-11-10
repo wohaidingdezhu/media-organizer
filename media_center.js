@@ -76,18 +76,18 @@ async function pollOperations(){
   finally{if(ticket===loadTicket&&(catalog?.operation_state?.running||operationRefreshPending))centerOperationTimer=setTimeout(pollOperations,1500);}
 }
 async function pollAvailability(){
-  if(availabilityPolling||loadsInFlight||!catalog||document.visibilityState==='hidden')return;availabilityPolling=true;
-  try{const state=await request('api/media/availability');if(!Number.isInteger(state.revision)||!Number.isInteger(catalog.availability_revision))return;
+  if(availabilityPolling||loadsInFlight||!catalog||document.visibilityState==='hidden')return;availabilityPolling=true;const ticket=loadTicket;
+  try{const state=await request('api/media/availability');if(ticket!==loadTicket||!Number.isInteger(state.revision)||!Number.isInteger(catalog.availability_revision))return;
     if(state.revision===catalog.availability_revision){if(availabilityPending){availabilityPending=false;availabilityNotice();}return;}
-    if(loadsInFlight||!autoRefreshSafe()){availabilityPending=true;availabilityNotice();return;}
+    if(loadsInFlight||!autoRefreshSafe()){if(!availabilityPending){availabilityPending=true;availabilityNotice();}return;}
     await load(true);
   }catch(_error){/* A temporary monitor failure must not interrupt browsing. */}finally{availabilityPolling=false;}
 }
 if(typeof setInterval==='function')setInterval(pollAvailability,10000);
 async function pollScan(){
   if(scanPolling||loadsInFlight||!catalog?.unified_library||document.visibilityState==='hidden')return;
-  scanPolling=true;
-  try{const state=await request('api/scan');if(typeof state.revision!=='string')return;
+  scanPolling=true;const ticket=loadTicket;
+  try{const state=await request('api/scan');if(ticket!==loadTicket||typeof state.revision!=='string')return;
     if(state.revision===(catalog.scan_revision||'')){
       if(scanRefreshPending){scanRefreshPending=false;availabilityNotice();}
       return;
@@ -256,9 +256,11 @@ function enterDirectory(path){browseTo({directory:path});}
 
 function renderDirectories(paths){
   const nodes=catalog.directories||{},kind=$('media-kind').value,year=$('filter-year').value,genre=$('filter-genre').value,duration=$('filter-duration').value,resolution=$('filter-resolution').value;
-  const rows=paths.map(path=>{const ids=centerFolderIds(nodes,path,true);return {path,items:centerFilter([...ids].map(id=>byId.get(id)).filter(Boolean),{kind,year,genre,duration,resolution})};}).filter(row=>!(kind||year||genre||duration||resolution)||row.items.length);
+  const filtering=!!(kind||year||genre||duration||resolution);
+  const folderItems=path=>centerFilter([...centerFolderIds(nodes,path,true)].map(id=>byId.get(id)).filter(Boolean),{kind,year,genre,duration,resolution});
+  const rows=filtering?paths.map(path=>({path,items:folderItems(path)})).filter(row=>row.items.length):paths.map(path=>({path}));
   rows.sort((a,b)=>centerNameCompare(a.path,b.path));const pages=Math.max(1,Math.ceil(rows.length/galleryPageSize));folderPage=Math.max(0,Math.min(folderPage,pages-1));
-  const wall=make('div','wall video-wall');for(const row of rows.slice(folderPage*galleryPageSize,folderPage*galleryPageSize+galleryPageSize)){const card=collectionCard(nodes[row.path].name,row.items.map(item=>item.id),()=>enterDirectory(row.path),'',row.path);card.classList.add('directory-card');wall.append(card);}$('center-content').append(wall);
+  const wall=make('div','wall video-wall');for(const row of rows.slice(folderPage*galleryPageSize,folderPage*galleryPageSize+galleryPageSize)){const items=row.items||folderItems(row.path);const card=collectionCard(nodes[row.path].name,items.map(item=>item.id),()=>enterDirectory(row.path),'',row.path);card.classList.add('directory-card');wall.append(card);}$('center-content').append(wall);
   if(rows.length>galleryPageSize){const pager=make('div','pager'),previous=button('上一页文件夹',()=>turnPage(-1,true)),next=button('下一页文件夹',()=>turnPage(1,true));previous.disabled=folderPage===0;next.disabled=folderPage>=pages-1;pager.append(previous,make('span','muted',`文件夹第 ${folderPage+1}/${pages} 页 · 共 ${rows.length} 个`),next);$('center-content').append(pager);}
   if(!rows.length&&!directory)$('center-content').append(make('p','empty','没有匹配的媒体目录。试试清除筛选，或从“媒体库”添加目录并扫描。'));return rows.length;
 }
