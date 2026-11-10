@@ -6,6 +6,11 @@ function centerFolderIds(directories,path,recursive=false){
   const ids=new Set(),visited=new Set(),pending=[path];
   while(pending.length){const key=pending.pop(),node=directories[key];if(!node||visited.has(key))continue;visited.add(key);for(const id of node.ids)ids.add(id);if(recursive)for(const child of node.children)pending.push(child);}return ids;
 }
+function centerFolderHasMatch(directories,path,matching){
+  const visited=new Set(),pending=[path];
+  while(pending.length){const key=pending.pop(),node=directories[key];if(!node||visited.has(key))continue;visited.add(key);for(const id of node.ids)if(matching.has(id))return true;for(const child of node.children)pending.push(child);}
+  return false;
+}
 function centerMatches(item,query){return !query||[item.title,...item.files.map(file=>file.path),...item.tags,JSON.stringify(item.metadata),item.personal.note].join(' ').normalize('NFC').toLocaleLowerCase().includes(query);}
 function centerDuration(seconds){if(!Number.isFinite(seconds)||seconds<=0)return '时长未知';const total=Math.max(1,Math.round(seconds)),h=Math.floor(total/3600),m=Math.floor(total%3600/60),sec=String(total%60).padStart(2,'0');return h?h+':'+String(m).padStart(2,'0')+':'+sec:m+':'+sec;}
 function centerVideoText(file){const v=file.video||{};return centerDuration(v.duration_seconds)+' · '+(v.width&&v.height?v.width+' × '+v.height:'尺寸未知');}
@@ -259,7 +264,7 @@ function renderDirectories(paths){
   const filtering=!!(kind||year||genre||duration||resolution);
   const folderItems=path=>centerFilter([...centerFolderIds(nodes,path,true)].map(id=>byId.get(id)).filter(Boolean),{kind,year,genre,duration,resolution});
   const matching=filtering?new Set(centerFilter(catalog.items,{kind,year,genre,duration,resolution}).map(item=>item.id)):null;
-  const rows=paths.filter(path=>!filtering||matching.size>0&&[...centerFolderIds(nodes,path,true)].some(id=>matching.has(id))).map(path=>({path}));
+  const rows=paths.filter(path=>!filtering||matching.size>0&&centerFolderHasMatch(nodes,path,matching)).map(path=>({path}));
   rows.sort((a,b)=>centerNameCompare(a.path,b.path));const pages=Math.max(1,Math.ceil(rows.length/galleryPageSize));folderPage=Math.max(0,Math.min(folderPage,pages-1));
   const wall=make('div','wall video-wall');for(const row of rows.slice(folderPage*galleryPageSize,folderPage*galleryPageSize+galleryPageSize)){const items=folderItems(row.path);const card=collectionCard(nodes[row.path].name,items.map(item=>item.id),()=>enterDirectory(row.path),'',row.path);card.classList.add('directory-card');wall.append(card);}$('center-content').append(wall);
   if(rows.length>galleryPageSize){const pager=make('div','pager'),previous=button('上一页文件夹',()=>turnPage(-1,true)),next=button('下一页文件夹',()=>turnPage(1,true));previous.disabled=folderPage===0;next.disabled=folderPage>=pages-1;pager.append(previous,make('span','muted',`文件夹第 ${folderPage+1}/${pages} 页 · 共 ${rows.length} 个`),next);$('center-content').append(pager);}

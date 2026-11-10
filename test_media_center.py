@@ -388,6 +388,15 @@ assert($('center-content').children.some(node=>node.textContent.includes('没有
 assert.equal(operations.length,0);
 ''')
 
+    def test_folder_filter_stops_after_a_match_and_handles_cycles(self):
+        self.run_ui(r'''
+let visits=0;const nodes={root:{ids:[],children:['later','match']},match:{ids:[photo.id],children:['root']}};
+Object.defineProperty(nodes,'later',{get(){visits++;return {ids:[],children:[]};}});
+assert(scope.centerFolderHasMatch(nodes,'root',new Set([photo.id])));assert.equal(visits,0);
+assert(!scope.centerFolderHasMatch(nodes,'root',new Set(['unmatched'])));assert.equal(visits,1);
+assert(!scope.centerFolderHasMatch(nodes,'missing',new Set([photo.id])));
+''')
+
     def test_directory_page_only_expands_visible_folders_without_filters(self):
         self.run_ui(r'''
 directories=Object.fromEntries(Array.from({length:100},(_,n)=>['/generated/folder-'+n,{name:'folder-'+n,parent:'',children:[],ids:[photo.id]}]));
