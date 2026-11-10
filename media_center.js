@@ -6,18 +6,30 @@ function centerFolderIds(directories,path,recursive=false){
   const ids=new Set(),visited=new Set(),pending=[path];
   while(pending.length){const key=pending.pop(),node=directories[key];if(!node||visited.has(key))continue;visited.add(key);for(const id of node.ids)ids.add(id);if(recursive)for(const child of node.children)pending.push(child);}return ids;
 }
-function centerMatches(item,query){return !query||[item.title,...item.files.map(file=>file.path),...item.tags,JSON.stringify(item.metadata),item.personal.note].join(' ').normalize('NFC').toLocaleLowerCase().includes(query);}
+function centerMatches(item,query,cache){
+  if(!query)return true;
+  let text=cache?.texts.get(item);
+  if(text===undefined){
+    text=[item.title,...item.files.map(file=>file.path),...item.tags,JSON.stringify(item.metadata),item.personal.note].join(' ').normalize('NFC').toLocaleLowerCase();
+    if(cache&&cache.characters+text.length<=8*1024*1024){
+      cache.texts.set(item,text);
+      cache.characters+=text.length;
+    }
+  }
+  return text.includes(query);
+}
 function centerDuration(seconds){if(!Number.isFinite(seconds)||seconds<=0)return '时长未知';const total=Math.max(1,Math.round(seconds)),h=Math.floor(total/3600),m=Math.floor(total%3600/60),sec=String(total%60).padStart(2,'0');return h?h+':'+String(m).padStart(2,'0')+':'+sec:m+':'+sec;}
 function centerVideoText(file){const v=file.video||{};return centerDuration(v.duration_seconds)+' · '+(v.width&&v.height?v.width+' × '+v.height:'尺寸未知');}
 function centerVideoMatch(file,duration,resolution){const v=file.video||{},d=v.duration_seconds,edge=Math.min(v.width||0,v.height||0),known=Number.isFinite(d)&&d>0;
   return (!duration||(duration==='unknown'?!known:known&&(duration==='short'?d<600:duration==='medium'?d>=600&&d<3600:duration==='long'?d>=3600:false)))&&(!resolution||(resolution==='unknown'?!edge:resolution==='uhd'?edge>=2160:resolution==='fhd'?edge>=1080&&edge<2160:resolution==='hd'?edge>=720&&edge<1080:resolution==='sd'?edge>0&&edge<720:false));
 }
-function centerFilter(items,{view='home',query='',global=false,kind='',tag='',ids=null,folder='',order='recent',year='',genre='',duration='',resolution=''}={}){
+function centerFilter(items,{view='home',query='',global=false,kind='',tag='',ids=null,folder='',order='recent',year='',genre='',duration='',resolution='',searchCache}={}){
   const q=query.trim().normalize('NFC').toLocaleLowerCase();
-  let rows=items.filter(item=>(!kind||item.kind===kind)&&(!tag||item.tags.includes(tag))&&(!ids||ids.has(item.id))&&(!folder||item.folder===folder)&&(!year||centerYear(item)===year)&&(!genre||(item.metadata.genres||[]).includes(genre))&&
-    (global?true:view==='movies'?item.kind==='movie':view==='videos'?item.kind==='video':view==='photos'?item.kind==='photo':view==='favorites'?item.favorite:true)&&centerMatches(item,q)&&(!(duration||resolution)||item.kind!=='photo'&&item.files.some(file=>centerVideoMatch(file,duration,resolution))));
+  const rows=items.filter(item=>(!kind||item.kind===kind)&&(!tag||item.tags.includes(tag))&&(!ids||ids.has(item.id))&&(!folder||item.folder===folder)&&(!year||centerYear(item)===year)&&(!genre||(item.metadata.genres||[]).includes(genre))&&
+    (global?true:view==='movies'?item.kind==='movie':view==='videos'?item.kind==='video':view==='photos'?item.kind==='photo':view==='favorites'?item.favorite:true)&&
+    (!(duration||resolution)||item.kind!=='photo'&&item.files.some(file=>centerVideoMatch(file,duration,resolution)))&&centerMatches(item,q,searchCache));
   const name=(a,b)=>centerNameCompare(a.title,b.title)||a.id.localeCompare(b.id);
-  return [...rows].sort((a,b)=>order==='name'?name(a,b):order==='size'?b.bytes-a.bytes||name(a,b):order==='oldest'?a.mtime-b.mtime||name(a,b):b.mtime-a.mtime||name(a,b));
+  return rows.sort((a,b)=>order==='name'?name(a,b):order==='size'?b.bytes-a.bytes||name(a,b):order==='oldest'?a.mtime-b.mtime||name(a,b):b.mtime-a.mtime||name(a,b));
 }
 function centerTimelineOrder(rows,order='recent'){
   return [...rows].sort((a,b)=>{const first=a.metadata.timeline_month||'',second=b.metadata.timeline_month||'';if(!first||!second)return first?-1:second?1:0;return order==='oldest'?first.localeCompare(second):second.localeCompare(first);});
@@ -38,6 +50,7 @@ if(window.parent!==window)document.body.classList.add('embedded-center');
 const $=id=>document.getElementById(id),make=(tag,cls,text)=>{const node=document.createElement(tag);if(cls)node.className=cls;if(text!==undefined)node.textContent=text;return node;};
 const titles={home:'媒体中心',movies:'电影',videos:'视频',photos:'照片',collections:'相册与合集',favorites:'收藏',tags:'标签与分类',resources:'资源管理',review:'重复与相似'};
 let previewRecords=new Map();
+let searchCache;
 let catalog=null,byId=new Map(),mediaAccess={ids_by_path:{},available:false},view='home',page=0,manage=false,busy=false,selected=new Set(),visible=[],pageItems=[],album='',collection='',tag='',editingCollection='',detailSequence=[],detailIndex=0,loadTicket=0,loadsInFlight=0,directory='',folderPage=0,reviewMode='exact',showDismissedSimilar=false,byFile=new Map(),reviewSelected=new Set(),reviewInitialized=false,reviewFeedback='',centerOperationTimer=null,centerStale=false,detailBindings=null,detailEpoch=0,collectionEpoch=0,detailOriginKey='',availabilityPending=false,availabilityPolling=false,centerStatusBase='';
 const size=value=>value>=1073741824?(value/1073741824).toFixed(1)+' GB':value>=1048576?(value/1048576).toFixed(1)+' MB':(value/1024).toFixed(0)+' KB';
 const labels={movie:'电影',video:'视频',photo:'照片'};
@@ -53,6 +66,8 @@ async function load(automatic=false,operationsDone=false,scanUpdate=false){
   clearTimeout(centerOperationTimer);const ticket=++loadTicket;loadsInFlight++;
   try{const data=await request('api/center'),access=data.media_access||await request('api/media');if(ticket!==loadTicket)return null;if(automatic===true&&!autoRefreshSafe(operationsDone)){if(!scanUpdate)availabilityPending=true;if(operationsDone){operationRefreshPending=true;centerOperationTimer=setTimeout(pollOperations,1500);}availabilityNotice();return null;}
     centerStale=false;availabilityPending=false;operationRefreshPending=false;scanRefreshPending=false;catalog=data;previewRecords=new Map();
+    // Searchable fields stay fixed within a catalog load. A refresh replaces them.
+    searchCache={texts:new WeakMap(),characters:0};
     const indexPreview=(id,record)=>{if(!previewRecords.has(id))previewRecords.set(id,new Set());previewRecords.get(id).add(record);};
     for(const item of data.items)for(const file of item.files)indexPreview(file.id,item);
     for(const key of ['exact','similar','dismissed_similar'])for(const group of data.review?.[key]||[])for(const file of group.files)indexPreview(file.id,file);
@@ -364,7 +379,7 @@ function render(){if(!catalog)return;announceCenterView();syncMediaFilters();pre
   const foldersOnly=view==='resources'&&!directory&&!query;
   const candidates=ids?[...ids].map(id=>byId.get(id)).filter(Boolean):catalog.items;
   selectionChecks.clear();pageItems=[];
-  visible=foldersOnly?[]:centerFilter(candidates,{view,query,global:all,kind,tag:all?'':tag,order:$('media-order').value||'recent',year:$('filter-year').value,genre:$('filter-genre').value,duration:$('filter-duration').value,resolution:$('filter-resolution').value});
+  visible=foldersOnly?[]:centerFilter(candidates,{view,query,global:all,kind,tag:all?'':tag,order:$('media-order').value||'recent',year:$('filter-year').value,genre:$('filter-genre').value,duration:$('filter-duration').value,resolution:$('filter-resolution').value,searchCache});
   $('center-title').textContent=query?(all?'全部媒体 · 搜索结果':view==='review'?titles.review:context+' · 搜索结果'):context;
   if(selected.size)retainSelection(selected,visible.map(item=>item.id));
   $('center-subtitle').textContent=(catalog.restored?'备份快照 · ':'')+(query?(all?'在本次媒体库中全局搜索 · ':'在当前页面中搜索 · '):'')+`${visible.length} 项媒体`+(!all&&tag?' · 标签：'+tag:'');if(!query&&!all&&view==='movies')$('center-subtitle').textContent+=' · 按作品计数，版本和分段在详情中选择';if(!query&&!all&&view==='videos')$('center-subtitle').textContent+=' · 含尚未归类为电影的文件，可按时长筛选';$('clear-search').hidden=!query;$('create-collection').hidden=view!=='collections'||!!collection||!!album||!!query;
