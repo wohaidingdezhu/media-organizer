@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 import zipfile
@@ -228,6 +229,34 @@ class WorkspaceTests(unittest.TestCase):
             headers, _ = request(server,prefix+'api/monitor','POST',{'enabled':False,'minutes':5},origin='http://evil.example')
             self.assertIn('403 Forbidden',headers)
             state.close()
+
+    def test_exit_writes_response_before_stopping_the_backend(self):
+        with mock.patch.object(media_gui, 'ThreadingHTTPServer', MemoryServer):
+            server, state, url = media_gui.create_dashboard_server(self.output)
+        stopped = threading.Event()
+        closed = threading.Event()
+        server.shutdown = stopped.set
+        original_close = state.close
+        def close():
+            try:
+                original_close()
+            finally:
+                closed.set()
+        state.close = close
+        original = server.handler.respond
+        def delayed_response(handler, code, body, *args):
+            self.assertFalse(stopped.wait(.15), 'Backend stopped before sending its response')
+            return original(handler, code, body, *args)
+        prefix = '/' + url.split('/')[-2] + '/'
+        with mock.patch.object(server.handler, 'respond', delayed_response):
+            headers, raw = request(server, prefix + 'api/quit', 'POST', {})
+        self.assertIn('200 OK', headers)
+        self.assertEqual(json.loads(raw), {'ok': True})
+        self.assertTrue(stopped.wait(2))
+        self.assertTrue(closed.wait(2))
+        import file_operations
+        self.assertTrue(file_operations._BATCH_LOCK.acquire(timeout=5))
+        file_operations._BATCH_LOCK.release()
 
     def test_nfo_offline_fields_and_unsafe_xml_rejection(self):
         result = parse_nfo(b'<movie><title>&lt;script&gt;</title><plot>Story</plot><actor><name>A</name></actor><genre>Action</genre><tag>Local</tag><thumb>https://never-open.example/poster</thumb></movie>')
