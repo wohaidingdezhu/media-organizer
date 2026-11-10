@@ -183,10 +183,13 @@ $('clear-search').onclick();assert.equal($('center-title').textContent,'照片')
     def test_folder_search_preserves_path_subfolder_choice_and_returns_from_global_without_operations(self):
         self.run_ui(r"""
 photo.title='旅行照片';photo.folder='/samples/旅行';photo.files[0].path='/samples/旅行/photo.jpg';const nested={...photo,id:'1'.repeat(64),folder:'/samples/旅行/子目录',files:[{...photo.files[0],id:'2'.repeat(64),path:'/samples/旅行/子目录/nested.jpg'}]},outside={...photo,id:'3'.repeat(64),folder:'/other/旅行',files:[{...photo.files[0],id:'4'.repeat(64),path:'/other/旅行/outside.jpg'}]};items=[photo,nested,outside];directories={'/samples/旅行':{name:'旅行',parent:'',ids:[photo.id],children:['/samples/旅行/子目录']},'/samples/旅行/子目录':{name:'子目录',parent:'/samples/旅行',ids:[nested.id],children:[]},'/other/旅行':{name:'旅行',parent:'',ids:[outside.id],children:[]}};
+const originalFilter=scope.centerFilter,searchSizes=[];
+scope.centerFilter=(rows,options)=>{if(options.query)searchSizes.push(rows.length);return originalFilter(rows,options);};
 location.hash='#resources';events.hashchange();await $('center-refresh').onclick();$('center-content').children[0].children.find(card=>card.attrs['aria-label'].includes('/samples/旅行')).onclick();
 $('query').value='旅行照片';$('center-search').onsubmit({preventDefault(){}});const wall=()=>$('center-content').children.find(n=>n.className.startsWith('wall'));assert.equal(wall().children.length,1);assert($('center-breadcrumb').children.some(n=>n.textContent==='/samples/旅行'));assert(!$('recursive-label').hidden);
 $('include-subfolders').checked=true;$('include-subfolders').onchange();assert.equal(wall().children.length,2);await $('center-refresh').onclick();assert.equal(wall().children.length,2);assert.equal($('query').value,'旅行照片');
 $('search-scope').value='all';$('search-scope').onchange();assert.equal(wall().children.length,3);assert(wall().children.every(card=>card.children.some(n=>n.className==='meta search-path'&&n.attrs.title)));assert(wall().children.some(card=>card.children[0].attrs['aria-label'].includes('/other/旅行')));assert($('recursive-label').hidden);$('center-breadcrumb').children[0].onclick();assert.equal($('query').value,'');assert.equal($('center-title').textContent,'旅行');assert($('include-subfolders').checked);assert($('center-breadcrumb').children.some(n=>n.textContent==='/samples/旅行'));assert.equal(calls.length,0);assert.equal(operations.length,0);
+assert.deepEqual(searchSizes,[1,2,2,3]);
 """)
 
     def test_search_keeps_collection_and_tag_context_but_global_results_cannot_remove_collection_members(self):
@@ -373,8 +376,9 @@ state.collections['1'.repeat(32)]={name:'Collection',ids:[movie.id,photo.id]};lo
     def test_directory_page_only_expands_visible_folders_without_filters(self):
         self.run_ui(r'''
 directories=Object.fromEntries(Array.from({length:100},(_,n)=>['/generated/folder-'+n,{name:'folder-'+n,parent:'',children:[],ids:[photo.id]}]));
-await $('center-refresh').onclick();let callsToFolders=0;const original=scope.centerFolderIds;
+await $('center-refresh').onclick();let callsToFolders=0;const original=scope.centerFolderIds,originalFilter=scope.centerFilter;
 scope.centerFolderIds=(...args)=>{callsToFolders++;return original(...args);};
+scope.centerFilter=(rows,options)=>{assert.equal(rows.length,1);return originalFilter(rows,options);};
 location.hash='#resources';events.hashchange();assert.equal(callsToFolders,48);
 const pager=$('center-content').children.find(node=>node.className==='pager');assert(pager);
 pager.children.find(node=>node.textContent==='下一页文件夹').onclick();assert.equal(callsToFolders,96);

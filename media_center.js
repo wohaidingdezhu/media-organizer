@@ -361,8 +361,12 @@ function syncMediaFilters(){
 }
 function render(){if(!catalog)return;announceCenterView();syncMediaFilters();previewObserver?.disconnect();if($('media-detail').open&&detailBindings?.art.previewObserved&&detailBindings.art.isConnected!==false)previewObserver?.observe(detailBindings.art);$('photo-layout').hidden=view!=='photos'||globalSearch();const query=$('query').value.trim(),kind=$('media-kind').value,all=globalSearch();const ids=all?null:directory?centerFolderIds(catalog.directories||{},directory,$('include-subfolders').checked):album?new Set(catalog.folders[album]||[]):collection?new Set(catalog.state.collections[collection]?.ids||[]):null;
   const context=collection?catalog.state.collections[collection]?.name||'合集':album?sourceFolder(album):directory?sourceFolder(directory):titles[view]||titles.home;
-  selectionChecks.clear();pageItems=[];visible=centerFilter(catalog.items,{view,query,global:all,kind,tag:all?'':tag,ids,order:$('media-order').value||'recent',year:$('filter-year').value,genre:$('filter-genre').value,duration:$('filter-duration').value,resolution:$('filter-resolution').value});$('center-title').textContent=query?(all?'全部媒体 · 搜索结果':view==='review'?titles.review:context+' · 搜索结果'):context;
-  retainSelection(selected,visible.map(item=>item.id));
+  const foldersOnly=view==='resources'&&!directory&&!query;
+  const candidates=ids?[...ids].map(id=>byId.get(id)).filter(Boolean):catalog.items;
+  selectionChecks.clear();pageItems=[];
+  visible=foldersOnly?[]:centerFilter(candidates,{view,query,global:all,kind,tag:all?'':tag,order:$('media-order').value||'recent',year:$('filter-year').value,genre:$('filter-genre').value,duration:$('filter-duration').value,resolution:$('filter-resolution').value});
+  $('center-title').textContent=query?(all?'全部媒体 · 搜索结果':view==='review'?titles.review:context+' · 搜索结果'):context;
+  if(selected.size)retainSelection(selected,visible.map(item=>item.id));
   $('center-subtitle').textContent=(catalog.restored?'备份快照 · ':'')+(query?(all?'在本次媒体库中全局搜索 · ':'在当前页面中搜索 · '):'')+`${visible.length} 项媒体`+(!all&&tag?' · 标签：'+tag:'');if(!query&&!all&&view==='movies')$('center-subtitle').textContent+=' · 按作品计数，版本和分段在详情中选择';if(!query&&!all&&view==='videos')$('center-subtitle').textContent+=' · 含尚未归类为电影的文件，可按时长筛选';$('clear-search').hidden=!query;$('create-collection').hidden=view!=='collections'||!!collection||!!album||!!query;
   $('recursive-label').hidden=view!=='resources'||!directory||all;const filters=[kind,$('filter-duration').value,$('filter-resolution').value,$('filter-year').value,$('filter-genre').value,$('media-order').value&&$('media-order').value!=='recent'].filter(Boolean).length;$('center-options-summary').textContent=filters?`筛选与排序 · ${filters} 项`:'筛选与排序';$('reset-filters').hidden=!filters;
   $('center-content').replaceChildren();$('center-breadcrumb').replaceChildren();$('center-pager').hidden=true;
