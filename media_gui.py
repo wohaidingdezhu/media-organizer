@@ -661,11 +661,17 @@ def create_dashboard_server(output=REPORTS):
                     result = {"ok": True}
                 else:
                     from file_operations import shutdown_when_idle
+                    response_sent = threading.Event()
                     def stop():
+                        response_sent.wait()
                         self.server.shutdown()
                         state.close()
                     shutdown_when_idle(stop)
-                    result = {"ok": True}
+                    try:
+                        self.respond(200, {"ok": True})
+                    finally:
+                        response_sent.set()
+                    return
                 self.respond(200, result)
             except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
                 self.respond(400, {"error": str(error)})
