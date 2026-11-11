@@ -114,6 +114,7 @@ class MediaCenterTests(unittest.TestCase):
     def test_windows_paths_keep_correct_names_and_directory_album_identity(self):
         document={'files':[{'path':'C:\\photos\\旅行\\photo.jpg','kind':'照片','bytes':1,'mtime':1},{'path':'D:\\photos\\旅行\\photo.jpg','kind':'照片','bytes':1,'mtime':1}], 'video_library':{'groups':[]}}
         catalog=center_catalog(document,self.state.snapshot());self.assertEqual([item['title'] for item in catalog['items']],['photo.jpg','photo.jpg']);self.assertEqual(len(catalog['folders']),2)
+        self.assertEqual([item['files'][0]['folder'] for item in catalog['items']], [r'C:\photos\旅行', r'D:\photos\旅行'])
 
     def test_directory_tree_stays_inside_scanned_roots_and_preserves_duplicate_names(self):
         paths=['/samples/旅行/a.jpg','/samples/旅行/子目录/b.jpg','/samples/旅行2/c.jpg',
@@ -162,6 +163,33 @@ location.hash='#photos';events.hashchange();assert($('manage-bar').hidden);asser
         self.run_ui(r'''
 $('search-scope').value='all';$('query').value='Sample Camera';$('center-search').onsubmit({preventDefault(){}});assert.equal($('center-title').textContent,'全部媒体 · 搜索结果');const card=$('center-content').children[0].children[0];assert(card.children.some(n=>n.textContent==='Photo'));
 card.children[0].onclick();const favorite=$('detail-actions').children.find(n=>n.textContent==='☆ 收藏');await favorite.onclick();assert.equal(calls.length,1);assert.equal(calls[0].path,'api/center');assert.equal(calls[0].body.action,'favorite');assert.equal(operations.length,0);
+''')
+
+    def test_search_result_detail_opens_the_selected_file_folder_in_library(self):
+        self.run_ui(r'''
+const drive='C:\\',share='\\\\generated\\media\\旅行';
+movie.files[0].folder=drive;
+movie.files.push({...movie.files[0],id:'1'.repeat(64),name:'Edition.mp4',path:share+'\\Edition.mp4',folder:share});
+photo.files[0].folder=share;photo.files[0].path=share+'\\Photo.jpg';
+directories={
+  [drive]:{name:'C:',parent:'',children:[],ids:[movie.id]},
+  [share]:{name:'旅行',parent:'',children:[],ids:[movie.id,photo.id]}
+};
+scope.window.history={replaceState(_state,_title,hash){location.hash=hash;}};
+await $('center-refresh').onclick();
+$('search-scope').value='all';$('media-kind').value='movie';$('query').value='Film';
+$('center-search').onsubmit({preventDefault(){}});
+$('center-content').children[0].children[0].children[0].onclick();
+const rows=$('detail-content').children[0].children[1].children.filter(node=>node.className==='file');
+const browse=rows[1].children.find(node=>node.className==='actions').children.find(node=>node.textContent==='在资料库中浏览目录');
+assert.equal(browse.attrs['aria-label'],'在资料库中浏览 '+share);
+browse.onclick();$('media-detail').events.close();
+assert(!$('media-detail').open);assert.equal(location.hash,'#resources');
+assert.equal($('center-title').textContent,'旅行');
+assert($('center-breadcrumb').children.some(node=>node.textContent===share));
+assert.equal($('query').value,'');assert.equal($('media-kind').value,'');
+assert($('center-subtitle').textContent.includes('本层 2 项媒体'));
+assert.equal(calls.length,0);assert.equal(operations.length,0);
 ''')
 
     def test_open_uses_safe_action_and_immediately_refreshes_recent_metadata(self):

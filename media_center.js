@@ -455,7 +455,14 @@ function renderDetail(){stopDetailVideo();detailBindings=null;const item=detailS
         const player=make('video');player.controls=true;player.preload='metadata';player.style.cssText='display:block;width:100%;max-height:50vh;margin:12px 0;background:#15151c';player.setAttribute('aria-label','预览 '+file.name);player.src='api/video/'+file.id;const context=detailContext();
         player.onerror=()=>{if(currentDetail(context)&&getPlayer()===player)$('detail-status').textContent='页内预览无法读取：可能是浏览器不支持此编码，或文件自扫描后变化。可尝试系统播放；文件变化时需重扫。';};row.append(player);inline.textContent='关闭预览';syncAvailability();
       });trackAvailability(inline,()=>!!getPlayer()||canOpenFile(file,'preview'));fileActions.append(inline);
-    }for(const [action,label]of [['open',item.kind==='photo'?'打开原图':'播放'],['reveal','打开所在文件夹']]){const control=button(label,()=>performMediaAction(item,file,action));trackAvailability(control,()=>canOpenFile(file,action));fileActions.append(control);}if(manage||item.kind!=='photo'){const trash=button('删除此文件…',()=>openFileReview('delete',[file.id]),'danger');trackAvailability(trash,()=>canTrash([file.id]));fileActions.append(trash);}row.append(fileActions);info.append(row);
+    }
+    for(const [action,label]of [['open',item.kind==='photo'?'打开原图':'播放'],['reveal','打开所在文件夹']]){const control=button(label,()=>performMediaAction(item,file,action));trackAvailability(control,()=>canOpenFile(file,action));fileActions.append(control);}
+    if(catalog.directories?.[file.folder]){
+      const browseFolder=button('在资料库中浏览目录',()=>navigate('resources',file.folder));
+      browseFolder.setAttribute('aria-label','在资料库中浏览 '+file.folder);
+      fileActions.append(browseFolder);
+    }
+    if(manage||item.kind!=='photo'){const trash=button('删除此文件…',()=>openFileReview('delete',[file.id]),'danger');trackAvailability(trash,()=>canTrash([file.id]));fileActions.append(trash);}row.append(fileActions);info.append(row);
   }
   if(item.kind!=='photo'){info.append(metadataButton(item.kind==='video'?'标为电影':'改为普通视频',async()=>{
     const context=detailContext(),kind=item.kind==='video'?'movie':'video';
@@ -560,8 +567,15 @@ $('center-refresh').onclick=()=>{
   })().finally(()=>{centerRefreshPending=null;control.disabled=false;control.textContent='刷新页面';control.setAttribute('aria-busy','false');});
   return centerRefreshPending;
 };
-function navigate(){const next=location.hash.slice(1);view=titles[next]?next:'home';$('query').value='';$('search-scope').value='view';$('media-kind').value=$('filter-year').value=$('filter-genre').value=$('filter-duration').value=$('filter-resolution').value='';$('media-order').value='recent';$('include-subfolders').checked=false;manage=false;resetLocation();if($('media-detail').open)$('media-detail').close();render();}
-window.addEventListener('hashchange',navigate);navigate();
+function navigate(next=location.hash.slice(1),targetDirectory=''){
+  view=titles[next]?next:'home';$('query').value='';$('search-scope').value='view';
+  $('media-kind').value=$('filter-year').value=$('filter-genre').value=$('filter-duration').value=$('filter-resolution').value='';
+  $('media-order').value='recent';$('include-subfolders').checked=false;manage=false;resetLocation();
+  directory=targetDirectory;
+  if($('media-detail').open)$('media-detail').close();
+  render();if(targetDirectory)scrollBrowse();
+}
+window.addEventListener('hashchange',()=>navigate());navigate();
 // The cross-scan gallery opens only a recorded media id in its own report.
 // Do not interrupt a user who navigated or started editing while loading.
 const initialView=view,requestedFile=location.search?new URLSearchParams(location.search).get('open_file'):'';

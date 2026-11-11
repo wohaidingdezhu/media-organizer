@@ -277,7 +277,8 @@ def center_catalog(document, state, notes=None, handled_trash=()):
 
     def file_item(path):
         record = records[path]
-        return {'id': media_id(path), 'path': path, 'name': source_path(path).name,
+        source = source_path(path)
+        return {'id': media_id(path), 'path': path, 'name': source.name, 'folder': str(source.parent),
                 'bytes': record.get('bytes', 0), 'mtime': record.get('mtime', 0), 'browse_only': bool(record.get('browse_only')),
                 'auto_preview': record.get('auto_preview', True),
                 'video': clean_video_metadata(record.get('video')) if record.get('kind') == '视频' else {}}
@@ -296,7 +297,7 @@ def center_catalog(document, state, notes=None, handled_trash=()):
         result.append({'id': identifier, 'kind': kind, 'title': title, 'files': files, 'preview': preview,
                        'manual_kind': identifier in state.get('media_kinds', {}),
                        'folder_kind': any(inherited_kinds.get(file['path']) for file in files),
-                       'folder': str(source_path(files[0]['path']).parent), 'mtime': stamp,
+                       'folder': files[0]['folder'], 'mtime': stamp,
                        'metadata': metadata, 'tags': list(dict.fromkeys(tags + state.get('labels', {}).get(identifier, []))), 'local_tags': state.get('labels', {}).get(identifier, []), 'tag_key': tag_key,
                        'personal': notes.get(tag_key, {'rating': 0, 'note': ''}),
                        'favorite': state['favorites'].get(identifier, '收藏' in tags),
@@ -388,7 +389,7 @@ def center_catalog(document, state, notes=None, handled_trash=()):
         review['warnings'].append(f'{invalid_pairs} 条相似候选记录无效，请核对报告或重新扫描。')
     folders = {}
     for item in result:
-        for folder in dict.fromkeys(str(source_path(file['path']).parent) for file in item['files']):
+        for folder in dict.fromkeys(file['folder'] for file in item['files']):
             folders.setdefault(folder, []).append(item['id'])
     directories = directory_catalog(result, document.get('roots', []))
     for path, node in directories.items():
