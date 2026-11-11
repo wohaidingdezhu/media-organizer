@@ -586,6 +586,24 @@ class OperationTests(unittest.TestCase):
         self.assertFalse(any(path.name.startswith('.media-copy-') for path in self.destination.rglob('*')))
         self.assertEqual(Path(record['path']).read_bytes(), self.before[record['path']][0])
 
+    def test_stop_at_end_of_transfer_skips_expensive_sync(self):
+        record = self.records[0]
+        stop = threading.Event()
+        read = operations.os.read
+        def stop_at_eof(descriptor, size):
+            chunk = read(descriptor, size)
+            if not chunk:
+                stop.set()
+            return chunk
+        with mock.patch.object(operations.os, 'read', side_effect=stop_at_eof), \
+             mock.patch.object(operations.os, 'fsync') as sync, \
+             self.assertRaises(operations.OperationCancelled):
+            operations.copy_one(self.media, self.ids[0], str(self.destination), record['suggested_path'],
+                                record['source_signature'], cancelled=stop.is_set)
+        sync.assert_not_called()
+        self.assertFalse(any(path.name.startswith('.media-copy-') for path in self.destination.rglob('*')))
+        self.assertEqual(Path(record['path']).read_bytes(), self.before[record['path']][0])
+
     def test_stop_before_first_file_keeps_complete_pending_list(self):
         preview = self.ops.preview('copy', self.ids, str(self.destination))
         queued = []

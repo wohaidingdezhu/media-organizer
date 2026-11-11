@@ -173,7 +173,9 @@ def copy_one(media, identifier, destination, relative, expected, dest_identity=N
                 if progress and time.monotonic() >= next_update:
                     progress(amount, "copying")
                     next_update = time.monotonic() + 1
+            check_cancelled()
             stream.flush()
+            check_cancelled()
             os.fsync(stream.fileno())
             os.utime(stream.fileno(), ns=(info.st_atime_ns, info.st_mtime_ns))
         if amount != info.st_size or file_signature(os.fstat(source)) != expected:
