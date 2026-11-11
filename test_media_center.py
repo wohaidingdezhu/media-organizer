@@ -373,6 +373,33 @@ movie.files[0].video={duration_seconds:75,width:1920,height:1080};directories={'
 state.collections['1'.repeat(32)]={name:'Collection',ids:[movie.id,photo.id]};location.hash='#collections';events.hashchange();$('filter-duration').value='long';$('filter-duration').onchange();assert.equal($('center-content').children[0].children.length,0);$('reset-filters').onclick();assert($('center-content').children[0].children.length>0);assert.equal(operations.length,0);
 ''')
 
+    def test_filtered_directories_only_sort_the_visible_page(self):
+        self.run_ui(r'''
+photo.metadata.date='2025-05-01';
+directories=Object.fromEntries(Array.from({length:100},(_,n)=>['/generated/folder-'+n,{name:'folder-'+n,parent:'',children:[],ids:[n%2?movie.id:photo.id]}]));
+await $('center-refresh').onclick();location.hash='#resources';events.hashchange();
+let calls=0;const original=scope.centerFilter;scope.centerFilter=(...args)=>{calls++;return original(...args);};
+$('filter-year').value='2025';$('filter-year').onchange();
+const wall=$('center-content').children.find(node=>node.className==='wall video-wall');
+assert.equal(wall.children.length,48);assert.equal(calls,49); // One global match pass and 48 folder cards.
+const pager=$('center-content').children.find(node=>node.className==='pager');assert(pager.children.some(node=>node.textContent.includes('共 50 个')));
+pager.children.find(node=>node.textContent==='下一页文件夹').onclick();
+const last=$('center-content').children.find(node=>node.className==='wall video-wall');assert.equal(last.children.length,2);
+let expanded=0;const folders=scope.centerFolderIds;scope.centerFolderIds=(...args)=>{expanded++;return folders(...args);};
+$('filter-year').value='2030';$('filter-year').onchange();assert.equal(expanded,0);
+assert($('center-content').children.some(node=>node.textContent.includes('没有匹配的媒体目录')));
+assert.equal(operations.length,0);
+''')
+
+    def test_folder_filter_stops_after_a_match_and_handles_cycles(self):
+        self.run_ui(r'''
+let visits=0;const nodes={root:{ids:[],children:['later','match']},match:{ids:[photo.id],children:['root']}};
+Object.defineProperty(nodes,'later',{get(){visits++;return {ids:[],children:[]};}});
+assert(scope.centerFolderHasMatch(nodes,'root',new Set([photo.id])));assert.equal(visits,0);
+assert(!scope.centerFolderHasMatch(nodes,'root',new Set(['unmatched'])));assert.equal(visits,1);
+assert(!scope.centerFolderHasMatch(nodes,'missing',new Set([photo.id])));
+''')
+
     def test_directory_page_only_expands_visible_folders_without_filters(self):
         self.run_ui(r'''
 directories=Object.fromEntries(Array.from({length:100},(_,n)=>['/generated/folder-'+n,{name:'folder-'+n,parent:'',children:[],ids:[photo.id]}]));
