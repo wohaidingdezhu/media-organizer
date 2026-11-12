@@ -363,8 +363,14 @@ function updateQuickIssueReasons(){
   for(const reason of reasons){const option=make('option','',reason);option.value=reason;$('quick-issues-reason').append(option);}$('quick-issues-reason').value='';
 }
 function filteredQuickIssues(){
-  const query=$('quick-issues-search').value.trim().toLocaleLowerCase(),reason=$('quick-issues-reason').value;
-  return quickIssueScope().filter(item=>(!reason||item.reason===reason)&&(!query||(item.path+' '+item.reason).toLocaleLowerCase().includes(query)));
+  const terms=$('quick-issues-search').value.normalize('NFC').toLocaleLowerCase().match(/\S+/g)||[];
+  const reason=$('quick-issues-reason').value;
+  return quickIssueScope().filter(item=>{
+    if(reason&&item.reason!==reason)return false;
+    if(!terms.length)return true;
+    const text=(item.path+' '+item.reason).normalize('NFC').toLocaleLowerCase();
+    return terms.every(term=>text.includes(term));
+  });
 }
 function syncQuickIssueControls(rows){
   for(const input of $('quick-issues-list').querySelectorAll?.('input')||[])input.disabled=saving||operating||input.getAttribute('data-correctable')!=='true';

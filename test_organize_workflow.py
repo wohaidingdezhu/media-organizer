@@ -349,6 +349,17 @@ if(!scope.selected.has('unrelated'))throw Error('main media selection changed');
 $('quick-issues-kind').value='';$('quick-issues-kind').onchange();$('quick-issues-search').value='';$('quick-issues-search').oninput();$('quick-issues-status').value='handled';$('quick-issues-status').onchange();
 if(!$('quick-issues-select').disabled||!$('quick-issues-list').querySelectorAll('input').every(e=>e.disabled))throw Error('completed records selectable');
 $('quick-issues-export').onclick();const body=await csv.text();if(body.split('\r\n').length!==210||!body.includes('已有成功记录')||!body.includes('/video/0.mp4'))throw Error('filtered export lost records');
+const macPath='/generated/2024/Cafe\u0301/photo.jpg',windowsPath='\\\\NAS\\Share\\2024\\CAFÉ\\film.mp4';
+scope.updateQuickIssues({items:[],skipped:[
+  {path:macPath,reason:'日期待确认'},
+  {path:windowsPath,reason:'地区待确认'},
+  {path:'C:\\Generated\\2023\\Café\\photo.jpg',reason:'日期待确认'}
+]});
+$('quick-issues-search').value='待确认　2024  CAFÉ';$('quick-issues-search').oninput();
+const paths=issueList.children.map(row=>row.children[1]?.textContent);
+if(paths.join('\n')!==[macPath,windowsPath].join('\n'))throw Error('keywords across path and reason missed Unicode-equivalent matches');
+$('quick-issues-reason').value='地区待确认';$('quick-issues-reason').onchange();
+if(issueList.children.length!==1||issueList.children[0].children[1].textContent!==windowsPath)throw Error('reason filter ignored during search');
 })().catch(e=>{console.error(e);process.exitCode=1;});
 '''
         result=subprocess.run([node,'-e',code,str(Path(__file__).parent/'management.js'),str(Path(__file__).parent/'management_browse.js')],capture_output=True,text=True,encoding='utf-8',timeout=15)
