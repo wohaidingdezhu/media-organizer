@@ -8,6 +8,25 @@ import test_direct_cleanup
 class BatchReviewInteractionTests(unittest.TestCase):
     run_ui = test_media_center.MediaCenterTests.run_ui
 
+    def test_exact_auto_selection_keeps_all_favorites_and_shows_comparison_facts(self):
+        self.run_ui(r'''
+items=Array.from({length:6},(_,n)=>({...photo,id:(n+1).toString(16).padStart(64,'0'),favorite:[0,2,3].includes(n),metadata:{width:100+n,height:200+n},files:[{...photo.files[0],id:(n+100).toString(16).padStart(64,'0'),path:'C:\\generated\\'+n+'.jpg',bytes:1048576}]}));
+for(const item of items)access.ids_by_path[item.files[0].path]=item.files[0].id;
+for(const item of items)if(item.favorite)state.favorites[item.id]=true;
+review.exact=Array.from({length:3},(_,n)=>({files:items.slice(n*2,n*2+2).map(item=>({...item.files[0],kind:'photo',media_kind:'photo',owner:item.id,metadata:item.metadata}))}));
+location.hash='#review';events.hashchange();await $('center-refresh').onclick();
+const sections=$('center-content').children.filter(n=>n.className==='review-group');
+const cards=section=>section.children.find(n=>n.className==='review-files').children;
+const checked=card=>card.children[0].children[0].checked;
+assert.deepEqual(sections.map(section=>cards(section).map(checked)),[[false,true],[false,false],[true,false]]);
+assert(cards(sections[0])[0].children.some(n=>n.textContent.includes('★ 已收藏')&&n.textContent.includes('1.0 MB')&&n.textContent.includes('100 × 200')));
+const tools=$('center-content').children.find(n=>n.className==='actions review-selection-tools');
+tools.children.find(n=>n.textContent.startsWith('自动选择副本')).onclick();
+assert.deepEqual(sections.map(section=>cards(section).map(checked)),[[false,true],[false,false],[true,false]]);
+const manual=cards(sections[0])[0].children[0].children[0];manual.checked=true;manual.onchange();assert(manual.checked);
+assert.equal(operations.length,0);assert.equal(calls.length,0);
+''')
+
     def test_selected_multi_part_movie_explains_file_limit_and_recovers_after_deselection(self):
         self.run_ui(r'''
 movie.files=Array.from({length:201},(_,n)=>({...movie.files[0],id:(n+1000).toString(16).padStart(64,'0'),path:'/generated/part'+n+'.mp4',bytes:1073741824}));for(const file of movie.files)access.ids_by_path[file.path]=file.id;
