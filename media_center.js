@@ -519,6 +519,7 @@ $('collection-save').onsubmit=async event=>{
 };$('collection-form').addEventListener('close',()=>{collectionEpoch++;centerOverlay(false);});$('collection-cancel').onclick=()=>$('collection-form').close();$('create-collection').onclick=()=>editCollection();$('create-selection-collection').onclick=()=>{if(!busy&&manage&&selected.size)editCollection('',[...selected]);};
 function applyBrowseFilters(clearSelection=true){page=folderPage=0;if(clearSelection){selected.clear();reviewSelected.clear();reviewFeedback='';}render();scrollBrowse();}
 function clearSearch(){$('query').value='';applyBrowseFilters();}
+$('query').oninput=event=>{if(!event.isComposing&&!$('query').value&&!$('clear-search').hidden)clearSearch();};
 $('center-search').onsubmit=event=>{event.preventDefault();applyBrowseFilters();};$('clear-search').onclick=clearSearch;for(const id of ['search-scope','media-kind'])$(id).onchange=()=>applyBrowseFilters();
 for(const id of ['media-order','photo-layout'])$(id).onchange=()=>applyBrowseFilters(false);
 for(const id of ['filter-year','filter-genre','filter-duration','filter-resolution','include-subfolders'])$(id).onchange=()=>applyBrowseFilters();
