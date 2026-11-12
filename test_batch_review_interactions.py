@@ -8,6 +8,23 @@ import test_direct_cleanup
 class BatchReviewInteractionTests(unittest.TestCase):
     run_ui = test_media_center.MediaCenterTests.run_ui
 
+    def test_review_play_uses_the_clicked_video_file_and_preserves_selection(self):
+        self.run_ui(r'''
+const first={...movie.files[0],id:'1'.repeat(64),path:'C:\\generated\\first.mp4'};
+const second={...movie.files[0],id:'2'.repeat(64),path:'C:\\generated\\second.mp4'};
+movie.files=[first,second];items=[movie];for(const file of movie.files)access.ids_by_path[file.path]=file.id;
+review.exact=[{files:movie.files.map(file=>({...file,kind:'video',media_kind:'movie',owner:movie.id,metadata:{}}))}];
+location.hash='#review';events.hashchange();await $('center-refresh').onclick();
+const group=()=>$('center-content').children.find(n=>n.className==='review-group');
+const cards=()=>group().children.find(n=>n.className==='review-files').children;
+const batch=()=>$('center-content').children.find(n=>n.className==='actions review-batch');
+const chosen=batch().children[0].textContent,play=cards()[1].children.find(n=>n.className==='actions').children.find(n=>n.textContent==='播放');
+assert(!play.disabled);assert.equal(play.attrs['aria-label'],'播放 '+second.path);await play.onclick();
+assert.equal(calls[0].path,'api/media/action');assert.equal(calls[0].body.id,second.id);assert.equal(calls[0].body.action,'open');
+assert.equal(calls[1].body.action,'recent');assert.equal(calls[1].body.id,movie.id);assert.equal(batch().children[0].textContent,chosen);assert.equal(operations.length,0);
+access.available=false;await $('center-refresh').onclick();assert(cards()[1].children.find(n=>n.className==='actions').children.find(n=>n.textContent==='播放').disabled);
+''')
+
     def test_space_priority_ranks_exact_groups_and_preserves_selection(self):
         self.run_ui(r'''
 items=Array.from({length:6},(_,n)=>({...movie,id:(n+1).toString(16).padStart(64,'0'),kind:'video',files:[{...movie.files[0],id:(n+100).toString(16).padStart(64,'0'),path:'C:\\generated\\'+n+'.mp4',bytes:(n<2?2:1)*1073741824,mtime:n<2?20:10}]}));
