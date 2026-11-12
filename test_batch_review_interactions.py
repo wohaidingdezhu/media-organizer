@@ -8,6 +8,27 @@ import test_direct_cleanup
 class BatchReviewInteractionTests(unittest.TestCase):
     run_ui = test_media_center.MediaCenterTests.run_ui
 
+    def test_favorite_movie_parts_and_videos_are_preserved_in_exact_review(self):
+        self.run_ui(r'''
+const mkfile=n=>({...movie.files[0],id:(n+100).toString(16).padStart(64,'0'),path:'C:\\generated\\'+n+'.mp4',bytes:1048576,video:{duration_seconds:75,width:1920,height:1080}});
+const film={...movie,id:'1'.repeat(64),files:[mkfile(0),mkfile(1)]};
+const clip={...movie,id:'2'.repeat(64),kind:'video',files:[mkfile(2)]};
+const copy={...movie,id:'3'.repeat(64),kind:'video',files:[mkfile(3)]};
+items=[film,clip,copy];state.favorites[film.id]=true;state.favorites[clip.id]=true;
+for(const item of items)for(const file of item.files)access.ids_by_path[file.path]=file.id;
+const reviewFile=(file,item)=>({...file,kind:'video',media_kind:item.kind,owner:item.id,metadata:item.metadata});
+review.exact=[{files:film.files.map(file=>reviewFile(file,film))},{files:[reviewFile(clip.files[0],clip),reviewFile(copy.files[0],copy)]}];
+location.hash='#review';events.hashchange();await $('center-refresh').onclick();
+const sections=$('center-content').children.filter(n=>n.className==='review-group');
+const cards=section=>section.children.find(n=>n.className==='review-files').children;
+const checked=card=>card.children[0].children[0].checked;
+assert.deepEqual(sections.map(section=>cards(section).map(checked)),[[false,false],[false,true]]);
+assert(cards(sections[0])[0].children.some(n=>n.textContent.includes('★ 已收藏')&&n.textContent.includes('1:15')&&n.textContent.includes('1920 × 1080')));
+const tools=$('center-content').children.find(n=>n.className==='actions review-selection-tools');tools.children.find(n=>n.textContent.startsWith('自动选择副本')).onclick();
+assert.deepEqual(sections.map(section=>cards(section).map(checked)),[[false,false],[false,true]]);
+assert.equal(operations.length,0);assert.equal(calls.length,0);
+''')
+
     def test_exact_auto_selection_keeps_all_favorites_and_shows_comparison_facts(self):
         self.run_ui(r'''
 items=Array.from({length:6},(_,n)=>({...photo,id:(n+1).toString(16).padStart(64,'0'),favorite:[0,2,3].includes(n),metadata:{width:100+n,height:200+n},files:[{...photo.files[0],id:(n+100).toString(16).padStart(64,'0'),path:'C:\\generated\\'+n+'.jpg',bytes:1048576}]}));
