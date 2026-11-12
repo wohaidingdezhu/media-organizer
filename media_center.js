@@ -46,7 +46,7 @@ function centerReviewGroups(review,{mode='exact',query='',kind='',year='',genre=
   // Compute each group's sort key once; repeated full-group reductions during
   // sorting become costly when a large library contains many duplicate copies.
   const keys=new Map();
-  const value=group=>{if(!keys.has(group))keys.set(group,group.files.reduce((current,file)=>order==='oldest'?Math.min(current,file.mtime||0):Math.max(current,(order==='size'?file.bytes:file.mtime)||0),order==='oldest'?Infinity:0));return keys.get(group);};
+  const value=group=>{if(!keys.has(group)){const raw=group.files.reduce((current,file)=>order==='oldest'?Math.min(current,file.mtime||0):Math.max(current,(['size','reclaim'].includes(order)?file.bytes:file.mtime)||0),order==='oldest'?Infinity:0);keys.set(group,order==='reclaim'?raw*Math.max(0,group.files.length-1):raw);}return keys.get(group);};
   return rows.sort((a,b)=>order==='name'?name(a,b):order==='oldest'?value(a)-value(b)||name(a,b):value(b)-value(a)||name(a,b));
 }
 function centerMediaIds(items){return [...new Set(items.flatMap(item=>item.files.map(file=>file.id)))];}
@@ -57,7 +57,7 @@ if(window.parent!==window)document.body.classList.add('embedded-center');
 const $=id=>document.getElementById(id),make=(tag,cls,text)=>{const node=document.createElement(tag);if(cls)node.className=cls;if(text!==undefined)node.textContent=text;return node;};
 const titles={home:'媒体中心',movies:'电影',videos:'视频',photos:'照片',collections:'相册与合集',favorites:'收藏',tags:'标签与分类',resources:'资源管理',review:'重复与相似'};
 let previewRecords=new Map();
-let searchCache,submittedQuery='';
+let searchCache,submittedQuery='',reviewSpaceSort=false;
 let catalog=null,byId=new Map(),mediaAccess={ids_by_path:{},available:false},view='home',page=0,manage=false,busy=false,selected=new Set(),visible=[],pageItems=[],album='',collection='',tag='',editingCollection='',detailSequence=[],detailIndex=0,loadTicket=0,loadsInFlight=0,directory='',folderPage=0,reviewMode='exact',showDismissedSimilar=false,byFile=new Map(),reviewSelected=new Set(),reviewInitialized=false,reviewFeedback='',centerOperationTimer=null,centerStale=false,detailBindings=null,detailEpoch=0,collectionEpoch=0,detailOriginKey='',availabilityPending=false,availabilityPolling=false,centerStatusBase='';
 const size=value=>value>=1073741824?(value/1073741824).toFixed(1)+' GB':value>=1048576?(value/1048576).toFixed(1)+' MB':(value/1024).toFixed(0)+' KB';
 const labels={movie:'电影',video:'视频',photo:'照片'};
@@ -320,7 +320,8 @@ function renderReview(){
     tabs.append(toggle);
   }
   const reviewData=showDismissedSimilar&&reviewMode==='similar'?{...catalog.review,similar:catalog.review.dismissed_similar||[]}:catalog.review;
-  const query=submittedQuery,groups=centerReviewGroups(reviewData,{mode:reviewMode,query,kind:$('media-kind').value,year:$('filter-year').value,genre:$('filter-genre').value,order:$('media-order').value,owners:byId,duration:$('filter-duration').value,resolution:$('filter-resolution').value}),pages=Math.max(1,Math.ceil(groups.length/10));page=Math.max(0,Math.min(page,pages-1));$('center-subtitle').textContent=(query?'在当前分组中搜索 · ':'')+groups.length+' 组 · 显示整组供核对';
+  const query=submittedQuery,groups=centerReviewGroups(reviewData,{mode:reviewMode,query,kind:$('media-kind').value,year:$('filter-year').value,genre:$('filter-genre').value,order:reviewMode==='exact'&&reviewSpaceSort?'reclaim':$('media-order').value,owners:byId,duration:$('filter-duration').value,resolution:$('filter-resolution').value}),pages=Math.max(1,Math.ceil(groups.length/10));page=Math.max(0,Math.min(page,pages-1));$('center-subtitle').textContent=(query?'在当前分组中搜索 · ':'')+groups.length+' 组 · 显示整组供核对';
+  if(reviewMode==='exact'){const priority=button(reviewSpaceSort?'恢复原排序':'优先查看可清理空间大的组',()=>{reviewSpaceSort=!reviewSpaceSort;page=0;render();scrollBrowse();});priority.setAttribute('aria-pressed',String(reviewSpaceSort));$('center-content').append(priority,make('p','muted','空间按保留一份估算，不代表实际释放；文件移到废纸篓 / 回收站后，通常需清空才会释放空间。收藏项仍按选择规则保留。'));}
   const selectedBefore=reviewSelected.size;retainSelection(reviewSelected,groups.flatMap(group=>group.files.map(file=>file.id)));if(reviewSelected.size!==selectedBefore)reviewFeedback='';
   // Only exact matches may be preselected. Preserve all favorites in a group,
   // or its last copy when no favorite exists.
@@ -352,7 +353,7 @@ function renderReview(){
         groupActions.append(metadataButton('相似，保留两张',()=>decide('keep_both')));
       }
     }
-    const first=group.files[0];if(reviewMode==='exact')section.append(make('p','muted',group.files.length+' 个文件 · 每个 '+size(first.bytes)));
+    const first=group.files[0];if(reviewMode==='exact')section.append(make('p','muted',group.files.length+' 个文件 · 每个 '+size(first.bytes)+' · 保留一份最多可清理 '+size(first.bytes*Math.max(0,group.files.length-1))));
     if(reviewMode==='exact'&&group.files.length>201)section.append(make('p','muted','其余副本超过 200 个文件，请分批勾选清理，每次都会保留至少一份。'));
     const canKeep=()=>reviewMode==='exact'&&group.files.length>1&&group.files.length<=201&&group.files.every(file=>canTrash([file.id]));
     if(group.files.length===2&&group.files.every(file=>file.kind==='photo'))groupActions.append(button('对比这两张',()=>openFileReview('compare',group.files.map(file=>file.id),'',decide)));section.append(groupActions);
@@ -532,9 +533,10 @@ $('center-search').onsubmit=event=>{event.preventDefault();submitSearch();};
 $('clear-search').onclick=clearSearch;
 $('search-scope').onchange=submitSearch;
 $('media-kind').onchange=()=>applyBrowseFilters();
-for(const id of ['media-order','photo-layout'])$(id).onchange=()=>applyBrowseFilters(false);
+$('media-order').onchange=()=>{reviewSpaceSort=false;applyBrowseFilters(false);};
+$('photo-layout').onchange=()=>applyBrowseFilters(false);
 for(const id of ['filter-year','filter-genre','filter-duration','filter-resolution','include-subfolders'])$(id).onchange=()=>applyBrowseFilters();
-$('reset-filters').onclick=()=>{$('media-kind').value=$('filter-year').value=$('filter-genre').value=$('filter-duration').value=$('filter-resolution').value='';$('media-order').value='recent';applyBrowseFilters();};
+$('reset-filters').onclick=()=>{$('media-kind').value=$('filter-year').value=$('filter-genre').value=$('filter-duration').value=$('filter-resolution').value='';$('media-order').value='recent';reviewSpaceSort=false;applyBrowseFilters();};
 $('manage-toggle').onclick=()=>{if(busy)return;manage=!manage;selected.clear();render();};$('select-page').onclick=()=>{if(busy)return;const pending=pageItems.filter(item=>!selected.has(item.id)),room=200-selected.size;for(const item of pending.slice(0,room))selected.add(item.id);syncSelection();if(pending.length>room)message('已达到200项选择上限，请分批处理。');};$('invert-page').onclick=()=>{if(busy)return;const ids=[...new Set(pageItems.map(item=>item.id))],additions=ids.filter(id=>!selected.has(id));for(const id of ids)selected.delete(id);const room=200-selected.size;for(const id of additions.slice(0,room))selected.add(id);syncSelection();if(additions.length>room)message('已达到200项选择上限，请分批处理。');};$('clear-selection').onclick=()=>{if(busy)return;selected.clear();syncSelection();};
 async function changeCollectionMembership(remove=false){
   if(busy||!selected.size||(remove&&(!collection||globalSearch())))return;
