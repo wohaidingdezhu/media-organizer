@@ -6,6 +6,16 @@ import test_media_center
 class LibraryCompletionUITests(unittest.TestCase):
     run_ui = test_media_center.MediaCenterTests.run_ui
 
+    def test_resume_request_expires_when_user_leaves_recovery_controls(self):
+        self.run_ui(r'''
+operationState.unfinished=[{id:'b'.repeat(24),status:'cancelled',completed:1,total:2,created_at:'generated',can_resume:true}];
+await $('center-refresh').onclick();let finish,wasCurrent;
+scope.reportResumeTrash=async(id,load,status,beforeOpen,isCurrent)=>{await new Promise(resolve=>finish=resolve);wasCurrent=isCurrent();};
+const row=$('center-content').children.find(n=>n.className==='actions batch-recovery'),resume=row.children[2];resume.isConnected=true;
+const pending=resume.onclick({currentTarget:resume});assert(resume.disabled);resume.isConnected=false;location.hash='#photos';events.hashchange();finish();await pending;
+assert.equal(wasCurrent,false);assert.equal(operations.length,0);
+''')
+
     def test_interrupted_history_is_accessible_and_only_safe_batches_offer_resume(self):
         self.run_ui(r'''
 operationState.unfinished=[{id:'a'.repeat(24),status:'interrupted',completed:1,total:200,created_at:'generated',can_resume:false},{id:'b'.repeat(24),status:'cancelled',completed:96,total:200,created_at:'generated',can_resume:true}];

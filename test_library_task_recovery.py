@@ -106,6 +106,39 @@ assert.equal(requests.length,2);assert(requests[1].path.endsWith('/preview'));as
 })().catch(e=>{console.error(e);process.exitCode=1;});
 ''')
 
+    def test_closing_stopped_job_while_loading_remaining_never_reopens_dialog(self):
+        test_direct_cleanup.DirectCleanupTests.node(self, r'''
+(async()=>{
+const body=new E(),jobId='f'.repeat(24);let finishRemaining,closed=0;
+Object.assign(scope,{document:{body,createElement:t=>new E(t),querySelector:()=>null},clearTimeout(){},setTimeout(){return 1;},fetch:async(path)=>{
+  requests.push(path);
+  if(path.endsWith('/remaining'))return new Promise(resolve=>{finishRemaining=()=>resolve({ok:true,json:async()=>({mode:'trash',ids:[a.id],skipped:[]})});});
+  return {ok:true,json:async()=>({id:jobId,mode:'trash',status:'cancelled',total:1,items:[],planned_items:[{path:a.path}]})};
+}});
+vm.runInContext(fs.readFileSync(root+'/report_actions.js','utf8'),scope);
+scope.reportTrashProgress(jobId,()=>closed++);await new Promise(setImmediate);
+const dialog=body.children[0],actions=dialog.children.at(-1).children,resume=actions.find(button=>button.textContent==='继续核对未处理项');
+assert(!resume.hidden);const pending=resume.onclick();assert(resume.disabled);actions[0].onclick();assert(dialog.removed);assert.equal(closed,1);
+finishRemaining();await pending;await new Promise(setImmediate);
+assert.equal(body.children.length,1);assert.equal(closed,1);assert.equal(requests.filter(path=>path.endsWith('/preview')).length,0);assert.equal(requests.filter(path=>path.endsWith('/start')).length,0);
+})().catch(e=>{console.error(e);process.exitCode=1;});
+''')
+
+    def test_stale_resume_request_cannot_open_a_preview_or_show_late_error(self):
+        test_direct_cleanup.DirectCleanupTests.node(self, r'''
+(async()=>{
+const body=new E();let finish,current=true,status=[];
+Object.assign(scope,{document:{body,createElement:t=>new E(t),querySelector:()=>null},fetch:()=>new Promise(resolve=>{finish=resolve;})});
+vm.runInContext(fs.readFileSync(root+'/report_actions.js','utf8'),scope);
+const pending=scope.reportResumeTrash('f'.repeat(24),()=>{},text=>status.push(text),()=>{},()=>current);
+current=false;finish({ok:true,json:async()=>({mode:'trash',ids:[a.id],skipped:[]})});await pending;
+assert.equal(body.children.length,0);assert.deepEqual(status,[]);
+current=true;const failed=scope.reportResumeTrash('f'.repeat(24),()=>{},text=>status.push(text),()=>{},()=>current);
+current=false;finish({ok:false,json:async()=>({error:'offline'})});await failed;
+assert.equal(body.children.length,0);assert.deepEqual(status,[]);
+})().catch(e=>{console.error(e);process.exitCode=1;});
+''')
+
 
 if __name__ == '__main__':
     unittest.main()
