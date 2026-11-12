@@ -366,22 +366,34 @@ function filteredQuickIssues(){
   const query=$('quick-issues-search').value.trim().toLocaleLowerCase(),reason=$('quick-issues-reason').value;
   return quickIssueScope().filter(item=>(!reason||item.reason===reason)&&(!query||(item.path+' '+item.reason).toLocaleLowerCase().includes(query)));
 }
-function syncQuickIssueControls(){
+function syncQuickIssueControls(rows){
   for(const input of $('quick-issues-list').querySelectorAll?.('input')||[])input.disabled=saving||operating||input.getAttribute('data-correctable')!=='true';
-  $('quick-issues-select').disabled=saving||operating||!filteredQuickIssues().some(quickCorrectable);
+  $('quick-issues-select').disabled=saving||operating||!(rows??filteredQuickIssues()).some(quickCorrectable);
   $('quick-issues-clear').disabled=saving||operating||!quickIssueSelected.size;
   for(const id of ['quick-issues-status','quick-issues-kind','quick-issues-search','quick-issues-reason','quick-correction-field','quick-region','quick-month','quick-category'])$(id).disabled=saving||operating;
+}
+function syncQuickIssueSummary(count,pages){
+  $('quick-issues-summary').textContent=`当前 ${count}/${quickIssues.length} 项 · 第 ${quickIssuePage+1}/${pages} 页 · 已勾选 ${quickIssueSelected.size} 项`;
 }
 function renderQuickIssues(){
   const rows=filteredQuickIssues(),pages=Math.max(1,Math.ceil(rows.length/50));quickIssuePage=Math.max(0,Math.min(quickIssuePage,pages-1));$('quick-issues-list').replaceChildren();
   const counts={review:0,handled:0,held:0};for(const item of quickIssues)counts[quickCategory(item)]++;
   $('quick-issues-counts').textContent=Object.entries(counts).map(([key,count])=>quickCategoryLabels[key]+' '+count+' 项').join(' · ');
   for(const item of rows.slice(quickIssuePage*50,(quickIssuePage+1)*50)){
-    const row=make('div','operation'),label=make('label'),check=make('input');check.type='checkbox';check.checked=quickIssueSelected.has(item.path);check.disabled=!quickCorrectable(item)||saving||operating;check.setAttribute('aria-label','选择问题项 '+item.path);check.setAttribute('data-correctable',String(quickCorrectable(item)));check.onchange=()=>{if(saving||operating||!quickCorrectable(item)){check.checked=quickIssueSelected.has(item.path);return;}if(check.checked){if(quickIssueSelected.size>=200){check.checked=false;error('一次最多修正 200 个问题媒体。');return;}quickIssueSelected.add(item.path);}else quickIssueSelected.delete(item.path);renderQuickIssues();};label.append(check,make('strong','',quickCategoryLabels[quickCategory(item)]+' · '+item.reason));row.append(label,make('div','path',item.path));$('quick-issues-list').append(row);
+    const row=make('div','operation'),label=make('label'),check=make('input');check.type='checkbox';check.checked=quickIssueSelected.has(item.path);check.disabled=!quickCorrectable(item)||saving||operating;check.setAttribute('aria-label','选择问题项 '+item.path);check.setAttribute('data-correctable',String(quickCorrectable(item)));
+    check.onchange=()=>{
+      if(saving||operating||!quickCorrectable(item)){check.checked=quickIssueSelected.has(item.path);return;}
+      if(check.checked){
+        if(quickIssueSelected.size>=200){check.checked=false;error('一次最多修正 200 个问题媒体。');return;}
+        quickIssueSelected.add(item.path);
+      }else quickIssueSelected.delete(item.path);
+      syncQuickIssueSummary(rows.length,pages);syncQuickIssueControls(rows);
+    };
+    label.append(check,make('strong','',quickCategoryLabels[quickCategory(item)]+' · '+item.reason));row.append(label,make('div','path',item.path));$('quick-issues-list').append(row);
   }
   if(!rows.length)$('quick-issues-list').append(make('p','empty',quickIssues.length?'当前筛选没有待查看项，可切换状态查看已有成功记录或暂缓项。':quickIssuesLoaded?'本次预览没有需要处理的问题或跳过项；请核对复制清单。':'生成整理预览后，这里会显示需要处理的问题和未加入原因。'));
-  $('quick-issues-summary').textContent=`当前 ${rows.length}/${quickIssues.length} 项 · 第 ${quickIssuePage+1}/${pages} 页 · 已勾选 ${quickIssueSelected.size} 项`;
-  $('quick-issues-previous').disabled=quickIssuePage===0;$('quick-issues-next').disabled=quickIssuePage>=pages-1;$('quick-issues-export').disabled=!quickIssues.length;syncQuickIssueControls();
+  syncQuickIssueSummary(rows.length,pages);
+  $('quick-issues-previous').disabled=quickIssuePage===0;$('quick-issues-next').disabled=quickIssuePage>=pages-1;$('quick-issues-export').disabled=!quickIssues.length;syncQuickIssueControls(rows);
 }
 function changeQuickIssueFilter(scopeChanged=false){if(saving||operating)return;quickIssuePage=0;quickIssueSelected.clear();if(scopeChanged)updateQuickIssueReasons();$('quick-issues-selection-note').textContent='筛选已更新，问题勾选已清空。';renderQuickIssues();}
 $('quick-issues-status').onchange=$('quick-issues-kind').onchange=()=>changeQuickIssueFilter(true);

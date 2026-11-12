@@ -329,6 +329,12 @@ skipped.push({path:'/attachment.nfo',reason:'附件待核对'},{path:'/handled.j
 scope.mediaIds['/handled.jpg']='handled';scope.mediaIds['/held.jpg']='held';
 scope.updateQuickIssues({items:[],skipped});
 if(!$('quick-issues-counts').textContent.includes('需处理 207 项')||!$('quick-issues-counts').textContent.includes('已有成功记录 1 项'))throw Error('category counts');
+const issueList=$('quick-issues-list'),firstCheck=issueList.querySelectorAll('input')[0];
+firstCheck.checked=true;firstCheck.onchange();
+if(issueList.querySelectorAll('input')[0]!==firstCheck)throw Error('checkbox replaced, losing keyboard focus');
+if(!$('quick-issues-summary').textContent.includes('已勾选 1 项')||$('quick-issues-clear').disabled)throw Error('manual selection not reflected');
+firstCheck.checked=false;firstCheck.onchange();
+if(!$('quick-issues-summary').textContent.includes('已勾选 0 项')||!$('quick-issues-clear').disabled)throw Error('manual deselection not reflected');
 $('quick-issues-select').onclick();if(!$('quick-issues-summary').textContent.includes('已勾选 200 项')||!$('quick-issues-selection-note').textContent.includes('还有 6 项'))throw Error('cross-page bounded selection');
 for(let i=0;i<3;i++)$('quick-issues-next').onclick();if(!$('quick-issues-list').querySelectorAll('input').every(e=>e.checked))throw Error('later pages not selected');
 $('quick-issues-kind').value='照片';$('quick-issues-kind').onchange();if(!$('quick-issues-summary').textContent.includes('已勾选 0 项'))throw Error('hidden selection survived');

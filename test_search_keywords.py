@@ -45,6 +45,26 @@ assert.equal($('center-content').children[0],restored);assert($('selected-count'
 assert.equal(calls.length,0);assert.equal(operations.length,0);
 ''')
 
+    def test_sorting_and_refresh_keep_submitted_query_and_selection(self):
+        self.run_ui(r'''
+location.hash='#photos';events.hashchange();
+$('query').value='Photo';$('center-search').onsubmit({preventDefault(){}});
+$('manage-toggle').onclick();$('select-page').onclick();
+$('query').value='没有匹配';$('query').oninput({isComposing:false});
+$('media-order').value='name';$('media-order').onchange();
+const assertCurrentResults=()=>{
+  assert($('center-subtitle').textContent.includes('1 项媒体'));
+  assert($('selected-count').textContent.startsWith('已选 1'));
+  assert.equal($('query').value,'没有匹配');
+};
+assertCurrentResults();
+await $('center-refresh').onclick();assertCurrentResults();
+$('center-search').onsubmit({preventDefault(){}});
+assert($('center-subtitle').textContent.includes('0 项媒体'));
+assert($('selected-count').textContent.startsWith('已选 0'));
+assert.equal(calls.length,0);assert.equal(operations.length,0);
+''')
+
     def test_keywords_match_across_fields_and_keep_current_scope(self):
         self.run_ui(r'''
 photo.title='Café 旅行';photo.tags=['周末'];photo.personal.note='海边';
