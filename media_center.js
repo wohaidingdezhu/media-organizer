@@ -402,7 +402,7 @@ function render(){if(!catalog)return;announceCenterView();syncMediaFilters();pre
   for(const job of catalog.operation_state?.unfinished||catalog.operation_state?.resumable?.map(job=>({...job,can_resume:true}))||[]){
     const row=make('div','actions batch-recovery'),labels={running:'处理中',external_running:'处理中',interrupted:'异常中断，需核对',stopped:'已停止',cancelled:'已取消'};
     row.append(make('span','muted','回收站批次 · '+(labels[job.status]||'未完成')+' · 已完成 '+(job.completed||0)+'/'+job.total+' · '+job.created_at),button('查看进度与明细',()=>reportTrashProgress(job.id,load)));
-    if(job.can_resume)row.append(button('继续核对未处理项',async event=>{const control=event.currentTarget;if(control.disabled)return;control.disabled=true;try{await reportResumeTrash(job.id,load,text=>message(text));}finally{control.disabled=false;}}));
+    if(job.can_resume)row.append(button('继续核对未处理项',async event=>{const control=event.currentTarget;if(control.disabled)return;control.disabled=true;try{await reportResumeTrash(job.id,load,text=>message(text),()=>{},()=>control.isConnected!==false);}finally{control.disabled=false;}}));
     $('center-content').append(row);
   }
   if(view==='review'&&!all){$('recursive-label').hidden=true;renderReview();return;}
