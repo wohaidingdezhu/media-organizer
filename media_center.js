@@ -43,9 +43,11 @@ function centerReviewGroups(review,{mode='exact',query='',kind='',year='',genre=
   const q=query.normalize('NFC').toLocaleLowerCase().match(/\S+/g)||[];
   const rows=(review?.[mode]||[]).filter(group=>group.files.some(file=>{const owner=owners.get(file.owner);return (!(duration||resolution)||file.kind!=='photo'&&centerVideoMatch(file,duration,resolution))&&(!kind||file.media_kind===kind)&&(!year||centerYear(file)===year)&&(!genre||(file.metadata.genres||[]).includes(genre))&&centerMatches({title:owner?.title||file.name,files:[file],tags:owner?.tags||[],metadata:file.metadata||{},personal:owner?.personal||{note:''}},q);}));
   const name=(a,b)=>centerNameCompare(a.files[0]?.name||'',b.files[0]?.name||'')||(a.files[0]?.id||'').localeCompare(b.files[0]?.id||'');
-  const stamp=(group,oldest=false)=>group.files.reduce((value,file)=>oldest?Math.min(value,file.mtime||0):Math.max(value,file.mtime||0),oldest?Infinity:0);
-  const bytes=group=>group.files.reduce((value,file)=>Math.max(value,file.bytes||0),0);
-  return rows.sort((a,b)=>order==='name'?name(a,b):order==='size'?bytes(b)-bytes(a)||name(a,b):order==='oldest'?stamp(a,true)-stamp(b,true)||name(a,b):stamp(b)-stamp(a)||name(a,b));
+  // Compute each group's sort key once; repeated full-group reductions during
+  // sorting become costly when a large library contains many duplicate copies.
+  const keys=new Map();
+  const value=group=>{if(!keys.has(group))keys.set(group,group.files.reduce((current,file)=>order==='oldest'?Math.min(current,file.mtime||0):Math.max(current,(order==='size'?file.bytes:file.mtime)||0),order==='oldest'?Infinity:0));return keys.get(group);};
+  return rows.sort((a,b)=>order==='name'?name(a,b):order==='oldest'?value(a)-value(b)||name(a,b):value(b)-value(a)||name(a,b));
 }
 function centerMediaIds(items){return [...new Set(items.flatMap(item=>item.files.map(file=>file.id)))];}
 function centerArt(path){return typeof path==='string'&&/^(previews|covers|stills)\/[A-Za-z0-9_-]+\.png$/.test(path)?path:'';}

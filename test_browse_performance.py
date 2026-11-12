@@ -123,6 +123,29 @@ assert.equal(setups,1);assert.equal(JSON.stringify(rows),before);
                                 capture_output=True, text=True, encoding='utf-8', timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_duplicate_sort_scans_each_group_at_most_once(self):
+        node = shutil.which('node')
+        self.assertIsNotNone(node, 'Both platform CI jobs install Node for UI behaviour tests')
+        code = r'''
+const assert=require('assert/strict'), b=require(process.argv[1]);
+let reductions=0;
+const groups=Array.from({length:300},(_,i)=>{
+  const files=Array.from({length:80},(_,j)=>({id:`${i}-${j}`,name:`photo ${i}`,mtime:(i*17+j)%101,bytes:(i*29+j)%211}));
+  const reduce=files.reduce;files.reduce=function(...args){reductions++;return reduce.apply(this,args);};
+  return {files};
+});
+const name=(a,b)=>a.files[0].name.localeCompare(b.files[0].name,'zh-CN',{numeric:true})||a.files[0].id.localeCompare(b.files[0].id);
+for(const order of ['recent','oldest','size','name']){
+  const key=g=>order==='size'?Math.max(...g.files.map(f=>f.bytes)):order==='oldest'?Math.min(...g.files.map(f=>f.mtime)):Math.max(...g.files.map(f=>f.mtime));
+  const expected=[...groups].sort((a,c)=>order==='name'?name(a,c):order==='oldest'?key(a)-key(c)||name(a,c):key(c)-key(a)||name(a,c));
+  reductions=0;const actual=b.centerReviewGroups({exact:groups},{order});
+  assert.deepEqual(actual,expected);assert(reductions<=groups.length,`${order}: ${reductions} group scans`);
+}
+'''
+        result = subprocess.run([node, '-e', code, str(Path(__file__).with_name('media_center.js'))],
+                                capture_output=True, text=True, encoding='utf-8', timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_search_reuses_text_across_queries_and_pages_until_catalog_refresh(self):
         self.run_ui(r'''
 let serializations=0;
