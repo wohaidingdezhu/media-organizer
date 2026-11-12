@@ -8,6 +8,25 @@ import test_direct_cleanup
 class BatchReviewInteractionTests(unittest.TestCase):
     run_ui = test_media_center.MediaCenterTests.run_ui
 
+    def test_space_priority_ranks_exact_groups_and_preserves_selection(self):
+        self.run_ui(r'''
+items=Array.from({length:6},(_,n)=>({...movie,id:(n+1).toString(16).padStart(64,'0'),kind:'video',files:[{...movie.files[0],id:(n+100).toString(16).padStart(64,'0'),path:'C:\\generated\\'+n+'.mp4',bytes:(n<2?2:1)*1073741824,mtime:n<2?20:10}]}));
+for(const item of items)access.ids_by_path[item.files[0].path]=item.files[0].id;
+const group=rows=>({files:rows.map(item=>({...item.files[0],kind:'video',media_kind:'video',owner:item.id,metadata:{}}))});
+review.exact=[group(items.slice(0,2)),group(items.slice(2))];
+location.hash='#review';events.hashchange();await $('center-refresh').onclick();
+const sections=()=>$('center-content').children.filter(n=>n.className==='review-group');
+const batch=()=>$('center-content').children.find(n=>n.className==='actions review-batch');
+const firstPath=()=>sections()[0].children.find(n=>n.className==='review-files').children[0].children.find(n=>n.textContent.includes('C:\\generated\\')).textContent;
+const priority=()=>$('center-content').children.find(n=>n.textContent==='优先查看可清理空间大的组'||n.textContent==='恢复原排序');
+assert(firstPath().endsWith('0.mp4'));const selected=batch().children[0].textContent;
+priority().onclick();assert(firstPath().endsWith('2.mp4'));assert(sections()[0].children.some(n=>n.textContent.includes('最多可清理 3.0 GB')));assert.equal(batch().children[0].textContent,selected);
+assert($('center-content').children.some(n=>n.textContent.includes('通常需清空才会释放空间')));
+priority().onclick();assert(firstPath().endsWith('0.mp4'));assert.equal(batch().children[0].textContent,selected);
+priority().onclick();$('media-order').value='name';$('media-order').onchange();assert(priority().textContent.includes('优先查看'));
+assert.equal(operations.length,0);assert.equal(calls.length,0);
+''')
+
     def test_favorite_movie_parts_and_videos_are_preserved_in_exact_review(self):
         self.run_ui(r'''
 const mkfile=n=>({...movie.files[0],id:(n+100).toString(16).padStart(64,'0'),path:'C:\\generated\\'+n+'.mp4',bytes:1048576,video:{duration_seconds:75,width:1920,height:1080}});
