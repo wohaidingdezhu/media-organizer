@@ -114,6 +114,7 @@ class MediaCenterTests(unittest.TestCase):
     def test_windows_paths_keep_correct_names_and_directory_album_identity(self):
         document={'files':[{'path':'C:\\photos\\旅行\\photo.jpg','kind':'照片','bytes':1,'mtime':1},{'path':'D:\\photos\\旅行\\photo.jpg','kind':'照片','bytes':1,'mtime':1}], 'video_library':{'groups':[]}}
         catalog=center_catalog(document,self.state.snapshot());self.assertEqual([item['title'] for item in catalog['items']],['photo.jpg','photo.jpg']);self.assertEqual(len(catalog['folders']),2)
+        self.assertEqual([item['files'][0]['folder'] for item in catalog['items']], [r'C:\photos\旅行', r'D:\photos\旅行'])
 
     def test_directory_tree_stays_inside_scanned_roots_and_preserves_duplicate_names(self):
         paths=['/samples/旅行/a.jpg','/samples/旅行/子目录/b.jpg','/samples/旅行2/c.jpg',
@@ -164,6 +165,33 @@ $('search-scope').value='all';$('query').value='Sample Camera';$('center-search'
 card.children[0].onclick();const favorite=$('detail-actions').children.find(n=>n.textContent==='☆ 收藏');await favorite.onclick();assert.equal(calls.length,1);assert.equal(calls[0].path,'api/center');assert.equal(calls[0].body.action,'favorite');assert.equal(operations.length,0);
 ''')
 
+    def test_search_result_detail_opens_the_selected_file_folder_in_library(self):
+        self.run_ui(r'''
+const drive='C:\\',share='\\\\generated\\media\\旅行';
+movie.files[0].folder=drive;
+movie.files.push({...movie.files[0],id:'1'.repeat(64),name:'Edition.mp4',path:share+'\\Edition.mp4',folder:share});
+photo.files[0].folder=share;photo.files[0].path=share+'\\Photo.jpg';
+directories={
+  [drive]:{name:'C:',parent:'',children:[],ids:[movie.id]},
+  [share]:{name:'旅行',parent:'',children:[],ids:[movie.id,photo.id]}
+};
+scope.window.history={replaceState(_state,_title,hash){location.hash=hash;}};
+await $('center-refresh').onclick();
+$('search-scope').value='all';$('media-kind').value='movie';$('query').value='Film';
+$('center-search').onsubmit({preventDefault(){}});
+$('center-content').children[0].children[0].children[0].onclick();
+const rows=$('detail-content').children[0].children[1].children.filter(node=>node.className==='file');
+const browse=rows[1].children.find(node=>node.className==='actions').children.find(node=>node.textContent==='在资料库中浏览目录');
+assert.equal(browse.attrs['aria-label'],'在资料库中浏览 '+share);
+browse.onclick();$('media-detail').events.close();
+assert(!$('media-detail').open);assert.equal(location.hash,'#resources');
+assert.equal($('center-title').textContent,'旅行');
+assert($('center-breadcrumb').children.some(node=>node.textContent===share));
+assert.equal($('query').value,'');assert.equal($('media-kind').value,'');
+assert($('center-subtitle').textContent.includes('本层 2 项媒体'));
+assert.equal(calls.length,0);assert.equal(operations.length,0);
+''')
+
     def test_open_uses_safe_action_and_immediately_refreshes_recent_metadata(self):
         self.run_ui(r'''
 $('center-content').children[0].children[0].children[0].onclick();
@@ -183,10 +211,13 @@ $('clear-search').onclick();assert.equal($('center-title').textContent,'照片')
     def test_folder_search_preserves_path_subfolder_choice_and_returns_from_global_without_operations(self):
         self.run_ui(r"""
 photo.title='旅行照片';photo.folder='/samples/旅行';photo.files[0].path='/samples/旅行/photo.jpg';const nested={...photo,id:'1'.repeat(64),folder:'/samples/旅行/子目录',files:[{...photo.files[0],id:'2'.repeat(64),path:'/samples/旅行/子目录/nested.jpg'}]},outside={...photo,id:'3'.repeat(64),folder:'/other/旅行',files:[{...photo.files[0],id:'4'.repeat(64),path:'/other/旅行/outside.jpg'}]};items=[photo,nested,outside];directories={'/samples/旅行':{name:'旅行',parent:'',ids:[photo.id],children:['/samples/旅行/子目录']},'/samples/旅行/子目录':{name:'子目录',parent:'/samples/旅行',ids:[nested.id],children:[]},'/other/旅行':{name:'旅行',parent:'',ids:[outside.id],children:[]}};
+const originalFilter=scope.centerFilter,searchSizes=[];
+scope.centerFilter=(rows,options)=>{if(options.query)searchSizes.push(rows.length);return originalFilter(rows,options);};
 location.hash='#resources';events.hashchange();await $('center-refresh').onclick();$('center-content').children[0].children.find(card=>card.attrs['aria-label'].includes('/samples/旅行')).onclick();
 $('query').value='旅行照片';$('center-search').onsubmit({preventDefault(){}});const wall=()=>$('center-content').children.find(n=>n.className.startsWith('wall'));assert.equal(wall().children.length,1);assert($('center-breadcrumb').children.some(n=>n.textContent==='/samples/旅行'));assert(!$('recursive-label').hidden);
 $('include-subfolders').checked=true;$('include-subfolders').onchange();assert.equal(wall().children.length,2);await $('center-refresh').onclick();assert.equal(wall().children.length,2);assert.equal($('query').value,'旅行照片');
 $('search-scope').value='all';$('search-scope').onchange();assert.equal(wall().children.length,3);assert(wall().children.every(card=>card.children.some(n=>n.className==='meta search-path'&&n.attrs.title)));assert(wall().children.some(card=>card.children[0].attrs['aria-label'].includes('/other/旅行')));assert($('recursive-label').hidden);$('center-breadcrumb').children[0].onclick();assert.equal($('query').value,'');assert.equal($('center-title').textContent,'旅行');assert($('include-subfolders').checked);assert($('center-breadcrumb').children.some(n=>n.textContent==='/samples/旅行'));assert.equal(calls.length,0);assert.equal(operations.length,0);
+assert.deepEqual(searchSizes,[1,2,2,3]);
 """)
 
     def test_search_keeps_collection_and_tag_context_but_global_results_cannot_remove_collection_members(self):
@@ -378,7 +409,7 @@ await $('center-refresh').onclick();location.hash='#resources';events.hashchange
 let calls=0;const original=scope.centerFilter;scope.centerFilter=(...args)=>{calls++;return original(...args);};
 $('filter-year').value='2025';$('filter-year').onchange();
 const wall=$('center-content').children.find(node=>node.className==='wall video-wall');
-assert.equal(wall.children.length,48);assert.equal(calls,50);
+assert.equal(wall.children.length,48);assert.equal(calls,49); // One global match pass and 48 folder cards.
 const pager=$('center-content').children.find(node=>node.className==='pager');assert(pager.children.some(node=>node.textContent.includes('共 50 个')));
 pager.children.find(node=>node.textContent==='下一页文件夹').onclick();
 const last=$('center-content').children.find(node=>node.className==='wall video-wall');assert.equal(last.children.length,2);
@@ -400,8 +431,9 @@ assert(!scope.centerFolderHasMatch(nodes,'missing',new Set([photo.id])));
     def test_directory_page_only_expands_visible_folders_without_filters(self):
         self.run_ui(r'''
 directories=Object.fromEntries(Array.from({length:100},(_,n)=>['/generated/folder-'+n,{name:'folder-'+n,parent:'',children:[],ids:[photo.id]}]));
-await $('center-refresh').onclick();let callsToFolders=0;const original=scope.centerFolderIds;
+await $('center-refresh').onclick();let callsToFolders=0;const original=scope.centerFolderIds,originalFilter=scope.centerFilter;
 scope.centerFolderIds=(...args)=>{callsToFolders++;return original(...args);};
+scope.centerFilter=(rows,options)=>{assert.equal(rows.length,1);return originalFilter(rows,options);};
 location.hash='#resources';events.hashchange();assert.equal(callsToFolders,48);
 const pager=$('center-content').children.find(node=>node.className==='pager');assert(pager);
 pager.children.find(node=>node.textContent==='下一页文件夹').onclick();assert.equal(callsToFolders,96);
@@ -419,7 +451,7 @@ const photo={...movie,id:'e'.repeat(64),kind:'photo',title:'Photo',files:[{id:'b
 let items=[movie,photo],folders={'C:\\':[movie.id],'/':[photo.id]},directories={};
 let access={available:true,ids_by_path:{'C:\\movie.mp4':'a'.repeat(64),'/photo.jpg':'b'.repeat(64)}},failCenter=false;
 let operationState={running:false,warnings:[]},review={exact:[],similar:[],warnings:[]},hiddenFiles=0,pendingRefresh=null;
-const scope={console,location,IntersectionObserver:class{observe(){}unobserve(){}disconnect(){}},clearTimeout(){},setTimeout(fn){pendingRefresh=fn;return 1;},document:{body:new E(),createElement:tag=>new E(tag),getElementById:$},window:{scrollX:0,scrollY:350,scrollTo(x,y){this.scrollX=x;this.scrollY=y;},addEventListener:(k,v)=>events[k]=v},reportActionOpen:(action,ids,onClose,summary)=>operations.push({action,ids,onClose,summary}),fetch:async(path,options)=>{
+const scope={console,location,IntersectionObserver:class{observe(){}unobserve(){}disconnect(){}},clearTimeout(){},setTimeout(fn){pendingRefresh=fn;return 1;},document:{body:new E(),createElement:tag=>new E(tag),getElementById:$},window:{scrollX:0,scrollY:350,scrollTo(x,y){this.scrollX=x;this.scrollY=y;},addEventListener:(k,v)=>events[k]=v},reportActionOpen:(action,ids,onClose,summary,onReview)=>operations.push({action,ids,onClose,summary,onReview}),fetch:async(path,options)=>{
 if(options?.body){const body=JSON.parse(options.body);calls.push({path,body});if(body.action==='favorite')state.favorites[body.id]=body.value;if(body.action==='recent')state.recent=[body.id];return {ok:true,json:async()=>state};}
 if(failCenter&&path==='api/center')return {ok:false,json:async()=>({error:'Disconnected'})};
 if(path==='api/operations')return {ok:true,json:async()=>({jobs:operationState.running?[{status:'running'}]:[],warnings:operationState.warnings})};

@@ -16,12 +16,6 @@ def source_path(value):
     return PureWindowsPath(value) if PureWindowsPath(value).is_absolute() else PurePosixPath(value)
 
 
-def within_scan(path, roots):
-    """A scan of a parent or child directory only covers files under it."""
-    source = source_path(path)
-    return any(source_path(root) in source.parents for root in roots)
-
-
 def unavailable_during_discovery(document):
     """Only discovery failures make an omitted old path inconclusive.
 
@@ -76,6 +70,7 @@ def sync_index(root, *, complete_only=False):
                 roots, records = document['roots'], document['files']
                 if not isinstance(roots, list) or not all(isinstance(value, str) for value in roots) or not isinstance(records, list):
                     raise ValueError('报告清单无效')
+                scan_roots = [(source_path(value), value) for value in roots]
                 video_previews = {}
                 library = document.get('video_library', {})
                 groups = library.get('groups', []) if isinstance(library, dict) else []
@@ -92,15 +87,23 @@ def sync_index(root, *, complete_only=False):
                 prepared = {}
                 for record in records:
                     path = record.get('path') if isinstance(record, dict) else None
-                    if not isinstance(path, str) or not source_path(path).is_absolute() or '..' in source_path(path).parts or '\x00' in path:
+                    if not isinstance(path, str) or '\x00' in path:
+                        raise ValueError('报告路径无效')
+                    source = source_path(path)
+                    if not source.is_absolute() or '..' in source.parts:
                         raise ValueError('报告路径无效')
                     if record.get('kind') not in {'照片', '视频'} or type(record.get('bytes')) is not int or record['bytes'] < 0:
                         raise ValueError('报告媒体类型或大小无效')
                     key = media_id(path)
                     if key in prepared:
                         raise ValueError('报告路径重复')
-                    prepared[key] = {'id': key, 'path': path, 'name': source_path(path).name, 'folder': str(source_path(path).parent),
-                        'root': record.get('root', next((value for value in roots if source_path(value) in source_path(path).parents), '')),
+                    if 'root' in record:
+                        source_root = record['root']
+                    else:
+                        parents = set(source.parents)
+                        source_root = next((value for root_path, value in scan_roots if root_path in parents), '')
+                    prepared[key] = {'id': key, 'path': path, 'name': source.name, 'folder': str(source.parent),
+                        'root': source_root,
                         'kind': record['kind'], 'bytes': record['bytes'], 'report_id': name, 'state': 'new' if key not in index['items'] else 'changed' if (index['items'][key].get('sha256') != record.get('sha256') or index['items'][key].get('bytes') != record['bytes'] or index['items'][key].get('mtime') != record.get('mtime')) else 'seen',
                         'mtime': record.get('mtime'),
                         'created_at': document.get('created_at', ''), 'sha256': record.get('sha256', ''),
@@ -109,11 +112,15 @@ def sync_index(root, *, complete_only=False):
                 # An old root may be a parent or child of a newer selected root.
                 # Only update records actually covered by this scan, and never
                 # infer absence inside a directory that could not be read.
-                unavailable = unavailable_during_discovery(document)
+                unavailable = set(unavailable_during_discovery(document))
+                root_paths = {root_path for root_path, _ in scan_roots}
                 for key, old in index['items'].items():
+                    if key in prepared:
+                        continue
                     old_path = source_path(old['path'])
-                    if (within_scan(old['path'], roots) and old.get('report_id', '') < name and key not in prepared
-                            and not any(path == old_path or path in old_path.parents for path in unavailable)):
+                    parents = set(old_path.parents)
+                    if (parents & root_paths and old.get('report_id', '') < name
+                            and old_path not in unavailable and not parents & unavailable):
                         old['state'] = 'not_seen'
                 for key, item in prepared.items():
                     if key not in index['items'] or index['items'][key].get('report_id', '') <= name:

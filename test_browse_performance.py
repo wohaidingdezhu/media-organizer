@@ -12,6 +12,8 @@ import test_media_center as center_tests
 
 
 class BrowsePerformanceTests(unittest.TestCase):
+    run_ui = center_tests.MediaCenterTests.run_ui
+
     def state(self, **values):
         return {'favorites': {}, 'collections': {}, 'recent': [], **values}
 
@@ -120,6 +122,29 @@ assert.equal(setups,1);assert.equal(JSON.stringify(rows),before);
         result = subprocess.run([node, '-e', code, str(Path(__file__).with_name('media_center.js'))],
                                 capture_output=True, text=True, encoding='utf-8', timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_search_reuses_text_across_queries_and_pages_until_catalog_refresh(self):
+        self.run_ui(r'''
+let serializations=0;
+items=Array.from({length:60},(_,index)=>{
+  const id=(index+1).toString(16).padStart(64,'0');
+  return {...photo,id,title:'Sample '+index,files:[{...photo.files[0],id,path:'/generated/'+index+'.jpg'}],
+    personal:{note:index===0?'旧备注':''},
+    metadata:{toJSON(){serializations++;return {camera:'Café Camera'};}}};
+});
+location.hash='#photos';events.hashchange();await $('center-refresh').onclick();
+assert.equal(serializations,0);
+const search=query=>{$('query').value=query;$('center-search').onsubmit({preventDefault(){}});};
+search('CAFE\u0301');
+assert($('center-page').textContent.includes('1/2'));assert.equal(serializations,60);
+$('center-next').onclick();assert($('center-page').textContent.includes('2/2'));
+search('旧备注');assert($('center-subtitle').textContent.includes('1 项媒体'));
+$('media-order').value='name';$('media-order').onchange();assert.equal(serializations,60);
+items[0].personal={note:'新备注'};
+await $('center-refresh').onclick();
+assert($('center-subtitle').textContent.includes('0 项媒体'));assert.equal(serializations,120);
+search('新备注');assert($('center-subtitle').textContent.includes('1 项媒体'));assert.equal(serializations,120);
+''')
 
 
 class DirectoryRuleDisplayTests(unittest.TestCase):

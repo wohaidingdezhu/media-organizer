@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 import library_index
 
@@ -20,11 +21,14 @@ class LibraryIndexScopeTests(unittest.TestCase):
         self.one = self.child / 'one.jpg'
         self.two = self.other / 'two.jpg'
 
-    def report(self, name, roots, paths, issues=()):
+    def report(self, name, roots, paths, issues=(), *, source_root=None):
         folder = self.output / name
         folder.mkdir()
-        files = [{'path': str(path), 'kind': '照片', 'bytes': 10, 'mtime': 1}
+        files = [{'path': str(path), 'kind': '照片', 'bytes': 10, 'mtime': 1, 'sha256': ''}
                  for path in paths]
+        if source_root is not None:
+            for record in files:
+                record['root'] = str(source_root)
         (folder / 'report.json').write_text(json.dumps({'roots': list(map(str, roots)),
             'files': files, 'issues': list(issues), 'created_at': '2026-01-01'}, ensure_ascii=False), encoding='utf-8')
 
@@ -62,6 +66,23 @@ class LibraryIndexScopeTests(unittest.TestCase):
         self.assertEqual(items[first]['state'], 'not_seen')
         self.assertEqual(items[other]['state'], 'new')
         self.assertEqual(items[nas]['state'], 'new')
+
+    def test_large_rescan_parses_each_retained_media_path_once_per_report(self):
+        paths = [self.child / f'{number}.jpg' for number in range(500)]
+        roots = [self.parent / f'other-{number}' for number in range(20)] + [self.parent, self.child]
+        self.report('scan-01', roots, paths)
+        self.report('scan-02', roots, paths, source_root=self.child)
+        with mock.patch.object(library_index, 'source_path', wraps=library_index.source_path) as parse:
+            index, warnings = library_index.sync_index(self.output)
+        self.assertEqual(warnings, [])
+        self.assertEqual(len(index['items']), len(paths))
+        self.assertTrue(all(item['state'] == 'seen' and item['root'] == str(self.child)
+                            for item in index['items'].values()))
+        self.assertLessEqual(parse.call_count, 2 * (len(paths) + len(roots)))
+
+    def test_legacy_record_uses_first_matching_root(self):
+        self.report('scan-01', [self.parent, self.child], [self.one])
+        self.assertEqual(self.items()[str(self.one)]['root'], str(self.parent))
 
 
 if __name__ == '__main__':
