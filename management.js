@@ -351,20 +351,26 @@ function updateQuickIssues(preview){
   }
   quickIssues=[...values.values()].map(item=>({...item,kind:kinds.get(item.path)||'附件'}));quickIssuePage=0;quickIssueSelected.clear();
   $('quick-issues-selection-note').textContent='';
-  $('quick-issues-status').value='review';$('quick-issues-kind').value='';$('quick-issues-search').value='';
-  updateQuickIssueReasons();renderQuickIssues();
+  updateQuickIssueReasons($('quick-issues-reason').value);renderQuickIssues();
 }
 function quickIssueScope(){
   const status=$('quick-issues-status').value||'review',kind=$('quick-issues-kind').value;
   return quickIssues.filter(item=>(status==='all'||quickCategory(item)===status)&&(!kind||item.kind===kind));
 }
-function updateQuickIssueReasons(){
+function updateQuickIssueReasons(previousReason=''){
   const reasons=[...new Set(quickIssueScope().map(item=>item.reason))];$('quick-issues-reason').replaceChildren();const all=make('option','','全部原因');all.value='';$('quick-issues-reason').append(all);
-  for(const reason of reasons){const option=make('option','',reason);option.value=reason;$('quick-issues-reason').append(option);}$('quick-issues-reason').value='';
+  for(const reason of reasons){const option=make('option','',reason);option.value=reason;$('quick-issues-reason').append(option);}
+  $('quick-issues-reason').value=reasons.includes(previousReason)?previousReason:'';
 }
 function filteredQuickIssues(){
-  const query=$('quick-issues-search').value.trim().toLocaleLowerCase(),reason=$('quick-issues-reason').value;
-  return quickIssueScope().filter(item=>(!reason||item.reason===reason)&&(!query||(item.path+' '+item.reason).toLocaleLowerCase().includes(query)));
+  const terms=$('quick-issues-search').value.normalize('NFC').toLocaleLowerCase().match(/\S+/g)||[];
+  const reason=$('quick-issues-reason').value;
+  return quickIssueScope().filter(item=>{
+    if(reason&&item.reason!==reason)return false;
+    if(!terms.length)return true;
+    const text=(item.path+' '+item.reason).normalize('NFC').toLocaleLowerCase();
+    return terms.every(term=>text.includes(term));
+  });
 }
 function syncQuickIssueControls(rows){
   for(const input of $('quick-issues-list').querySelectorAll?.('input')||[])input.disabled=saving||operating||input.getAttribute('data-correctable')!=='true';
