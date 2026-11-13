@@ -8,6 +8,82 @@ import test_direct_cleanup
 class BatchReviewInteractionTests(unittest.TestCase):
     run_ui = test_media_center.MediaCenterTests.run_ui
 
+    def test_review_play_uses_the_clicked_video_file_and_preserves_selection(self):
+        self.run_ui(r'''
+const first={...movie.files[0],id:'1'.repeat(64),path:'C:\\generated\\first.mp4'};
+const second={...movie.files[0],id:'2'.repeat(64),path:'C:\\generated\\second.mp4'};
+movie.files=[first,second];items=[movie];for(const file of movie.files)access.ids_by_path[file.path]=file.id;
+review.exact=[{files:movie.files.map(file=>({...file,kind:'video',media_kind:'movie',owner:movie.id,metadata:{}}))}];
+location.hash='#review';events.hashchange();await $('center-refresh').onclick();
+const group=()=>$('center-content').children.find(n=>n.className==='review-group');
+const cards=()=>group().children.find(n=>n.className==='review-files').children;
+const batch=()=>$('center-content').children.find(n=>n.className==='actions review-batch');
+const chosen=batch().children[0].textContent,play=cards()[1].children.find(n=>n.className==='actions').children.find(n=>n.textContent==='播放');
+assert(!play.disabled);assert.equal(play.attrs['aria-label'],'播放 '+second.path);await play.onclick();
+assert.equal(calls[0].path,'api/media/action');assert.equal(calls[0].body.id,second.id);assert.equal(calls[0].body.action,'open');
+assert.equal(calls[1].body.action,'recent');assert.equal(calls[1].body.id,movie.id);assert.equal(batch().children[0].textContent,chosen);assert.equal(operations.length,0);
+access.available=false;await $('center-refresh').onclick();assert(cards()[1].children.find(n=>n.className==='actions').children.find(n=>n.textContent==='播放').disabled);
+''')
+
+    def test_space_priority_ranks_exact_groups_and_preserves_selection(self):
+        self.run_ui(r'''
+items=Array.from({length:6},(_,n)=>({...movie,id:(n+1).toString(16).padStart(64,'0'),kind:'video',files:[{...movie.files[0],id:(n+100).toString(16).padStart(64,'0'),path:'C:\\generated\\'+n+'.mp4',bytes:(n<2?2:1)*1073741824,mtime:n<2?20:10}]}));
+for(const item of items)access.ids_by_path[item.files[0].path]=item.files[0].id;
+const group=rows=>({files:rows.map(item=>({...item.files[0],kind:'video',media_kind:'video',owner:item.id,metadata:{}}))});
+review.exact=[group(items.slice(0,2)),group(items.slice(2))];
+location.hash='#review';events.hashchange();await $('center-refresh').onclick();
+const sections=()=>$('center-content').children.filter(n=>n.className==='review-group');
+const batch=()=>$('center-content').children.find(n=>n.className==='actions review-batch');
+const firstPath=()=>sections()[0].children.find(n=>n.className==='review-files').children[0].children.find(n=>n.textContent.includes('C:\\generated\\')).textContent;
+const priority=()=>$('center-content').children.find(n=>n.textContent==='优先查看可清理空间大的组'||n.textContent==='恢复原排序');
+assert(firstPath().endsWith('0.mp4'));const selected=batch().children[0].textContent;
+priority().onclick();assert(firstPath().endsWith('2.mp4'));assert(sections()[0].children.some(n=>n.textContent.includes('最多可清理 3.0 GB')));assert.equal(batch().children[0].textContent,selected);
+assert($('center-content').children.some(n=>n.textContent.includes('通常需清空才会释放空间')));
+priority().onclick();assert(firstPath().endsWith('0.mp4'));assert.equal(batch().children[0].textContent,selected);
+priority().onclick();$('media-order').value='name';$('media-order').onchange();assert(priority().textContent.includes('优先查看'));
+assert.equal(operations.length,0);assert.equal(calls.length,0);
+''')
+
+    def test_favorite_movie_parts_and_videos_are_preserved_in_exact_review(self):
+        self.run_ui(r'''
+const mkfile=n=>({...movie.files[0],id:(n+100).toString(16).padStart(64,'0'),path:'C:\\generated\\'+n+'.mp4',bytes:1048576,video:{duration_seconds:75,width:1920,height:1080}});
+const film={...movie,id:'1'.repeat(64),files:[mkfile(0),mkfile(1)]};
+const clip={...movie,id:'2'.repeat(64),kind:'video',files:[mkfile(2)]};
+const copy={...movie,id:'3'.repeat(64),kind:'video',files:[mkfile(3)]};
+items=[film,clip,copy];state.favorites[film.id]=true;state.favorites[clip.id]=true;
+for(const item of items)for(const file of item.files)access.ids_by_path[file.path]=file.id;
+const reviewFile=(file,item)=>({...file,kind:'video',media_kind:item.kind,owner:item.id,metadata:item.metadata});
+review.exact=[{files:film.files.map(file=>reviewFile(file,film))},{files:[reviewFile(clip.files[0],clip),reviewFile(copy.files[0],copy)]}];
+location.hash='#review';events.hashchange();await $('center-refresh').onclick();
+const sections=$('center-content').children.filter(n=>n.className==='review-group');
+const cards=section=>section.children.find(n=>n.className==='review-files').children;
+const checked=card=>card.children[0].children[0].checked;
+assert.deepEqual(sections.map(section=>cards(section).map(checked)),[[false,false],[false,true]]);
+assert(cards(sections[0])[0].children.some(n=>n.textContent.includes('★ 已收藏')&&n.textContent.includes('1:15')&&n.textContent.includes('1920 × 1080')));
+const tools=$('center-content').children.find(n=>n.className==='actions review-selection-tools');tools.children.find(n=>n.textContent.startsWith('自动选择副本')).onclick();
+assert.deepEqual(sections.map(section=>cards(section).map(checked)),[[false,false],[false,true]]);
+assert.equal(operations.length,0);assert.equal(calls.length,0);
+''')
+
+    def test_exact_auto_selection_keeps_all_favorites_and_shows_comparison_facts(self):
+        self.run_ui(r'''
+items=Array.from({length:6},(_,n)=>({...photo,id:(n+1).toString(16).padStart(64,'0'),favorite:[0,2,3].includes(n),metadata:{width:100+n,height:200+n},files:[{...photo.files[0],id:(n+100).toString(16).padStart(64,'0'),path:'C:\\generated\\'+n+'.jpg',bytes:1048576}]}));
+for(const item of items)access.ids_by_path[item.files[0].path]=item.files[0].id;
+for(const item of items)if(item.favorite)state.favorites[item.id]=true;
+review.exact=Array.from({length:3},(_,n)=>({files:items.slice(n*2,n*2+2).map(item=>({...item.files[0],kind:'photo',media_kind:'photo',owner:item.id,metadata:item.metadata}))}));
+location.hash='#review';events.hashchange();await $('center-refresh').onclick();
+const sections=$('center-content').children.filter(n=>n.className==='review-group');
+const cards=section=>section.children.find(n=>n.className==='review-files').children;
+const checked=card=>card.children[0].children[0].checked;
+assert.deepEqual(sections.map(section=>cards(section).map(checked)),[[false,true],[false,false],[true,false]]);
+assert(cards(sections[0])[0].children.some(n=>n.textContent.includes('★ 已收藏')&&n.textContent.includes('1.0 MB')&&n.textContent.includes('100 × 200')));
+const tools=$('center-content').children.find(n=>n.className==='actions review-selection-tools');
+tools.children.find(n=>n.textContent.startsWith('自动选择副本')).onclick();
+assert.deepEqual(sections.map(section=>cards(section).map(checked)),[[false,true],[false,false],[true,false]]);
+const manual=cards(sections[0])[0].children[0].children[0];manual.checked=true;manual.onchange();assert(manual.checked);
+assert.equal(operations.length,0);assert.equal(calls.length,0);
+''')
+
     def test_selected_multi_part_movie_explains_file_limit_and_recovers_after_deselection(self):
         self.run_ui(r'''
 movie.files=Array.from({length:201},(_,n)=>({...movie.files[0],id:(n+1000).toString(16).padStart(64,'0'),path:'/generated/part'+n+'.mp4',bytes:1073741824}));for(const file of movie.files)access.ids_by_path[file.path]=file.id;

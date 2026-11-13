@@ -10,14 +10,15 @@ function reportOverlay(open){
   const link=document.querySelector?.('nav[aria-label="报告导航"] a');
   if(link)window.parent.postMessage({type:'media-overlay',open},new URL(link.href).origin);
 }
-async function reportResumeTrash(identifier,onClose,onStatus=()=>{},beforeOpen=()=>{}){
+async function reportResumeTrash(identifier,onClose,onStatus=()=>{},beforeOpen=()=>{},isCurrent=()=>true){
   try{
     const response=await fetch('api/operations/'+identifier+'/remaining'),result=await response.json();
+    if(!isCurrent())return;
     if(!response.ok)throw Error(result.error||'无法读取未处理项');
     if(result.mode!=='trash'||!Array.isArray(result.ids))throw Error('操作记录不匹配');
     if(!result.ids.length){onStatus('没有可继续的未处理文件。已完成或结果需核对的项目不会重新提交。');return;}
     beforeOpen();reportTrashOpen(result.ids,onClose,'继续核对未开始或安全取消的文件；跳过 '+(result.skipped||[]).length+' 项。仍需重新确认。');
-  }catch(error){onStatus(error.message);}
+  }catch(error){if(isCurrent())onStatus(error.message);}
 }
 function reportTrashProgress(identifier,onClose){
   if(typeof identifier==='string'&&/^[0-9a-f]{24}$/.test(identifier))reportTrashOpen([],onClose,'',identifier);
@@ -61,7 +62,7 @@ function reportTrashOpen(ids,onClose,summary='',existingJob=''){
     catch(error){if(!closed){message.textContent=error.message+'；所选文件已保留，处理原因后可重新检查。';cancel.textContent='返回列表';retry.hidden=false;}}
     finally{checking=false;clearTimeout(previewTimer);}
   };
-  resume.onclick=async()=>{if(resume.disabled)return;resume.disabled=true;await reportResumeTrash(jobId,onClose,text=>{message.textContent=text;},()=>dialog.close());if(!closed)resume.disabled=false;};
+  resume.onclick=async()=>{if(resume.disabled)return;resume.disabled=true;await reportResumeTrash(jobId,onClose,text=>{message.textContent=text;},()=>dialog.close(),()=>!closed);if(!closed)resume.disabled=false;};
   retry.onclick=checkPreview;
   document.body.append(dialog);dialog.showModal();dialog.style.display='flex';reportOverlay(true);
   if(existingJob){title.textContent='回收站处理进度与明细';dialog.setAttribute('aria-label',title.textContent);confirm.hidden=true;cancel.textContent='关闭';message.textContent='正在读取处理记录，关闭窗口不会停止后台操作。';poll();}else checkPreview();
