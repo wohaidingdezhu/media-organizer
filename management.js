@@ -351,16 +351,16 @@ function updateQuickIssues(preview){
   }
   quickIssues=[...values.values()].map(item=>({...item,kind:kinds.get(item.path)||'附件'}));quickIssuePage=0;quickIssueSelected.clear();
   $('quick-issues-selection-note').textContent='';
-  $('quick-issues-status').value='review';$('quick-issues-kind').value='';$('quick-issues-search').value='';
-  updateQuickIssueReasons();renderQuickIssues();
+  updateQuickIssueReasons($('quick-issues-reason').value);renderQuickIssues();
 }
 function quickIssueScope(){
   const status=$('quick-issues-status').value||'review',kind=$('quick-issues-kind').value;
   return quickIssues.filter(item=>(status==='all'||quickCategory(item)===status)&&(!kind||item.kind===kind));
 }
-function updateQuickIssueReasons(){
+function updateQuickIssueReasons(previousReason=''){
   const reasons=[...new Set(quickIssueScope().map(item=>item.reason))];$('quick-issues-reason').replaceChildren();const all=make('option','','全部原因');all.value='';$('quick-issues-reason').append(all);
-  for(const reason of reasons){const option=make('option','',reason);option.value=reason;$('quick-issues-reason').append(option);}$('quick-issues-reason').value='';
+  for(const reason of reasons){const option=make('option','',reason);option.value=reason;$('quick-issues-reason').append(option);}
+  $('quick-issues-reason').value=reasons.includes(previousReason)?previousReason:'';
 }
 function filteredQuickIssues(){
   const terms=$('quick-issues-search').value.normalize('NFC').toLocaleLowerCase().match(/\S+/g)||[];
