@@ -54,6 +54,17 @@ class MissingMonitor:
         with self.lock:
             return self._status()
 
+    def _start_scan(self, only_priority):
+        try:
+            threading.Thread(target=self._scan, args=(only_priority,), name='media-missing-check', daemon=True).start()
+        except BaseException as error:
+            # Keep pending priority paths so a later refresh can retry them.
+            with self.lock:
+                self.running = False
+            if isinstance(error, Exception):
+                raise OSError('后台文件检查暂时无法启动，请稍后重试') from error
+            raise
+
     def request_scan(self, *, force=False):
         with self.lock:
             self.paused = False
@@ -62,7 +73,7 @@ class MissingMonitor:
                 return False
             self.running = True
             self.checked = 0
-        threading.Thread(target=self._scan, args=(False,), name='media-missing-check', daemon=True).start()
+        self._start_scan(False)
         return True
 
     def recheck_missing(self):
@@ -76,7 +87,7 @@ class MissingMonitor:
             if not count or self.running:
                 return count
             self.running = True
-        threading.Thread(target=self._scan, args=(True,), name='media-missing-check', daemon=True).start()
+        self._start_scan(True)
         return count
 
     def _scan(self, only_priority=False):

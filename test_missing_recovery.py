@@ -63,6 +63,45 @@ class MissingRecoveryTests(unittest.TestCase):
                                     {'mode': 'trash', 'ids': [media_id(str(path))]}, origin=self.origin)
         return headers, json.loads(body)
 
+    def test_missing_check_can_retry_when_background_thread_cannot_start(self):
+        from missing_monitor import MissingMonitor
+        for priority_only in (False, True):
+            with self.subTest(priority_only=priority_only):
+                monitor = MissingMonitor(MediaActions(self.doc), delay=0)
+                self.addCleanup(monitor.stop)
+                path = str(self.paths[0])
+                if priority_only:
+                    monitor.mark_missing([path])
+                run = monitor.recheck_missing if priority_only else lambda: monitor.request_scan(force=True)
+                with mock.patch('missing_monitor.threading.Thread.start', side_effect=RuntimeError('thread unavailable')):
+                    with self.assertRaisesRegex(OSError, '后台文件检查暂时无法启动'):
+                        run()
+                paths, status = monitor.snapshot()
+                self.assertFalse(status['scanning'])
+                if priority_only:
+                    self.assertIn(path, paths)
+                    self.assertIn(path, monitor.priority)
+                self.assertTrue(run())
+                deadline = time.monotonic() + 3
+                while monitor.status()['scanning'] and time.monotonic() < deadline:
+                    time.sleep(.005)
+                self.assertFalse(monitor.status()['scanning'])
+                self.assertNotIn(path, monitor.snapshot()[0])
+
+    def test_failed_background_check_returns_retryable_response(self):
+        monitor = self.server.missing_monitor
+        self.run_check()
+        with monitor.lock:
+            monitor.completed_at = 0
+        with mock.patch('missing_monitor.threading.Thread.start', side_effect=RuntimeError('thread unavailable')):
+            headers, body = request(self.server, self.prefix + 'api/media/availability')
+        self.assertIn('503', headers)
+        self.assertIn('请稍后重试', json.loads(body)['error'])
+        self.assertFalse(monitor.status()['scanning'])
+        headers, body = request(self.server, self.prefix + 'api/media/availability')
+        self.assertIn('200 OK', headers)
+        self.assertIn('scanning', json.loads(body))
+
     def center(self):
         headers, body = request(self.server, self.prefix + 'api/center')
         self.assertIn('200 OK', headers)
