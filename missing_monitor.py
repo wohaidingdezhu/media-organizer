@@ -38,8 +38,10 @@ class MissingMonitor:
         for path in paths:
             with self.lock:
                 self.manual_epochs[path] = self.manual_epochs.get(path, 0) + 1
-                if path not in self.paths:
-                    self.paths.add(path)
+                changed = path not in self.paths or path in self.unavailable
+                self.paths.add(path)
+                self.unavailable.discard(path)
+                if changed:
                     self.revision += 1
 
     def snapshot(self):
