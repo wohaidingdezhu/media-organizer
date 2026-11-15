@@ -367,8 +367,11 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None, pending
                 self.send_json(200, media.snapshot())
                 return
             if route == 'api/media/availability':
-                missing_monitor.request_scan()
-                self.send_json(200, missing_monitor.status())
+                try:
+                    missing_monitor.request_scan()
+                    self.send_json(200, missing_monitor.status())
+                except OSError as error:
+                    self.send_json(503, {'error': str(error)})
                 return
             if route.startswith('api/video/'):
                 self.send_video(route.removeprefix('api/video/'))
