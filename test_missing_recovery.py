@@ -283,7 +283,7 @@ class MissingRecoveryTests(unittest.TestCase):
             if current == identifier:
                 entered.set()
                 release.wait(3)
-            return 'available'
+            return 'unavailable'
         monitor = MissingMonitor(manager, delay=0)
         self.addCleanup(monitor.stop)
         with mock.patch.object(manager, 'availability', side_effect=slow):
@@ -295,6 +295,29 @@ class MissingRecoveryTests(unittest.TestCase):
             while monitor.status()['scanning'] and time.monotonic() < deadline:
                 time.sleep(.005)
             self.assertIn(str(self.paths[0]), monitor.snapshot()[0])
+            self.assertNotIn(str(self.paths[0]), monitor.unavailable)
+
+    def test_confirmed_missing_replaces_previous_unavailable_status(self):
+        from missing_monitor import MissingMonitor
+        manager = MediaActions(self.doc)
+        monitor = MissingMonitor(manager, delay=0)
+        self.addCleanup(monitor.stop)
+        path = str(self.paths[0])
+        with mock.patch.object(manager, 'availability', return_value='unavailable'):
+            self.assertTrue(monitor.request_scan(force=True))
+            deadline = time.monotonic() + 3
+            while monitor.status()['scanning'] and time.monotonic() < deadline:
+                time.sleep(.005)
+        before = monitor.status()
+        self.assertEqual(before['unavailable_count'], 2)
+        monitor.mark_missing([path])
+        paths, status = monitor.snapshot()
+        self.assertIn(path, paths)
+        self.assertEqual(status['missing_count'], 1)
+        self.assertEqual(status['unavailable_count'], 1)
+        self.assertGreater(status['revision'], before['revision'])
+        monitor.mark_missing([path])
+        self.assertEqual(monitor.status()['revision'], status['revision'])
 
     def test_recheck_has_priority_during_long_full_check(self):
         from missing_monitor import MissingMonitor
