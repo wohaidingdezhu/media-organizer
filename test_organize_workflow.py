@@ -373,6 +373,34 @@ if($('quick-issues-status').value!=='all'||$('quick-issues-kind').value!=='视�
 if(!$('quick-issues-summary').textContent.includes('已勾选 0 项')||issueList.children.length!==1||issueList.children[0].children[1].textContent!==windowsPath)throw Error('preview carried stale selection or ignored filters');
 scope.updateQuickIssues({items:[],skipped:[{path:windowsPath,reason:'地区仍待确认'}]});
 if($('quick-issues-reason').value||issueList.children[0].children[1]?.textContent!==windowsPath)throw Error('obsolete reason blocked refreshed results');
+$('quick-issues-kind').value='';$('quick-issues-kind').onchange();
+$('quick-issues-search').value='';$('quick-issues-search').oninput();
+const uncertain=[
+  {path:'/generated/photo.jpg',relative:'照片/待确认日期/photo.jpg'},
+  {path:'/generated/clip.mp4',relative:'家庭视频/待确认日期/clip.mp4'},
+  {path:'/generated/film.mp4',relative:'电影/待确认地区/film/film.mp4'}
+];
+scope.data.items.push(...uncertain.map((item,index)=>({path:item.path,kind:index?'视频':'照片'})));
+scope.updateQuickIssues({items:uncertain,skipped:[]});
+const reasonSelect=$('quick-issues-reason');
+if(reasonSelect.children.map(option=>option.value).join('|')!=='|待确认日期|待确认地区')throw Error('equivalent reasons split by file path');
+reasonSelect.value='待确认日期';reasonSelect.onchange();
+if(issueList.children.map(row=>row.children[1].textContent).join('|')!=='/generated/photo.jpg|/generated/clip.mp4')throw Error('date filter did not include photos and home videos');
+$('quick-issues-kind').value='视频';$('quick-issues-kind').onchange();
+if(reasonSelect.value!=='待确认日期'||issueList.children.length!==1||issueList.children[0].children[1].textContent!=='/generated/clip.mp4')throw Error('media filter discarded an applicable reason');
+reasonSelect.value='待确认地区';reasonSelect.onchange();
+$('quick-issues-kind').value='照片';$('quick-issues-kind').onchange();
+if(reasonSelect.value||issueList.children[0].children[1]?.textContent!=='/generated/photo.jpg')throw Error('inapplicable reason blocked photo results');
+$('quick-issues-kind').value='视频';$('quick-issues-kind').onchange();
+reasonSelect.value='待确认日期';reasonSelect.onchange();
+$('quick-issues-status').value='review';$('quick-issues-status').onchange();
+if(reasonSelect.value!=='待确认日期')throw Error('status filter discarded an applicable reason');
+$('quick-issues-search').value='家庭视频';$('quick-issues-search').oninput();
+if(issueList.children.length!==1||issueList.children[0].children[1].textContent!=='/generated/clip.mp4')throw Error('search lost suggested path detail');
+scope.updateQuickIssues({items:[{...uncertain[1],relative:'家庭视频/待确认日期/new/clip.mp4'}],skipped:[]});
+if(reasonSelect.value!=='待确认日期'||issueList.children[0].children[1]?.textContent!=='/generated/clip.mp4')throw Error('renamed destination reset the reason filter');
+$('quick-issues-export').onclick();
+if(!(await csv.text()).includes('家庭视频/待确认日期/new/clip.mp4'))throw Error('export lost detailed reason');
 })().catch(e=>{console.error(e);process.exitCode=1;});
 '''
         result=subprocess.run([node,'-e',code,str(Path(__file__).parent/'management.js'),str(Path(__file__).parent/'management_browse.js')],capture_output=True,text=True,encoding='utf-8',timeout=15)
