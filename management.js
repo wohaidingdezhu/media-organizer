@@ -383,6 +383,9 @@ function syncQuickIssueControls(rows){
   for(const input of $('quick-issues-list').querySelectorAll?.('input')||[])input.disabled=saving||operating||input.getAttribute('data-correctable')!=='true';
   $('quick-issues-select').disabled=saving||operating||!(rows??filteredQuickIssues()).some(quickCorrectable);
   $('quick-issues-clear').disabled=saving||operating||!quickIssueSelected.size;
+  const pages=Math.max(1,Math.ceil((rows??filteredQuickIssues()).length/50));
+  $('quick-issues-previous').disabled=saving||operating||quickIssuePage===0;
+  $('quick-issues-next').disabled=saving||operating||quickIssuePage>=pages-1;
   for(const id of ['quick-issues-status','quick-issues-kind','quick-issues-search','quick-issues-reason','quick-correction-field','quick-region','quick-month','quick-category'])$(id).disabled=saving||operating;
 }
 function syncQuickIssueSummary(count,pages){
@@ -410,7 +413,7 @@ function renderQuickIssues(){
 }
 function changeQuickIssueFilter(scopeChanged=false){if(saving||operating)return;quickIssuePage=0;quickIssueSelected.clear();if(scopeChanged)updateQuickIssueReasons();$('quick-issues-selection-note').textContent='筛选已更新，问题勾选已清空。';renderQuickIssues();}
 $('quick-issues-status').onchange=$('quick-issues-kind').onchange=()=>changeQuickIssueFilter(true);
-$('quick-issues-search').oninput=$('quick-issues-reason').onchange=()=>changeQuickIssueFilter();$('quick-issues-previous').onclick=()=>{quickIssuePage--;renderQuickIssues();};$('quick-issues-next').onclick=()=>{quickIssuePage++;renderQuickIssues();};
+$('quick-issues-search').oninput=$('quick-issues-reason').onchange=()=>changeQuickIssueFilter();$('quick-issues-previous').onclick=()=>{if(saving||operating||quickIssuePage===0)return;quickIssuePage--;renderQuickIssues();};$('quick-issues-next').onclick=()=>{if(saving||operating||quickIssuePage>=Math.ceil(filteredQuickIssues().length/50)-1)return;quickIssuePage++;renderQuickIssues();};
 $('quick-issues-select').onclick=()=>{
   if(saving||operating)return;const rows=filteredQuickIssues().filter(quickCorrectable);quickIssueSelected=new Set(rows.slice(0,200).map(item=>item.path));
   $('quick-issues-selection-note').textContent=`已替换问题勾选，选中当前筛选的 ${quickIssueSelected.size} 项（跨页）`+(rows.length>200?`；还有 ${rows.length-200} 项未勾选，请分次修正。`:'。');renderQuickIssues();
