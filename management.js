@@ -341,32 +341,39 @@ $('quick-correct').onclick=async()=>{
 const quickCategoryLabels={review:'需处理',handled:'已有成功记录',held:'已暂缓'};
 function quickCategory(item){return ['handled','held'].includes(item.category)?item.category:'review';}
 function quickCorrectable(item){return quickCategory(item)==='review'&&!!mediaIds[item.path];}
+function quickIssueReason(item){return item.reasonGroup??item.reason;}
 function updateQuickIssues(preview){
   quickIssuesLoaded=true;
   const kinds=new Map((typeof data!=='undefined'&&data?data.items:[]).map(item=>[item.path,item.kind]));
   const values=new Map((preview.skipped||[]).map(item=>[item.path,item]));
   for(const item of preview.items){
-    const parts=(item.relative||'').split('/');
-    if(parts[0]==='电影'&&parts[1]==='待确认地区'||['照片','家庭视频'].includes(parts[0])&&parts[1]==='待确认日期')values.set(item.path,{path:item.path,reason:'分类依据不明确：'+item.relative,category:'review'});
+    const [kind,reasonGroup]=(item.relative||'').split('/',2);
+    if((kind==='电影'&&reasonGroup==='待确认地区')||(['照片','家庭视频'].includes(kind)&&reasonGroup==='待确认日期')){
+      values.set(item.path,{path:item.path,reason:'分类依据不明确：'+item.relative,reasonGroup,category:'review'});
+    }
   }
   quickIssues=[...values.values()].map(item=>({...item,kind:kinds.get(item.path)||'附件'}));quickIssuePage=0;quickIssueSelected.clear();
   $('quick-issues-selection-note').textContent='';
-  updateQuickIssueReasons($('quick-issues-reason').value);renderQuickIssues();
+  updateQuickIssueReasons();renderQuickIssues();
 }
 function quickIssueScope(){
   const status=$('quick-issues-status').value||'review',kind=$('quick-issues-kind').value;
   return quickIssues.filter(item=>(status==='all'||quickCategory(item)===status)&&(!kind||item.kind===kind));
 }
-function updateQuickIssueReasons(previousReason=''){
-  const reasons=[...new Set(quickIssueScope().map(item=>item.reason))];$('quick-issues-reason').replaceChildren();const all=make('option','','全部原因');all.value='';$('quick-issues-reason').append(all);
-  for(const reason of reasons){const option=make('option','',reason);option.value=reason;$('quick-issues-reason').append(option);}
-  $('quick-issues-reason').value=reasons.includes(previousReason)?previousReason:'';
+function updateQuickIssueReasons(){
+  const select=$('quick-issues-reason'),previousReason=select.value;
+  const reasons=[...new Set(quickIssueScope().map(quickIssueReason))];
+  select.replaceChildren();
+  for(const reason of ['',...reasons]){
+    const option=make('option','',reason||'全部原因');option.value=reason;select.append(option);
+  }
+  select.value=reasons.includes(previousReason)?previousReason:'';
 }
 function filteredQuickIssues(){
   const terms=$('quick-issues-search').value.normalize('NFC').toLocaleLowerCase().match(/\S+/g)||[];
   const reason=$('quick-issues-reason').value;
   return quickIssueScope().filter(item=>{
-    if(reason&&item.reason!==reason)return false;
+    if(reason&&quickIssueReason(item)!==reason)return false;
     if(!terms.length)return true;
     const text=(item.path+' '+item.reason).normalize('NFC').toLocaleLowerCase();
     return terms.every(term=>text.includes(term));
