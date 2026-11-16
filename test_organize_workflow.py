@@ -328,6 +328,7 @@ const skipped=media.map(item=>({path:item.path,reason:'需要核对'}));
 skipped.push({path:'/attachment.nfo',reason:'附件待核对'},{path:'/handled.jpg',reason:'成功',category:'handled'},{path:'/held.jpg',reason:'暂缓',category:'held'});
 scope.mediaIds['/handled.jpg']='handled';scope.mediaIds['/held.jpg']='held';
 scope.updateQuickIssues({items:[],skipped});
+let filterCalls=0;const originalFilter=scope.filteredQuickIssues;scope.filteredQuickIssues=(...args)=>{filterCalls++;return originalFilter(...args);};scope.syncQuickIssueControls();if(filterCalls!==1)throw Error('control update repeated a full issue filter');scope.filteredQuickIssues=originalFilter;
 if(!$('quick-issues-counts').textContent.includes('需处理 207 项')||!$('quick-issues-counts').textContent.includes('已有成功记录 1 项'))throw Error('category counts');
 const issueList=$('quick-issues-list'),firstCheck=issueList.querySelectorAll('input')[0];
 firstCheck.checked=true;firstCheck.onchange();

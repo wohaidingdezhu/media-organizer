@@ -380,10 +380,11 @@ function filteredQuickIssues(){
   });
 }
 function syncQuickIssueControls(rows){
+  rows=rows??filteredQuickIssues();
   for(const input of $('quick-issues-list').querySelectorAll?.('input')||[])input.disabled=saving||operating||input.getAttribute('data-correctable')!=='true';
-  $('quick-issues-select').disabled=saving||operating||!(rows??filteredQuickIssues()).some(quickCorrectable);
+  $('quick-issues-select').disabled=saving||operating||!rows.some(quickCorrectable);
   $('quick-issues-clear').disabled=saving||operating||!quickIssueSelected.size;
-  const pages=Math.max(1,Math.ceil((rows??filteredQuickIssues()).length/50));
+  const pages=Math.max(1,Math.ceil(rows.length/50));
   $('quick-issues-previous').disabled=saving||operating||quickIssuePage===0;
   $('quick-issues-next').disabled=saving||operating||quickIssuePage>=pages-1;
   for(const id of ['quick-issues-status','quick-issues-kind','quick-issues-search','quick-issues-reason','quick-correction-field','quick-region','quick-month','quick-category'])$(id).disabled=saving||operating;
