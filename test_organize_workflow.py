@@ -336,6 +336,7 @@ if(!$('quick-issues-summary').textContent.includes('已勾选 1 项')||$('quick-
 firstCheck.checked=false;firstCheck.onchange();
 if(!$('quick-issues-summary').textContent.includes('已勾选 0 项')||!$('quick-issues-clear').disabled)throw Error('manual deselection not reflected');
 $('quick-issues-select').onclick();if(!$('quick-issues-summary').textContent.includes('已勾选 200 项')||!$('quick-issues-selection-note').textContent.includes('还有 6 项'))throw Error('cross-page bounded selection');
+const beforeBusyPage=$('quick-issues-summary').textContent;scope.operating=true;scope.syncQuickIssueControls();if(!$('quick-issues-next').disabled)throw Error('pagination enabled during operation');$('quick-issues-next').onclick();if($('quick-issues-summary').textContent!==beforeBusyPage)throw Error('page changed during operation');scope.operating=false;scope.syncQuickIssueControls();if($('quick-issues-next').disabled)throw Error('pagination did not recover');
 for(let i=0;i<3;i++)$('quick-issues-next').onclick();if(!$('quick-issues-list').querySelectorAll('input').every(e=>e.checked))throw Error('later pages not selected');
 $('quick-issues-kind').value='照片';$('quick-issues-kind').onchange();if(!$('quick-issues-summary').textContent.includes('已勾选 0 项'))throw Error('hidden selection survived');
 $('quick-issues-select').onclick();if(!$('quick-issues-summary').textContent.includes('已勾选 1 项'))throw Error('photo filter');
