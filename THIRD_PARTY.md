@@ -16,5 +16,6 @@ Source projects and license information:
 - Python.NET: https://github.com/pythonnet/pythonnet (MIT).
 - Send2Trash: https://github.com/arsenetar/send2trash (BSD-3-Clause).
 - pywin32: https://github.com/mhammond/pywin32 (PSF-based license).
+- React, React DOM and Scheduler: https://github.com/facebook/react (MIT). The bundled issue list includes their license texts.
 
 Third-party versions are declared in requirements files and resolved by the platform build. Installer artifacts are currently intended for the owner's private use; distribution beyond that requires preserving all dependency license and corresponding-source obligations.

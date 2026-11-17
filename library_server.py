@@ -525,6 +525,9 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None, pending
                         body = body.replace(b'@@MEDIA_USERS@@', script.read())
                 if route in {"organize.html", "photos.html"}:
                     body = stream.read()
+                    if b'@@ISSUE_LIST@@' in body:
+                        with _open_report_file(page_dir, ('issue_list_bundle.js',)) as script:
+                            body = body.replace(b'@@ISSUE_LIST@@', script.read())
                     if b'@@WALL_USERS@@' in body:
                         with _open_report_file(Path(__file__).resolve().parent, ('wall_users.js',)) as script:
                             body = body.replace(b'@@WALL_USERS@@', script.read())

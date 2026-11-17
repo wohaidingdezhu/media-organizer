@@ -320,7 +320,7 @@ window.addEventListener('focus',()=>{if(!executionPreview&&!saving){refreshOpera
 window.addEventListener('pagehide',()=>{monitorRevision++;clearTimeout(operationTimer);});
 
 // Source-scoped preferences, report-only exceptions and successful-copy browser.
-let quickSettings=null,quickIssuesLoaded=false,quickIssues=[],quickIssuePage=0,quickIssueSelected=new Set(),organizedItems=[],organizedNode='',organizedPage=0,organizedFolderPage=0;
+let quickSettings=null,organizedItems=[],organizedNode='',organizedPage=0,organizedFolderPage=0;
 async function loadQuickSettings(){
   try{quickSettings=await api('api/organize-settings');$('quick-destination').value=quickSettings.destination;$('quick-all-batches').checked=quickSettings.all_batches;$('quick-settings-status').textContent=quickSettings.destination?'已读取当前扫描来源的常用设置。':'设置按扫描来源保存，换来源时分别记住。';}
   catch(err){$('quick-settings-status').textContent='设置未读取：'+err.message;}
@@ -332,101 +332,26 @@ $('quick-save-settings').onclick=async()=>{
 };
 $('quick-correct').onclick=async()=>{
   if(saving||operating)return;
-  const ids=quickIssueSelected.size?[...quickIssueSelected].map(path=>mediaIds[path]).filter(Boolean):[...selected];
+  const problemPaths = quickIssuePanel.selectedPaths();
+  const ids = problemPaths.length ? problemPaths.map(path => mediaIds[path]).filter(Boolean) : [...selected];
   if(!ids.length||ids.length>200){error('请勾选 1–200 个媒体或问题项；附件需核对其主媒体。');return;}
   const field=$('quick-correction-field').value,value=field==='region'?$('quick-region').value:field==='category'?$('quick-category').value:$('quick-month').value.trim().replace('-','/');
-  saving=true;render();try{if(!quickSettings)quickSettings=await api('api/organize-settings');quickSettings=await api('api/organize-settings',{action:'correct',revision:quickSettings.revision,ids,field,value});executionPreview=null;quickIssueSelected.clear();$('quick-issues-selection-note').textContent='分类修正已保存，问题勾选已清空；请重新预览更新清单。';$('quick-settings-status').textContent='分类修正已保存，原件未修改。请重新生成整理预览。';renderQuickIssues();}
+  saving=true;render();try{if(!quickSettings)quickSettings=await api('api/organize-settings');quickSettings=await api('api/organize-settings',{action:'correct',revision:quickSettings.revision,ids,field,value});executionPreview=null;quickIssuePanel.clearSelection('分类修正已保存，问题勾选已清空；请重新预览更新清单。');$('quick-settings-status').textContent='分类修正已保存，原件未修改。请重新生成整理预览。';}
   catch(err){error(err.message);}finally{saving=false;render();}
 };
-const quickCategoryLabels={review:'需处理',handled:'已有成功记录',held:'已暂缓'};
-function quickCategory(item){return ['handled','held'].includes(item.category)?item.category:'review';}
-function quickCorrectable(item){return quickCategory(item)==='review'&&!!mediaIds[item.path];}
-function quickIssueReason(item){return item.reasonGroup??item.reason;}
-function updateQuickIssues(preview){
-  quickIssuesLoaded=true;
-  const kinds=new Map((typeof data!=='undefined'&&data?data.items:[]).map(item=>[item.path,item.kind]));
-  const values=new Map((preview.skipped||[]).map(item=>[item.path,item]));
-  for(const item of preview.items){
-    const [kind,reasonGroup]=(item.relative||'').split('/',2);
-    if((kind==='电影'&&reasonGroup==='待确认地区')||(['照片','家庭视频'].includes(kind)&&reasonGroup==='待确认日期')){
-      values.set(item.path,{path:item.path,reason:'分类依据不明确：'+item.relative,reasonGroup,category:'review'});
-    }
+var quickIssuePanel = globalThis.mountIssueList($('quick-issue-panel'), error);
+function updateQuickIssues(preview) {
+  quickIssuePanel.replace(preview, data?.items || []);
+}
+function syncQuickIssueControls() {
+  const busy = saving || operating;
+  quickIssuePanel?.updateControls(busy, mediaIds);
+  for (const id of ['quick-correction-field', 'quick-region', 'quick-month', 'quick-category']) {
+    $(id).disabled = busy;
   }
-  quickIssues=[...values.values()].map(item=>({...item,kind:kinds.get(item.path)||'附件'}));quickIssuePage=0;quickIssueSelected.clear();
-  $('quick-issues-selection-note').textContent='';
-  updateQuickIssueReasons();renderQuickIssues();
 }
-function quickIssueScope(){
-  const status=$('quick-issues-status').value||'review',kind=$('quick-issues-kind').value;
-  return quickIssues.filter(item=>(status==='all'||quickCategory(item)===status)&&(!kind||item.kind===kind));
-}
-function updateQuickIssueReasons(){
-  const select=$('quick-issues-reason'),previousReason=select.value;
-  const reasons=[...new Set(quickIssueScope().map(quickIssueReason))];
-  select.replaceChildren();
-  for(const reason of ['',...reasons]){
-    const option=make('option','',reason||'全部原因');option.value=reason;select.append(option);
-  }
-  select.value=reasons.includes(previousReason)?previousReason:'';
-}
-function filteredQuickIssues(){
-  const terms=$('quick-issues-search').value.normalize('NFC').toLocaleLowerCase().match(/\S+/g)||[];
-  const reason=$('quick-issues-reason').value;
-  return quickIssueScope().filter(item=>{
-    if(reason&&quickIssueReason(item)!==reason)return false;
-    if(!terms.length)return true;
-    const text=(item.path+' '+item.reason).normalize('NFC').toLocaleLowerCase();
-    return terms.every(term=>text.includes(term));
-  });
-}
-function syncQuickIssueControls(rows){
-  rows=rows??filteredQuickIssues();
-  for(const input of $('quick-issues-list').querySelectorAll?.('input')||[])input.disabled=saving||operating||input.getAttribute('data-correctable')!=='true';
-  $('quick-issues-select').disabled=saving||operating||!rows.some(quickCorrectable);
-  $('quick-issues-clear').disabled=saving||operating||!quickIssueSelected.size;
-  const pages=Math.max(1,Math.ceil(rows.length/50));
-  $('quick-issues-previous').disabled=saving||operating||quickIssuePage===0;
-  $('quick-issues-next').disabled=saving||operating||quickIssuePage>=pages-1;
-  for(const id of ['quick-issues-status','quick-issues-kind','quick-issues-search','quick-issues-reason','quick-correction-field','quick-region','quick-month','quick-category'])$(id).disabled=saving||operating;
-}
-function syncQuickIssueSummary(count,pages){
-  $('quick-issues-summary').textContent=`当前 ${count}/${quickIssues.length} 项 · 第 ${quickIssuePage+1}/${pages} 页 · 已勾选 ${quickIssueSelected.size} 项`;
-}
-function renderQuickIssues(){
-  const rows=filteredQuickIssues(),pages=Math.max(1,Math.ceil(rows.length/50));quickIssuePage=Math.max(0,Math.min(quickIssuePage,pages-1));$('quick-issues-list').replaceChildren();
-  const counts={review:0,handled:0,held:0};for(const item of quickIssues)counts[quickCategory(item)]++;
-  $('quick-issues-counts').textContent=Object.entries(counts).map(([key,count])=>quickCategoryLabels[key]+' '+count+' 项').join(' · ');
-  for(const item of rows.slice(quickIssuePage*50,(quickIssuePage+1)*50)){
-    const row=make('div','operation'),label=make('label'),check=make('input');check.type='checkbox';check.checked=quickIssueSelected.has(item.path);check.disabled=!quickCorrectable(item)||saving||operating;check.setAttribute('aria-label','选择问题项 '+item.path);check.setAttribute('data-correctable',String(quickCorrectable(item)));
-    check.onchange=()=>{
-      if(saving||operating||!quickCorrectable(item)){check.checked=quickIssueSelected.has(item.path);return;}
-      if(check.checked){
-        if(quickIssueSelected.size>=200){check.checked=false;error('一次最多修正 200 个问题媒体。');return;}
-        quickIssueSelected.add(item.path);
-      }else quickIssueSelected.delete(item.path);
-      syncQuickIssueSummary(rows.length,pages);syncQuickIssueControls(rows);
-    };
-    label.append(check,make('strong','',quickCategoryLabels[quickCategory(item)]+' · '+item.reason));row.append(label,make('div','path',item.path));$('quick-issues-list').append(row);
-  }
-  if(!rows.length)$('quick-issues-list').append(make('p','empty',quickIssues.length?'当前筛选没有待查看项，可切换状态查看已有成功记录或暂缓项。':quickIssuesLoaded?'本次预览没有需要处理的问题或跳过项；请核对复制清单。':'生成整理预览后，这里会显示需要处理的问题和未加入原因。'));
-  syncQuickIssueSummary(rows.length,pages);
-  $('quick-issues-previous').disabled=quickIssuePage===0;$('quick-issues-next').disabled=quickIssuePage>=pages-1;$('quick-issues-export').disabled=!quickIssues.length;syncQuickIssueControls(rows);
-}
-function changeQuickIssueFilter(scopeChanged=false){if(saving||operating)return;quickIssuePage=0;quickIssueSelected.clear();if(scopeChanged)updateQuickIssueReasons();$('quick-issues-selection-note').textContent='筛选已更新，问题勾选已清空。';renderQuickIssues();}
-$('quick-issues-status').onchange=$('quick-issues-kind').onchange=()=>changeQuickIssueFilter(true);
-$('quick-issues-search').oninput=$('quick-issues-reason').onchange=()=>changeQuickIssueFilter();$('quick-issues-previous').onclick=()=>{if(saving||operating||quickIssuePage===0)return;quickIssuePage--;renderQuickIssues();};$('quick-issues-next').onclick=()=>{if(saving||operating||quickIssuePage>=Math.ceil(filteredQuickIssues().length/50)-1)return;quickIssuePage++;renderQuickIssues();};
-$('quick-issues-select').onclick=()=>{
-  if(saving||operating)return;const rows=filteredQuickIssues().filter(quickCorrectable);quickIssueSelected=new Set(rows.slice(0,200).map(item=>item.path));
-  $('quick-issues-selection-note').textContent=`已替换问题勾选，选中当前筛选的 ${quickIssueSelected.size} 项（跨页）`+(rows.length>200?`；还有 ${rows.length-200} 项未勾选，请分次修正。`:'。');renderQuickIssues();
-};
-$('quick-issues-clear').onclick=()=>{if(saving||operating)return;quickIssueSelected.clear();$('quick-issues-selection-note').textContent='已清空问题勾选。';renderQuickIssues();};
 function syncQuickCorrectionField(){const field=$('quick-correction-field').value;for(const[id,expected]of [['quick-region','region'],['quick-month','month'],['quick-category','category']])$(id).hidden=field!==expected;}
 $('quick-correction-field').onchange=syncQuickCorrectionField;syncQuickCorrectionField();
-$('quick-issues-export').onclick=()=>{
-  const cell=value=>{let text=String(value);if(/^[\s]*[=+@-]/.test(text))text="'"+text;return '"'+text.replaceAll('"','""')+'"';};
-  const body='\ufeff'+[['原路径','原因','状态'],...quickIssues.map(item=>[item.path,item.reason,quickCategoryLabels[quickCategory(item)]])].map(row=>row.map(cell).join(',')).join('\r\n');
-  const url=URL.createObjectURL(new Blob([body],{type:'text/csv;charset=utf-8'})),link=make('a');link.href=url;link.download='整理检查清单.csv';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
-};
 async function openOrganizedCopy(item,action,button,onError=error){
   if(operating||saving||button.copyPending||!item.can_open)return;
   button.copyPending=true;button.disabled=true;
@@ -469,4 +394,7 @@ $('organized-search').oninput=$('organized-kind').onchange=$('organized-sort').o
 $('organized-reset').onclick=()=>{$('organized-kind').value='';$('organized-sort').value='name';$('organized-descendants').checked=true;navigateOrganizedResults('');};
 $('organized-previous').onclick=()=>{organizedPage--;renderOrganizedResults();};$('organized-next').onclick=()=>{organizedPage++;renderOrganizedResults();};
 $('organized-folder-previous').onclick=()=>{organizedFolderPage--;renderOrganizedResults();};$('organized-folder-next').onclick=()=>{organizedFolderPage++;renderOrganizedResults();};
-loadQuickSettings();refreshOrganizedResults();renderQuickIssues();
+// Initialize the organizing workspace once all controls are wired.
+loadQuickSettings();
+refreshOrganizedResults();
+syncQuickIssueControls();

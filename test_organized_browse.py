@@ -34,7 +34,8 @@ const scope={...browse,$,make:(tag,cls,value)=>new E(tag,value||''),organizedIte
   calls.push({route,body});if(failure)throw Error(failure);return {opened:true};
 }};
 vm.createContext(scope);const source=fs.readFileSync(process.argv[2],'utf8');
-vm.runInContext(source.slice(source.indexOf('async function openOrganizedCopy'),source.indexOf('loadQuickSettings();refreshOrganizedResults();renderQuickIssues();')),scope);
+vm.runInContext(source.slice(source.indexOf('async function openOrganizedCopy'),
+  source.indexOf('// Initialize the organizing workspace')),scope);
 const render=()=>scope.renderOrganizedResults();
 '''
 
