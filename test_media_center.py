@@ -146,7 +146,8 @@ class MediaCenterTests(unittest.TestCase):
 const assert=require('assert/strict'),b=require(process.argv[1]);const items=[{id:'a',kind:'movie',title:'Movie',tags:['旅行'],files:[{id:'one',path:'C:\\movie.mp4'},{id:'two',path:'C:\\movie2.mp4'}],metadata:{actors:['演员']},personal:{note:'观影'},folder:'C:\\',mtime:1,favorite:true},{id:'b',kind:'photo',title:'photo.jpg',tags:[],files:[{id:'three',path:'/photo.jpg'}],metadata:{camera:'Camera'},personal:{note:''},folder:'/',mtime:2,favorite:false}];
 const before=JSON.stringify(items);assert.equal(b.centerFilter(items,{view:'movies'}).length,1);assert.equal(b.centerFilter(items,{view:'photos'}).length,1);assert.equal(b.centerFilter(items,{view:'favorites'}).length,1);assert.equal(b.centerFilter(items,{view:'movies',query:'Camera',global:true})[0].id,'b');assert.equal(b.centerFilter(items,{query:'演员'})[0].id,'a');assert.equal(b.centerFilter(items,{folder:'C:\\'})[0].id,'a');assert.equal(b.centerFilter(items,{tag:'旅行'})[0].id,'a');assert.deepEqual(b.centerMediaIds([items[0],items[0]]),['one','two']);assert.equal(b.centerArt('https://evil/image.png'),'');assert.equal(b.centerArt('../previews/a.png'),'');assert.equal(b.centerArt('previews/a.png'),'previews/a.png');assert.equal(JSON.stringify(items),before);
 '''
-        result=subprocess.run([node,'-e',code,str(Path(__file__).with_name('media_center.js'))],capture_output=True,text=True,encoding='utf-8',timeout=15)
+        result=subprocess.run([node,'-e',code,str(Path(__file__).with_name('media_center.js')),
+                               str(Path(__file__).parent/'frontend'/'center-view-test.cjs')],capture_output=True,text=True,encoding='utf-8',timeout=15)
         self.assertEqual(result.returncode,0,result.stderr)
 
     def test_actual_gallery_opens_detail_in_browse_mode_and_only_selects_in_manage_mode(self):
@@ -445,6 +446,7 @@ assert.equal(operations.length,0);
         code=r'''
 const assert=require('assert/strict'),fs=require('fs'),vm=require('vm');
 class E{constructor(tag='div'){this.tagName=tag.toUpperCase();this.children=[];this.textContent='';this.value='';this.open=false;this.hidden=false;this.attrs={};this.events={};this.style={};this.classList={add(){}};}append(...nodes){this.children.push(...nodes);}replaceChildren(...nodes){this.children=nodes;}setAttribute(k,v){this.attrs[k]=v;}getAttribute(k){return this.attrs[k];}addEventListener(k,v){this.events[k]=v;}showModal(){this.open=true;}close(){this.open=false;}focus(){}}
+E.prototype.pause=function(){};E.prototype.removeAttribute=function(key){delete this[key];};E.prototype.load=function(){};
 const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new E());return nodes.get(id);},calls=[],operations=[],events={},location={hash:'#movies'},state={version:1,favorites:{},labels:{},recent:[],collections:{}};
 const movie={id:'c'.repeat(64),kind:'movie',title:'Film',files:[{id:'a'.repeat(64),name:'Film.mp4',path:'C:\\movie.mp4',bytes:12,mtime:1}],preview:'covers/a.png',folder:'C:\\',mtime:1,metadata:{actors:['Actor']},tags:[],local_tags:[],personal:{rating:0,note:''},tag_key:'d'.repeat(64),favorite:false,bytes:12};
 const photo={...movie,id:'e'.repeat(64),kind:'photo',title:'Photo',files:[{id:'b'.repeat(64),name:'Photo.jpg',path:'/photo.jpg',bytes:12,mtime:2}],metadata:{camera:'Sample Camera',width:20,height:10},tag_key:'',folder:'/',mtime:2};
@@ -458,10 +460,12 @@ if(path==='api/operations')return {ok:true,json:async()=>({jobs:operationState.r
 return {ok:true,json:async()=>path==='api/media'?access:{items:items.map(i=>({...i,favorite:state.favorites[i.id]||false})),state,folders,directories,review,operation_state:operationState,hidden_files:hiddenFiles,recent:state.recent,restored:false}};
 }};
 '''+setup+r'''
+const {mountTestGallery,mountTestReview,mountTestDetail,mountTestNavigation}=require(process.argv[2]);scope.mountCenterGallery=host=>mountTestGallery(host,tag=>new E(tag));scope.mountCenterReview=host=>mountTestReview(host,tag=>new E(tag));scope.mountCenterDetail=(content,buttons)=>mountTestDetail(content,buttons,tag=>new E(tag));scope.mountCenterNavigation=host=>mountTestNavigation(host,tag=>new E(tag));
 vm.createContext(scope);vm.runInContext(fs.readFileSync(process.argv[1],'utf8'),scope);
 (async()=>{await new Promise(resolve=>setImmediate(resolve));if($('center-error').textContent)throw Error($('center-error').textContent);
 '''+assertions+r'''
 })().catch(error=>{console.error(error);process.exitCode=1;});
 '''
-        result=subprocess.run([node,'-e',code,str(Path(__file__).with_name('media_center.js'))],capture_output=True,text=True,encoding='utf-8',timeout=20)
+        result=subprocess.run([node,'-e',code,str(Path(__file__).with_name('media_center.js')),
+                               str(Path(__file__).parent/'frontend'/'center-view-test.cjs')],capture_output=True,text=True,encoding='utf-8',timeout=20)
         self.assertEqual(result.returncode,0,result.stderr)

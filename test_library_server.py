@@ -328,6 +328,22 @@ class ReportServerTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_react_media_center_browsing_and_batch_review(self):
+        server = self.server()
+        headers, page = request(server, self.prefix + 'center.html')
+        self.assertIn('200 OK', headers)
+        self.assertIn(b'mountCenterGallery', page)
+        self.assertIn(b'mountCenterReview', page)
+        self.assertIn(b'mountCenterDetail', page)
+        node = shutil.which('node')
+        self.assertIsNotNone(node, 'React browser regression requires Node.js')
+        script = Path(__file__).parent / 'frontend' / 'center-workflow-test.cjs'
+        result = subprocess.run(
+            [node, str(script)], input=page.decode('utf-8'), capture_output=True,
+            text=True, encoding='utf-8', timeout=45,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_csv_download_uses_safe_attachment_name(self):
         name = '影片 清单.csv' if viewer.sys.platform == 'win32' else '影片"清单.csv'
         content = '影片,数量\n例子,1\n'.encode()

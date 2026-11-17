@@ -126,6 +126,7 @@ def run():
             with urlopen(prefix + 'center.html', timeout=10) as response:
                 page = response.read()
                 assert b'function centerFilter' in page and b'@@MEDIA_CENTER@@' not in page
+                assert all(asset in page for asset in (b'mountCenterGallery', b'mountCenterReview', b'mountCenterDetail', b'mountCenterNavigation'))
                 assert b'media-detail' in page and b'manage-toggle' in page
                 assert b'function centerReviewGroups' in page and b'compare-selected' in page
                 assert b'function centerFolderIds' in page and b'include-subfolders' in page and b'filter-year' in page
