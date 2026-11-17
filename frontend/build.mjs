@@ -8,7 +8,7 @@ const notices = await Promise.all(dependencies.map(async name => {
 }));
 
 await build({
-  entryPoints: ['frontend/issue-list.jsx'],
+  entryPoints: ['frontend/workspace.jsx'],
   outfile: 'issue_list_bundle.js',
   bundle: true,
   minify: true,

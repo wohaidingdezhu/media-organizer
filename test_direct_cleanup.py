@@ -22,7 +22,7 @@ let requests=[],failure=false,renders=0;
 const scope={$,make:(t,c,s)=>new E(t,s||''),data:{items:[a,b]},mediaAvailable:true,mediaIds:{[a.path]:a.id,[b.path]:b.id},handledTrash:new Set(),selected:new Set([b.id]),saving:false,operating:false,executionPreview:null,quickIssues:[],fileSize:n=>n+' B',render(){renders++;},error(message){$('error').textContent=message||'';$('error').hidden=!message;},api:async(route,body)=>{requests.push({route,body});if(failure)throw Error('至少保留一份');return {mode:body.mode,items:[{path:a.path,target:'系统废纸篓 / 回收站'}],bytes:12};}};
 vm.createContext(scope);
 const management=fs.readFileSync(root+'/management.js','utf8');
-vm.runInContext(management.slice(0,management.indexOf('function appendOperationStatus')),scope);
+vm.runInContext(management.slice(0,management.indexOf('function bundleReviewIds')),scope);
 vm.runInContext(management.slice(management.indexOf('let executionPage='),management.indexOf("$('copy-files').onclick")),scope);
 '''
 
