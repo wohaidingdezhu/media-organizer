@@ -151,7 +151,7 @@ Object.assign(scope,{Date:{now:()=>clock},document:{body,createElement:t=>new E(
 vm.runInContext(fs.readFileSync(root+'/report_actions.js','utf8'),scope);scope.reportTrashOpen([a.id],()=>refreshed++);
 const dialog=body.children[0],message=dialog.children[1].children[0],buttons=dialog.children.at(-1).children;
 assert(message.textContent.includes('尚未删除'));clock=8000;elapsed();assert(message.textContent.includes('8 秒'));assert(buttons[2].disabled);
-buttons[0].onclick();const text=message.textContent;resolvePreview();await new Promise(setImmediate);assert(dialog.removed);assert.equal(message.textContent,text);assert(buttons[2].disabled);assert.equal(refreshed,1);assert.equal(requests.length,1);
+buttons[0].onclick();const text=message.textContent;resolvePreview();await new Promise(setImmediate);assert(!dialog.isConnected);assert.equal(message.textContent,text);assert(buttons[2].disabled);assert.equal(refreshed,1);assert.equal(requests.length,1);
 })().catch(e=>{console.error(e);process.exitCode=1;});
 ''')
 

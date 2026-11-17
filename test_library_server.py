@@ -91,6 +91,28 @@ class ReportServerTests(unittest.TestCase):
         self.assertIn(b"function reportActionOpen", body)
         self.assertEqual((self.report / "report.html").read_bytes(), self.page)
 
+    def test_existing_report_classification_is_upgraded_without_rewriting_the_saved_html(self):
+        path = self.report / 'report.html'
+        old_html = b'<html><body><script id="classification-data" type="application/json">[]</script></body></html>'
+        path.write_bytes(old_html)
+        (self.report / 'report.json').write_text(json.dumps({
+            "summary": {"files": 1, "duplicate_groups": 0, "hardlinks": 0, "redundant_logical_bytes": 0},
+            "duplicates": [], "similar": {"pairs": [], "eligible": 0, "truncated": False},
+            "previews": {}, "video_groups": [], "issues": [], "skipped": {},
+            "files": [{"kind": "照片", "path": sample_path('/generated/sample.png'),
+                       "suggested_path": "照片/sample.png", "reason": "样例"}],
+            "roots": [], "created_at": "2026-10-01", "options": {"distance": 6},
+            "image_inspection": {"note": "样例"},
+        }), encoding='utf-8')
+        server = self.server()
+        headers, body = request(server, self.prefix + 'report.html')
+        self.assertIn('200 OK', headers)
+        self.assertEqual(body.count(b'<script data-media-frontend>'), 1)
+        self.assertIn(b'id="report-classification"', body)
+        self.assertIn(b"connect-src 'self'; frame-src 'self'", body)
+        self.assertIn(b'mountReportDialog', body)
+        self.assertEqual(path.read_bytes(), old_html)
+
     def test_only_local_dashboard_addresses_are_accepted(self):
         for url in ("https://127.0.0.1:123/a", "http://localhost:123/a",
                     "http://127.0.0.1:123@evil.example/a", "http://127.0.0.1:0/",

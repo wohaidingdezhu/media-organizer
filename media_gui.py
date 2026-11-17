@@ -544,6 +544,8 @@ def create_dashboard_server(output=REPORTS):
     state = DashboardState(output)
     token = secrets.token_urlsafe(24)
     page = (BASE / "dashboard.html").read_bytes()
+    if b"@@DASHBOARD_UI@@" in page:
+        page = page.replace(b"@@DASHBOARD_UI@@", (BASE / "issue_list_bundle.js").read_bytes())
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):

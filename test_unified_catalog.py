@@ -101,12 +101,12 @@ class UnifiedCatalogTests(unittest.TestCase):
 
     def test_catalog_navigation_race_and_gallery(self):
         self.node(r'''
-const html=fs.readFileSync(root+'/dashboard.html','utf8'),pending=[];let opened=[];
-Object.assign(scope,{catalogFolder:'',catalogPage:0,catalogPages:1,catalogRequest:0,stateLabels:{new:'新增'},formatTime:x=>x,notice(){},document:{createElement:t=>new E(t)},openCatalogSnapshot:item=>opened.push(item),request:()=>new Promise(resolve=>pending.push(resolve))});
-vm.runInContext(html.slice(html.indexOf('async function loadCatalog()'),html.indexOf("$('nav-catalog').onclick")),scope);
+const html=fs.readFileSync(root+'/dashboard.html','utf8'),pending=[];let displayed=[];
+Object.assign(scope,{catalogFolder:'',catalogPage:0,catalogPages:1,catalogRequest:0,stateLabels:{new:'新增'},formatTime:x=>x,notice(){},mountDashboardCatalog:()=>data=>{displayed=data.items;},openCatalogSnapshot(){},request:()=>new Promise(resolve=>pending.push(resolve))});
+vm.runInContext(html.slice(html.indexOf('let dashboardCatalogView'),html.indexOf("$('nav-catalog').onclick")),scope);
 const first=scope.loadCatalog(),second=scope.loadCatalog(),item={id:'a'.repeat(64),report_id:'scan-a',name:'sample.jpg',path:'/sample/a.jpg',kind:'照片',state:'new',created_at:'2026'};
 const value=items=>({items,total:items.length,page:0,pages:1,all_count:items.length,scans:2,warnings:[],folders:[]});
-(async()=>{pending[1](value([item]));await second;pending[0](value([]));await first;assert.equal($('catalog-items').children.length,1);const card=$('catalog-items').children[0];assert.equal(card.className,'catalog-card');assert(card.children[0].children[1].src.includes('api/catalog/preview?'));card.children[0].onclick();assert.equal(opened[0].id,item.id);})().catch(e=>{console.error(e);process.exitCode=1;});
+(async()=>{pending[1](value([item]));await second;pending[0](value([]));await first;assert.equal(displayed.length,1);assert.equal(displayed[0].id,item.id);assert(displayed[0].statusText.includes('新增'));})().catch(e=>{console.error(e);process.exitCode=1;});
 ''')
 
     def test_gallery_link_opens_the_correct_record_in_its_source_snapshot(self):

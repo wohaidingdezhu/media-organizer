@@ -1,3 +1,7 @@
+import {mountDashboardCatalog} from './dashboard-catalog.jsx';
+import {mountDashboardFolders} from './dashboard-folders.jsx';
+import {mountReportClassification} from './report-classification.jsx';
+import {mountReportDialog} from './report-dialog.jsx';
 import {mountCenterNavigation} from './center-navigation.jsx';
 import {mountCenterDetail} from './center-detail.jsx';
 import {mountCenterReview} from './center-review.jsx';
@@ -21,3 +25,8 @@ globalThis.mountUserWorkspace = mountUserWorkspace;
 globalThis.mountWorkspaceMedia = mountWorkspaceMedia;
 globalThis.mountStoragePanel = mountStoragePanel;
 globalThis.mountDuplicateReview = mountDuplicateReview;
+
+globalThis.mountReportDialog = mountReportDialog;
+globalThis.mountReportClassification = mountReportClassification;
+globalThis.mountDashboardFolders = mountDashboardFolders;
+globalThis.mountDashboardCatalog = mountDashboardCatalog;

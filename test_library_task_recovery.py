@@ -24,8 +24,8 @@ Object.assign(scope,{document:{body,createElement:t=>new E(t),querySelector:()=>
 vm.runInContext(fs.readFileSync(root+'/report_actions.js','utf8'),scope);
 scope.reportTrashProgress(id,()=>closed++);await new Promise(setImmediate);
 const dialog=body.children[0],buttons=dialog.children.at(-1).children;assert(dialog.open);assert(buttons[2].hidden);assert(!buttons[1].hidden);assert(dialog.children[1].children[0].textContent.includes('1/200'));assert.equal(requests.length,1);assert.equal(requests[0].options?.method,undefined);
-buttons[0].onclick();assert(dialog.removed);assert.equal(closed,1);await poll();assert.equal(requests.length,1);
-scope.reportTrashProgress('../outside');assert.equal(body.children.length,1);
+buttons[0].onclick();assert(!dialog.isConnected);assert.equal(closed,1);await poll();assert.equal(requests.length,1);
+scope.reportTrashProgress('../outside');assert.equal(body.children.length,0);
 })().catch(e=>{console.error(e);process.exitCode=1;});
 ''')
 
@@ -118,9 +118,9 @@ Object.assign(scope,{document:{body,createElement:t=>new E(t),querySelector:()=>
 vm.runInContext(fs.readFileSync(root+'/report_actions.js','utf8'),scope);
 scope.reportTrashProgress(jobId,()=>closed++);await new Promise(setImmediate);
 const dialog=body.children[0],actions=dialog.children.at(-1).children,resume=actions.find(button=>button.textContent==='继续核对未处理项');
-assert(!resume.hidden);const pending=resume.onclick();assert(resume.disabled);actions[0].onclick();assert(dialog.removed);assert.equal(closed,1);
+assert(!resume.hidden);const pending=resume.onclick();assert(resume.disabled);actions[0].onclick();assert(!dialog.isConnected);assert.equal(closed,1);
 finishRemaining();await pending;await new Promise(setImmediate);
-assert.equal(body.children.length,1);assert.equal(closed,1);assert.equal(requests.filter(path=>path.endsWith('/preview')).length,0);assert.equal(requests.filter(path=>path.endsWith('/start')).length,0);
+assert.equal(body.children.length,0);assert.equal(closed,1);assert.equal(requests.filter(path=>path.endsWith('/preview')).length,0);assert.equal(requests.filter(path=>path.endsWith('/start')).length,0);
 })().catch(e=>{console.error(e);process.exitCode=1;});
 ''')
 

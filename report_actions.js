@@ -23,49 +23,194 @@ async function reportResumeTrash(identifier,onClose,onStatus=()=>{},beforeOpen=(
 function reportTrashProgress(identifier,onClose){
   if(typeof identifier==='string'&&/^[0-9a-f]{24}$/.test(identifier))reportTrashOpen([],onClose,'',identifier);
 }
-function reportTrashOpen(ids,onClose,summary='',existingJob=''){
-  if(existingJob?!/^[0-9a-f]{24}$/.test(existingJob):!Array.isArray(ids)||ids.length<1||ids.length>200||new Set(ids).size!==ids.length||ids.some(id=>!/^[0-9a-f]{64}$/.test(id)))return;
-  const make=(tag,text)=>{const n=document.createElement(tag);if(text)n.textContent=text;return n;};
-  const dialog=make('dialog'),title=make('h2','移到废纸篓 / 回收站？'),message=make('p','正在检查所选文件…'),list=make('ul'),progress=make('progress'),content=make('div'),actions=make('div'),cancel=make('button','取消'),confirm=make('button','确认删除'),stop=make('button','停止处理');
-  dialog.setAttribute('aria-label','确认移到废纸篓 / 回收站');
-  dialog.style.cssText='width:min(680px,92vw);max-height:90vh;overflow:hidden;flex-direction:column;box-sizing:border-box;overflow-wrap:anywhere;word-break:break-word;padding:24px;border:1px solid #d7d3e3;border-radius:16px;background:#fcfcfe;color:#272a36';
-  content.style.cssText='flex:1;min-height:0;overflow-x:hidden;overflow-y:auto;overflow-wrap:anywhere;word-break:break-word';list.style.cssText='padding-left:24px;overflow-wrap:anywhere;word-break:break-word';title.style.cssText='flex:none;margin:0 0 12px';
-  actions.style.cssText='display:flex;gap:12px;justify-content:flex-end;flex-wrap:wrap;flex:none;background:#fcfcfe;padding:14px 0 0';
-  for(const b of [cancel,confirm,stop]){b.type='button';b.style.cssText='padding:10px 16px;border:1px solid #d7d3e3;border-radius:8px;cursor:pointer';}confirm.style.color='#a33b4a';confirm.disabled=true;stop.hidden=true;
-  message.setAttribute('role','status');actions.append(cancel,stop,confirm);content.append(message,progress);dialog.append(title);if(summary){const kept=make('p',summary),notes=make('details'),caption=make('summary','保留文件与清理说明（展开查看）');kept.style.cssText='max-width:100%;overflow-wrap:anywhere;word-break:break-word';notes.append(caption,kept);content.append(notes);}content.append(list);dialog.append(content,actions);
-  const resume=make('button','继续核对未处理项');resume.type='button';resume.hidden=true;resume.style.cssText=cancel.style.cssText;actions.append(resume);
-  const retry=make('button','重新检查');progress.max=ids.length;progress.value=0;progress.hidden=true;progress.setAttribute('aria-label','移到回收站的文件进度');progress.style.cssText='width:100%;margin:12px 0';retry.type='button';retry.style.cssText=cancel.style.cssText;retry.hidden=true;actions.append(retry);
-  let preview=null,running=false,closed=false,jobId=existingJob,timer=null,previewTimer=null,checking=false,stopRequested=false;
-  const bytes=value=>Number.isFinite(value)&&value>=0?(value>=1073741824?(value/1073741824).toFixed(1)+' GB':value>=1048576?(value/1048576).toFixed(1)+' MB':(value/1024).toFixed(0)+' KB'):'';
-  const api=async(path,body)=>{const response=await fetch(path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const result=await response.json();if(!response.ok)throw Error(result.error||'请求未完成');return result;};
-  const finish=()=>{running=false;stop.hidden=true;cancel.disabled=false;cancel.textContent='返回列表';};
-  const poll=async()=>{if(closed)return;try{const job=await api('api/operations/'+jobId);if(closed)return;if(job.id!==jobId||job.mode!=='trash')throw Error('操作记录不匹配');
-    const completed=(job.items||[]).filter(item=>['success','complete'].includes(item.status)).length,total=Number.isInteger(job.total)&&job.total>0?job.total:ids.length,current=(job.items||[]).find(item=>item.status==='processing');progress.hidden=false;progress.max=total;progress.value=completed;
-    if(job.status==='complete'){running=false;dialog.close();return;}
-    if(['running','external_running'].includes(job.status)){running=true;stop.hidden=false;message.textContent=(stopRequested||job.stop_requested?'正在安全停止；当前文件核对或系统回收结束后停止。':'正在核对并移到回收站。')+' 已完成 '+completed+'/'+total+' 个文件（'+Math.floor(completed*100/total)+'%）'+(current?'；当前：'+current.path:'');timer=setTimeout(poll,1000);return;}
-    finish();resume.hidden=!(['stopped','cancelled'].includes(job.status)&&!job.error&&job.planned_items);message.textContent='处理已停止，完成 '+completed+'/'+total+' 个文件。已完成的文件在回收站中，其余文件未自动重试。'+(job.error?' '+job.error:'');list.replaceChildren();
-    for(const item of job.items||[]){const row=make('li',(item.status==='complete'||item.status==='success'?'已完成：':'待核对：')+item.path+(item.error?' · '+item.error:''));list.append(row);}
-    const started=new Set((job.items||[]).map(item=>item.path));for(const item of job.planned_items||[])if(!started.has(item.path))list.append(make('li','未开始：'+item.path));
-  }catch(error){if(closed)return;message.textContent='连接暂时中断，正在核对处理结果，请勿重复删除：'+error.message;timer=setTimeout(poll,3000);}};
-  cancel.onclick=()=>{if(!running||existingJob)dialog.close();};
-  dialog.addEventListener('cancel',event=>{if(running&&!existingJob)event.preventDefault();});
-  dialog.addEventListener('close',()=>{closed=true;clearTimeout(timer);clearTimeout(previewTimer);dialog.remove();reportOverlay(false);if(typeof onClose==='function')onClose();});
-  stop.onclick=async()=>{if(!jobId||stop.disabled)return;stop.disabled=true;try{await api('api/operations/stop',{id:jobId});stopRequested=true;if(!closed)message.textContent='正在安全停止；当前文件核对或系统回收结束后停止。';}catch(error){if(!closed){message.textContent='停止请求未确认：'+error.message;stop.disabled=false;}}};
-  confirm.onclick=async()=>{if(running||!preview?.token)return;running=true;confirm.disabled=true;cancel.disabled=true;const token=preview.token;preview=null;list.replaceChildren();content.scrollTop=0;message.textContent='正在提交…';
-    try{const started=await api('api/operations/start',{token});jobId=started.id;stop.hidden=false;await poll();}
-    catch(error){finish();message.textContent='启动结果未确认，请在整理工具中核对操作记录后再处理：'+error.message;}
+async function reportRequest(path, body) {
+  const options = body === undefined ? {} :
+    {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)};
+  const response = await fetch(path, options);
+  const result = await response.json();
+  if (!response.ok) throw Error(result.error || '请求未完成');
+  return result;
+}
+
+function openReportDialog(kind, state, actions, onCancel, onClose) {
+  const root = mountReportDialog(document.body);
+  const nodes = {};
+  const refs = {dialog: node => { if (node) nodes.dialog = node; }, content: node => { nodes.content = node; }};
+  const render = () => root.render({kind, state, actions, refs});
+  render();
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    root.dispose();
+    reportOverlay(false);
+    onClose();
   };
-  const checkPreview=async()=>{
-    if(checking||running||closed)return;checking=true;preview=null;retry.hidden=true;confirm.disabled=true;cancel.textContent='取消';list.replaceChildren();const began=Date.now();
-    const waiting=()=>{if(!checking||closed)return;const seconds=Math.floor((Date.now()-began)/1000);message.textContent='正在核对 '+ids.length+' 个文件'+(seconds?' · 已等待 '+seconds+' 秒':'')+'。大文件及保留副本的完整校验可能较慢；尚未删除，可取消返回，所选文件会保留。';if(typeof setTimeout==='function')previewTimer=setTimeout(waiting,1000);};waiting();
-    try{const result=await api('api/operations/preview',{mode:'trash',ids});if(closed)return;preview=result;message.textContent=result.items.length+' 个文件'+(bytes(result.bytes)?' · '+bytes(result.bytes):'')+'将移到系统回收站，可以恢复。';for(const item of result.items)list.append(make('li',item.path));confirm.disabled=!result.token;}
-    catch(error){if(!closed){message.textContent=error.message+'；所选文件已保留，处理原因后可重新检查。';cancel.textContent='返回列表';retry.hidden=false;}}
-    finally{checking=false;clearTimeout(previewTimer);}
+  nodes.dialog.addEventListener('cancel', onCancel);
+  nodes.dialog.addEventListener('close', finish);
+  nodes.dialog.showModal();
+  reportOverlay(true);
+  return {
+    render,
+    close() { nodes.dialog.close(); finish(); },
+    scrollToStart() { if (nodes.content) nodes.content.scrollTop = 0; },
   };
-  resume.onclick=async()=>{if(resume.disabled)return;resume.disabled=true;await reportResumeTrash(jobId,onClose,text=>{message.textContent=text;},()=>dialog.close(),()=>!closed);if(!closed)resume.disabled=false;};
-  retry.onclick=checkPreview;
-  document.body.append(dialog);dialog.showModal();dialog.style.display='flex';reportOverlay(true);
-  if(existingJob){title.textContent='回收站处理进度与明细';dialog.setAttribute('aria-label',title.textContent);confirm.hidden=true;cancel.textContent='关闭';message.textContent='正在读取处理记录，关闭窗口不会停止后台操作。';poll();}else checkPreview();
+}
+
+function reportTrashOpen(ids, onClose, summary='', existingJob='') {
+  if (existingJob ? !/^[0-9a-f]{24}$/.test(existingJob) : !Array.isArray(ids) || ids.length < 1 || ids.length > 200
+    || new Set(ids).size !== ids.length || ids.some(id => !/^[0-9a-f]{64}$/.test(id))) return;
+
+  const state = {monitoring:!!existingJob, status:'', rows:[], summary,
+    progress:{total:ids.length, completed:0, visible:false}, running:false, stopAllowed:false, stopLocked:false,
+    canConfirm:false, canResume:false, retry:false, returning:false, resuming:false};
+  let preview = null, closed = false, jobId = existingJob, timer = null, previewTimer = null, checking = false, stopRequested = false;
+  const bytes = value => Number.isFinite(value) && value >= 0
+    ? (value >= 1073741824 ? (value/1073741824).toFixed(1) + ' GB'
+      : value >= 1048576 ? (value/1048576).toFixed(1) + ' MB' : (value/1024).toFixed(0) + ' KB')
+    : '';
+  function finish() {
+    state.running = false;
+    state.stopAllowed = false;
+    state.returning = true;
+  }
+  async function poll() {
+    if (closed) return;
+    try {
+      const job = await reportRequest('api/operations/' + jobId);
+      if (closed) return;
+      if (job.id !== jobId || job.mode !== 'trash') throw Error('操作记录不匹配');
+      const items = job.items || [];
+      const completed = items.filter(item => ['success','complete'].includes(item.status)).length;
+      const total = Number.isInteger(job.total) && job.total > 0 ? job.total : ids.length;
+      state.progress = {completed, total, visible:true};
+      if (job.status === 'complete') {
+        state.running = false;
+        dialog.close();
+        return;
+      }
+      if (['running','external_running'].includes(job.status)) {
+        state.running = true;
+        state.stopAllowed = true;
+        const current = items.find(item => item.status === 'processing');
+        const prefix = stopRequested || job.stop_requested
+          ? '正在安全停止；当前文件核对或系统回收结束后停止。' : '正在核对并移到回收站。';
+        state.status = prefix + ' 已完成 ' + completed + '/' + total + ' 个文件（'
+          + Math.floor(completed * 100 / (total || 1)) + '%）' + (current ? '；当前：' + current.path : '');
+        timer = setTimeout(poll, 1000);
+      } else {
+        finish();
+        state.canResume = ['stopped','cancelled'].includes(job.status) && !job.error && Boolean(job.planned_items);
+        state.status = '处理已停止，完成 ' + completed + '/' + total
+          + ' 个文件。已完成的文件在回收站中，其余文件未自动重试。' + (job.error ? ' ' + job.error : '');
+        state.rows = items.map(item => (['complete','success'].includes(item.status) ? '已完成：' : '待核对：')
+          + item.path + (item.error ? ' · ' + item.error : ''));
+        const started = new Set(items.map(item => item.path));
+        for (const item of job.planned_items || []) if (!started.has(item.path)) state.rows.push('未开始：'+item.path);
+      }
+      dialog.render();
+    } catch (error) {
+      if (closed) return;
+      state.status = '连接暂时中断，正在核对处理结果，请勿重复删除：' + error.message;
+      dialog.render();
+      timer = setTimeout(poll, 3000);
+    }
+  }
+  async function checkPreview() {
+    if (checking || state.running || closed) return;
+    checking = true;
+    preview = null;
+    Object.assign(state, {retry:false, canConfirm:false, returning:false, rows:[]});
+    const began = Date.now();
+    const waiting = () => {
+      if (!checking || closed) return;
+      const seconds = Math.floor((Date.now()-began)/1000);
+      state.status = '正在核对 ' + ids.length + ' 个文件' + (seconds ? ' · 已等待 '+seconds+' 秒' : '')
+        + '。大文件及保留副本的完整校验可能较慢；尚未删除，可取消返回，所选文件会保留。';
+      dialog.render();
+      if (typeof setTimeout === 'function') previewTimer = setTimeout(waiting,1000);
+    };
+    waiting();
+    try {
+      const result = await reportRequest('api/operations/preview', {mode:'trash', ids});
+      if (closed) return;
+      preview = result;
+      const amount = bytes(result.bytes);
+      state.status = result.items.length + ' 个文件' + (amount ? ' · '+amount : '') + '将移到系统回收站，可以恢复。';
+      state.rows = result.items.map(item => item.path);
+      state.canConfirm = Boolean(result.token);
+    } catch (error) {
+      if (!closed) {
+        state.status = error.message + '；所选文件已保留，处理原因后可重新检查。';
+        state.returning = state.retry = true;
+      }
+    } finally {
+      checking = false;
+      clearTimeout(previewTimer);
+      if (!closed) dialog.render();
+    }
+  }
+
+  const actions = {
+    close() { if (!state.running || existingJob) dialog.close(); },
+    retry: checkPreview,
+    async confirm() {
+      if (closed || state.running || !preview?.token) return;
+      const token = preview.token;
+      preview = null;
+      Object.assign(state, {running:true, canConfirm:false, rows:[], status:'正在提交…'});
+      dialog.render();
+      dialog.scrollToStart();
+      try {
+        const started = await reportRequest('api/operations/start', {token});
+        if (closed) return;
+        jobId = started.id;
+        state.stopAllowed = true;
+        await poll();
+      } catch (error) {
+        if (closed) return;
+        finish();
+        state.status = '启动结果未确认，请在整理工具中核对操作记录后再处理：' + error.message;
+        dialog.render();
+      }
+    },
+    async stop() {
+      if (closed || !jobId || !state.stopAllowed || state.stopLocked) return;
+      state.stopLocked = true;
+      dialog.render();
+      try {
+        await reportRequest('api/operations/stop', {id:jobId});
+        stopRequested = true;
+        state.status = '正在安全停止；当前文件核对或系统回收结束后停止。';
+      } catch (error) {
+        state.status = '停止请求未确认：' + error.message;
+        state.stopLocked = false;
+      }
+      if (!closed) dialog.render();
+    },
+    async resume() {
+      if (!state.canResume || state.resuming || closed) return;
+      state.resuming = true;
+      dialog.render();
+      await reportResumeTrash(jobId,onClose,text => {
+        state.status = text;
+      },() => dialog.close(),() => !closed);
+      if (!closed) { state.resuming = false; dialog.render(); }
+    },
+  };
+  const dialog = openReportDialog('trash', state, actions,
+    event => { if (state.running && !existingJob) event.preventDefault(); },
+    () => {
+      closed = true;
+      clearTimeout(timer);
+      clearTimeout(previewTimer);
+      if (typeof onClose === 'function') onClose();
+    });
+  if (existingJob) {
+    state.status = '正在读取处理记录，关闭窗口不会停止后台操作。';
+    dialog.render();
+    poll();
+  } else checkPreview();
 }
 function pageReportPairs(section,page=0){
   const pairs=[...section.querySelectorAll('.pair')],pages=Math.max(1,Math.ceil(pairs.length/10));page=Math.max(0,Math.min(page,pages-1));
@@ -93,45 +238,60 @@ function focusReportSection(){
   }
   if(section.id==='similar')pageReportPairs(section);
 }
-function reportActionOpen(action,ids,onClose,summary='',onReview){
-  if(action==='delete')return reportTrashOpen(ids,onClose,summary);
-  if(action!=='compare'||!Array.isArray(ids)||ids.length!==2||ids[0]===ids[1]||ids.some(id=>!/^[0-9a-f]{64}$/.test(id)))return;
-  const make=(tag,text)=>{const node=document.createElement(tag);if(text)node.textContent=text;return node;},dialog=make('dialog'),title=make('h2','对比照片'),status=make('p','正在读取照片…'),grid=make('div'),footer=make('div'),close=make('button','返回列表');
-  dialog.setAttribute('aria-label','对比照片');dialog.style.cssText='width:min(1100px,94vw);max-height:90vh;overflow-x:hidden;overflow-y:auto;overflow-wrap:anywhere;padding:24px;border:1px solid #d7d3e3;border-radius:16px;background:#fcfcfe;color:#272a36';grid.style.cssText='display:grid;grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr));gap:20px';
-  footer.style.cssText='display:flex;flex-wrap:wrap;gap:8px;margin-top:16px';close.style.cssText='padding:10px 16px';status.setAttribute('role','status');
-  let closed=false,handoff=false,saving=false;
-  const controls=[close];
-  close.onclick=()=>{if(!saving)dialog.close();};
-  dialog.addEventListener('cancel',event=>{if(saving)event.preventDefault();});
-  footer.append(close);dialog.append(title,status,grid,footer);dialog.addEventListener('close',()=>{closed=true;dialog.remove();reportOverlay(false);if(!handoff&&typeof onClose==='function')onClose();});document.body.append(dialog);dialog.showModal();reportOverlay(true);
-  Promise.all(['api/center','api/media'].map(async path=>{const response=await fetch(path),value=await response.json();if(!response.ok)throw Error(value.error||'读取失败');return value;})).then(([data,access])=>{
-    if(closed)return;const photos=data.items.filter(item=>item.kind==='photo').flatMap(item=>item.files.map(file=>({...file,preview:item.preview,metadata:item.metadata})));const chosen=ids.map(id=>photos.find(file=>file.id===id));if(chosen.some(file=>!file))throw Error('照片已不在当前清单，请刷新列表。');
-    status.textContent=(onReview?'并排核对后，可保存结论或选择要删除的照片。':'并排核对后选择要删除的照片。')+'相似不代表内容完全相同。';
-    for(const file of chosen){const card=make('section');card.append(make('h3',file.name));if(/^(previews|covers)\/[A-Za-z0-9_-]+\.png$/.test(file.preview||'')){const image=make('img');image.src=file.preview;image.alt=file.name;image.style.cssText='display:block;width:100%;height:45vh;object-fit:contain;background:#eeebf4';card.append(image);}else card.append(make('p','尚未生成图片预览'));
-      const path=make('p',file.path);path.style.cssText='overflow-wrap:anywhere;font-size:12px';card.append(path);const trash=make('button','删除这张…');trash.style.cssText='margin:8px 0;padding:10px 16px';trash.disabled=!access.available||data.restored||data.operation_state?.running||data.operation_state?.warnings?.length||access.ids_by_path[file.path]!==file.id;
-      trash.onclick=()=>{if(trash.disabled)return;handoff=true;dialog.close();reportTrashOpen([file.id],onClose);};controls.push(trash);card.append(trash);grid.append(card);
+function reportActionOpen(action, ids, onClose, summary='', onReview) {
+  if (action === 'delete') return reportTrashOpen(ids,onClose,summary);
+  if (action !== 'compare' || !Array.isArray(ids) || ids.length !== 2 || ids[0] === ids[1]
+    || ids.some(id => !/^[0-9a-f]{64}$/.test(id))) return;
+
+  let closed = false, handoff = false;
+  const state = {photos:[], review:typeof onReview === 'function', status:'正在读取照片…', saving:false};
+  const actions = {
+    close() { if (!state.saving) dialog.close(); },
+    trash(file) {
+      if (closed || state.saving || !file.canTrash) return;
+      handoff = true;
+      dialog.close();
+      reportTrashOpen([file.id],onClose);
+    },
+    async decide(decision) {
+      if (closed || state.saving || !state.review) return;
+      state.saving = true;
+      state.status = '正在保存核对结论…';
+      dialog.render();
+      try {
+        await onReview(decision, () => { handoff = true; dialog.close(); });
+        if (!handoff) state.status = '未能保存核对结论，请重试或返回列表刷新。';
+      } catch (error) {
+        state.status = error.message;
+      } finally {
+        state.saving = false;
+        if (!closed && !handoff) dialog.render();
+      }
+    },
+  };
+  const dialog = openReportDialog('compare', state, actions,
+    event => { if (state.saving) event.preventDefault(); },
+    () => { closed = true; if (!handoff && typeof onClose === 'function') onClose(); });
+  Promise.all([reportRequest('api/center'), reportRequest('api/media')]).then(([data, access]) => {
+    if (closed) return;
+    const photos = new Map();
+    for (const item of data.items) if (item.kind === 'photo') for (const file of item.files) {
+      if (ids.includes(file.id)) photos.set(file.id, {...file, preview:item.preview});
     }
-    if(onReview)for(const [decision,label]of [['not_similar','确认不相似'],['keep_both','相似，保留两张']]){
-      const control=make('button',label);control.style.cssText=close.style.cssText;
-      control.onclick=async()=>{
-        if(closed||saving)return;
-        saving=true;
-        const enabled=controls.filter(button=>!button.disabled);
-        for(const button of enabled)button.disabled=true;
-        status.textContent='正在保存核对结论…';
-        try{
-          await onReview(decision,()=>{handoff=true;dialog.close();});
-          if(!handoff)status.textContent='未能保存核对结论，请重试或返回列表刷新。';
-        }catch(error){
-          status.textContent=error.message;
-        }finally{
-          saving=false;
-          for(const button of enabled)button.disabled=false;
-        }
-      };
-      controls.push(control);footer.append(control);
-    }
-  }).catch(error=>{if(!closed)status.textContent=error.message;});
+    const chosen = ids.map(id => photos.get(id));
+    if (chosen.some(file => !file)) throw Error('照片已不在当前清单，请刷新列表。');
+    state.status = (state.review ? '并排核对后，可保存结论或选择要删除的照片。' : '并排核对后选择要删除的照片。')
+      + '相似不代表内容完全相同。';
+    state.photos = chosen.map(file => ({
+      ...file,
+      preview:/^(previews|covers)\/[A-Za-z0-9_-]+\.png$/.test(file.preview || '') ? file.preview : '',
+      canTrash:Boolean(access.available && !data.restored && !data.operation_state?.running && !data.operation_state?.warnings?.length
+        && access.ids_by_path[file.path] === file.id),
+    }));
+    dialog.render();
+  }).catch(error => {
+    if (!closed) { state.status = error.message; dialog.render(); }
+  });
 }
 async function addReportFileActions(){
   if(!document.querySelector('#duplicates')&&!document.querySelector('#similar'))return;

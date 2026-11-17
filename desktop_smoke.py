@@ -127,9 +127,12 @@ def run():
                 page = response.read()
                 assert b'function centerFilter' in page and b'@@MEDIA_CENTER@@' not in page
                 assert all(asset in page for asset in (b'mountCenterGallery', b'mountCenterReview', b'mountCenterDetail', b'mountCenterNavigation'))
-                assert b'media-detail' in page and b'manage-toggle' in page
+                assert b'media-detail' in page and b'manage-toggle' in page and b'mountReportDialog' in page
                 assert b'function centerReviewGroups' in page and b'compare-selected' in page
                 assert b'function centerFolderIds' in page and b'include-subfolders' in page and b'filter-year' in page
+            with urlopen(prefix + 'report.html', timeout=10) as response:
+                page = response.read()
+                assert b'mountReportClassification' in page and b'mountReportDialog' in page
             with urlopen(prefix + 'api/center', timeout=10) as response:
                 center = json.load(response)
                 feature = next(item for item in center['items'] if item['kind'] == 'movie')
@@ -271,7 +274,9 @@ def run():
             with urlopen(url + 'api/status', timeout=10) as response:
                 assert 'monitor' in json.load(response)
             with urlopen(url, timeout=10) as response:
-                assert '长期资料库'.encode('utf-8') in response.read()
+                page = response.read()
+                assert '长期资料库'.encode('utf-8') in page and b'@@DASHBOARD_UI@@' not in page
+                assert b'mountDashboardFolders' in page and b'mountDashboardCatalog' in page
         finally:
             server.shutdown()
             state.close()
