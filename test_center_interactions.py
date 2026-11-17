@@ -43,7 +43,7 @@ await $('collection-save').onsubmit({preventDefault(){}});assert($('collection-f
     def test_card_and_detail_share_pending_play_and_completion_releases_both(self):
         self.run_ui(r'''
 const card=$('center-content').children[0].children[0],cardPlay=card.children.find(n=>n.className==='card-actions').children.find(n=>n.textContent==='播放');let finish,count=0;const originalFetch=scope.fetch;scope.fetch=async(path,options)=>{if(path==='api/media/action'){count++;return new Promise(resolve=>finish=()=>resolve({ok:true,json:async()=>({})}));}return originalFetch(path,options);};
-const opening=cardPlay.onclick();card.children[0].onclick();const detailPlay=()=> $('detail-content').children[0].children[1].children.find(n=>n.className==='file').children.find(n=>n.className==='actions').children.find(n=>n.textContent==='播放');assert(detailPlay().disabled);await detailPlay().onclick();assert.equal(count,1);finish();await opening;assert(!detailPlay().disabled);assert(!cardPlay.disabled);assert.equal(operations.length,0);
+const opening=cardPlay.onclick();card.children[0].onclick();const detailPlay=()=> $('detail-content').children[0].children[1].children.find(n=>n.className==='file').children.find(n=>n.className==='actions').children.find(n=>n.textContent==='播放');assert(detailPlay().disabled);await detailPlay().onclick();assert.equal(count,1);finish();await opening;assert(!detailPlay().disabled);const currentCard=$('center-content').children[0].children[0];assert(!currentCard.children.find(n=>n.className==='card-actions').children.find(n=>n.textContent==='播放').disabled);assert.equal(operations.length,0);
 ''')
 
     def test_photo_detail_uses_full_width_controls_while_movie_keeps_poster_layout(self):

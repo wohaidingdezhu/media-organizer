@@ -515,15 +515,14 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None, pending
                 return
             with stream:
                 body = current_library_page() if route == "library.html" else None
-                if route == 'center.html':
-                    body = stream.read()
-                    with _open_report_file(Path(__file__).resolve().parent, ('media_center.js',)) as script:
-                        body = body.replace(b'@@MEDIA_CENTER@@', script.read())
-                if route in {'users.html', 'organize.html', 'photos.html'}:
+                if route in assets:
                     body = stream.read()
                     if b'@@ISSUE_LIST@@' in body:
                         with _open_report_file(page_dir, ('issue_list_bundle.js',)) as script:
                             body = body.replace(b'@@ISSUE_LIST@@', script.read())
+                if route == 'center.html':
+                    with _open_report_file(page_dir, ('media_center.js',)) as script:
+                        body = body.replace(b'@@MEDIA_CENTER@@', script.read())
                 if route in {'organize.html', 'photos.html'}:
                     if b'@@WALL_USERS@@' in body:
                         with _open_report_file(Path(__file__).resolve().parent, ('wall_users.js',)) as script:
