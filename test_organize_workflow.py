@@ -240,15 +240,16 @@ if(!JSON.stringify($('execution-items').children).includes('/skip/150'))throw Er
         node=shutil.which('node');self.assertIsNotNone(node)
         code=r'''
 const fs=require('fs'),vm=require('vm'),browse=require(process.argv[2]);
+const ui=require(process.argv[3]).createIssueListTest(value=>{csv=value;});
 class E{constructor(t,s){this.textContent=s||'';this.children=[];this.value='';this.attrs={};}append(...x){this.children.push(...x);}replaceChildren(...x){this.children=x;}setAttribute(k,v){this.attrs[k]=v;}getAttribute(k){return this.attrs[k];}click(){this.clicked=true;}}
-const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new E());return nodes.get(id);};let csv,action;
+const nodes=new Map(),$=id=>{const actual=ui.find(id);if(actual)return actual;if(!nodes.has(id))nodes.set(id,new E());return nodes.get(id);};let csv,action;
 const copies=Array.from({length:51},(_,i)=>({id:'copy'+i,path:'/src/'+i+'.jpg',target:'/copies/2026/10/file'+i+'.jpg',folder:'/copies/2026/10',name:'file'+i+'.jpg',kind:'照片',bytes:2,can_open:true}));
-const scope={...browse,$,make:(t,c,s)=>new E(t,s),saving:false,operating:false,selected:new Set(),mediaIds:{},picture(){},fileSize:String,render(){},error(m){throw Error(m);},Blob,URL:{createObjectURL(blob){csv=blob;return 'blob:generated';},revokeObjectURL(){}},setTimeout(f){f();},api:async(route,body)=>{if(route==='api/organized-results')return {items:copies,message:'success records'};if(route==='api/organized-results/action'){action=body;return {opened:true};}return {destination:'/copies',all_batches:true,revision:'saved'};}};
+const scope={...browse,$,mountIssueList:ui.mount,data:{items:[]},make:(t,c,s)=>new E(t,s),saving:false,operating:false,selected:new Set(),mediaIds:{},picture(){},fileSize:String,render(){},error(m){throw Error(m);},Blob,URL:{createObjectURL(blob){csv=blob;return 'blob:generated';},revokeObjectURL(){}},setTimeout(f){f();},api:async(route,body)=>{if(route==='api/organized-results')return {items:copies,message:'success records'};if(route==='api/organized-results/action'){action=body;return {opened:true};}return {destination:'/copies',all_batches:true,revision:'saved'};}};
 vm.createContext(scope);const source=fs.readFileSync(process.argv[1],'utf8');vm.runInContext(source.slice(source.indexOf('// Source-scoped preferences')),scope);
 (async()=>{await scope.refreshOrganizedResults();if(!$('organized-summary').textContent.includes('51 项'))throw Error('result count');$('organized-folders').children[0].onclick();$('organized-next').onclick();if(!JSON.stringify($('organized-items').children).includes('file50.jpg'))throw Error('result pagination');const button=$('organized-items').children[0].children.find(e=>e.textContent==='查看整理照片');await button.onclick();if(action.id!=='copy50'||action.action!=='open')throw Error('wrong copy action');$('organized-search').value='file10.jpg';$('organized-search').oninput();if(!$('organized-summary').textContent.includes('1 项'))throw Error('result search');
-const skipped=Array.from({length:151},(_,i)=>({path:i===150?'=unsafe':'/skip/'+i,reason:i%2?'缺少身份':'已暂缓'}));scope.updateQuickIssues({items:[],skipped});$('quick-issues-next').onclick();$('quick-issues-next').onclick();$('quick-issues-next').onclick();if(!JSON.stringify($('quick-issues-list').children).includes('=unsafe'))throw Error('issue pagination');$('quick-issues-search').value='=unsafe';$('quick-issues-search').oninput();if(!$('quick-issues-summary').textContent.includes('1/151'))throw Error('issue search');$('quick-issues-export').onclick();const body=await csv.text();if(!body.includes('/skip/0')||!body.includes("'=unsafe")||body.split('\r\n').length!==152)throw Error('complete safe CSV');})().catch(e=>{console.error(e);process.exitCode=1;});
+const skipped=Array.from({length:151},(_,i)=>({path:i===150?'=unsafe':'/skip/'+i,reason:i%2?'缺少身份':'已暂缓'}));scope.syncQuickIssueControls();scope.updateQuickIssues({items:[],skipped});await ui.click($('quick-issues-next'));await ui.click($('quick-issues-next'));await ui.click($('quick-issues-next'));if(!$('quick-issues-list').textContent.includes('=unsafe'))throw Error('issue pagination');await ui.change($('quick-issues-search'),'=unsafe');if(!$('quick-issues-summary').textContent.includes('1/151'))throw Error('issue search');await ui.click($('quick-issues-export'));const body=await csv.text();if(!body.includes('/skip/0')||!body.includes("'=unsafe")||body.split('\r\n').length!==152)throw Error('complete safe CSV');})().catch(e=>{console.error(e);process.exitCode=1;});
 '''
-        result=subprocess.run([node,'-e',code,str(Path(__file__).parent/'management.js'),str(Path(__file__).parent/'management_browse.js')],capture_output=True,text=True,encoding='utf-8',timeout=15)
+        result=subprocess.run([node,'-e',code,str(Path(__file__).parent/'management.js'),str(Path(__file__).parent/'management_browse.js'),str(Path(__file__).parent/'frontend/issue-list-test.cjs')],capture_output=True,text=True,encoding='utf-8',timeout=15)
         self.assertEqual(result.returncode,0,result.stderr)
 
     def test_copy_result_tree_starts_at_chosen_destination_and_links_are_refused(self):
@@ -315,97 +316,97 @@ const skipped=Array.from({length:151},(_,i)=>({path:i===150?'=unsafe':'/skip/'+i
         node=shutil.which('node');self.assertIsNotNone(node)
         code=r'''
 const fs=require('fs'),vm=require('vm'),browse=require(process.argv[2]);
+const ui=require(process.argv[3]).createIssueListTest(value=>{csv=value;});
 class E{constructor(t,s){this.textContent=s||'';this.children=[];this.value='';this.attrs={};}append(...x){this.children.push(...x);}replaceChildren(...x){this.children=x;}setAttribute(k,v){this.attrs[k]=v;}getAttribute(k){return this.attrs[k];}click(){}querySelectorAll(tag){return this.children.flatMap(e=>[...(e.type==='checkbox'&&tag==='input'?[e]:[]),...e.querySelectorAll(tag)]);}}
-const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new E());return nodes.get(id);};let csv,correction;
+const nodes=new Map(),$=id=>{const actual=ui.find(id);if(actual)return actual;if(!nodes.has(id))nodes.set(id,new E());return nodes.get(id);};let csv,correction;
 const media=Array.from({length:205},(_,i)=>({path:'/video/'+i+'.mp4',id:'v'+i,kind:'视频'}));media.push({path:'/photo/a.jpg',id:'photo',kind:'照片'});
-const scope={...browse,$,make:(t,c,s)=>new E(t,s),data:{items:media},saving:false,operating:false,executionPreview:{token:'old'},selected:new Set(['unrelated']),mediaIds:Object.fromEntries(media.map(item=>[item.path,item.id])),picture(){},fileSize:String,render(){},error(m){throw Error(m);},Blob,URL:{createObjectURL(b){csv=b;return 'blob:sample';},revokeObjectURL(){}},setTimeout(f){f();},api:async(route,body)=>{if(route==='api/organized-results')return {items:[],message:'records'};if(body?.action==='correct')correction=body;return {destination:'',all_batches:true,revision:'saved'};}};
+const scope={...browse,$,mountIssueList:ui.mount,make:(t,c,s)=>new E(t,s),data:{items:media},saving:false,operating:false,executionPreview:{token:'old'},selected:new Set(['unrelated']),mediaIds:Object.fromEntries(media.map(item=>[item.path,item.id])),picture(){},fileSize:String,render(){scope.syncQuickIssueControls();},error(m){throw Error(m);},Blob,URL:{createObjectURL(b){csv=b;return 'blob:sample';},revokeObjectURL(){}},setTimeout(f){f();},api:async(route,body)=>{if(route==='api/organized-results')return {items:[],message:'records'};if(body?.action==='correct')correction=body;return {destination:'',all_batches:true,revision:'saved'};}};
 vm.createContext(scope);const source=fs.readFileSync(process.argv[1],'utf8');vm.runInContext(source.slice(source.indexOf('// Source-scoped preferences')),scope);
 (async()=>{
 await scope.loadQuickSettings();
-scope.updateQuickIssues({skipped:[],items:[{path:'/named.jpg',relative:'照片/2021/05/待确认.jpg'},{path:'/named.mp4',relative:'电影/日韩/待确认片名/待确认.mp4'},{path:'/unknown.jpg',relative:'照片/待确认日期/a.jpg'},{path:'/unknown.mp4',relative:'电影/待确认地区/a/a.mp4'}]});
+scope.syncQuickIssueControls();scope.updateQuickIssues({skipped:[],items:[{path:'/named.jpg',relative:'照片/2021/05/待确认.jpg'},{path:'/named.mp4',relative:'电影/日韩/待确认片名/待确认.mp4'},{path:'/unknown.jpg',relative:'照片/待确认日期/a.jpg'},{path:'/unknown.mp4',relative:'电影/待确认地区/a/a.mp4'}]});
 if(!$('quick-issues-counts').textContent.includes('需处理 2 项'))throw Error('filename mistaken for classification uncertainty');
 const skipped=media.map(item=>({path:item.path,reason:'需要核对'}));
 skipped.push({path:'/attachment.nfo',reason:'附件待核对'},{path:'/handled.jpg',reason:'成功',category:'handled'},{path:'/held.jpg',reason:'暂缓',category:'held'});
 scope.mediaIds['/handled.jpg']='handled';scope.mediaIds['/held.jpg']='held';
-scope.updateQuickIssues({items:[],skipped});
-let filterCalls=0;const originalFilter=scope.filteredQuickIssues;scope.filteredQuickIssues=(...args)=>{filterCalls++;return originalFilter(...args);};scope.syncQuickIssueControls();if(filterCalls!==1)throw Error('control update repeated a full issue filter');scope.filteredQuickIssues=originalFilter;
+scope.syncQuickIssueControls();scope.updateQuickIssues({items:[],skipped});
 if(!$('quick-issues-counts').textContent.includes('需处理 207 项')||!$('quick-issues-counts').textContent.includes('已有成功记录 1 项'))throw Error('category counts');
 const issueList=$('quick-issues-list'),firstCheck=issueList.querySelectorAll('input')[0];
-firstCheck.checked=true;firstCheck.onchange();
-if(issueList.querySelectorAll('input')[0]!==firstCheck)throw Error('checkbox replaced, losing keyboard focus');
+firstCheck.focus();await ui.click(firstCheck);
+if(issueList.querySelectorAll('input')[0]!==firstCheck||firstCheck.ownerDocument.activeElement!==firstCheck)throw Error('checkbox replaced, losing keyboard focus');
 if(!$('quick-issues-summary').textContent.includes('已勾选 1 项')||$('quick-issues-clear').disabled)throw Error('manual selection not reflected');
-firstCheck.checked=false;firstCheck.onchange();
+await ui.click(firstCheck);
 if(!$('quick-issues-summary').textContent.includes('已勾选 0 项')||!$('quick-issues-clear').disabled)throw Error('manual deselection not reflected');
-$('quick-issues-select').onclick();if(!$('quick-issues-summary').textContent.includes('已勾选 200 项')||!$('quick-issues-selection-note').textContent.includes('还有 6 项'))throw Error('cross-page bounded selection');
-const beforeBusyPage=$('quick-issues-summary').textContent;scope.operating=true;scope.syncQuickIssueControls();if(!$('quick-issues-next').disabled)throw Error('pagination enabled during operation');$('quick-issues-next').onclick();if($('quick-issues-summary').textContent!==beforeBusyPage)throw Error('page changed during operation');scope.operating=false;scope.syncQuickIssueControls();if($('quick-issues-next').disabled)throw Error('pagination did not recover');
-for(let i=0;i<3;i++)$('quick-issues-next').onclick();if(!$('quick-issues-list').querySelectorAll('input').every(e=>e.checked))throw Error('later pages not selected');
-$('quick-issues-kind').value='照片';$('quick-issues-kind').onchange();if(!$('quick-issues-summary').textContent.includes('已勾选 0 项'))throw Error('hidden selection survived');
-$('quick-issues-select').onclick();if(!$('quick-issues-summary').textContent.includes('已勾选 1 项'))throw Error('photo filter');
-$('quick-issues-kind').value='视频';$('quick-issues-kind').onchange();$('quick-issues-search').value='/video/204.mp4';$('quick-issues-search').oninput();$('quick-issues-select').onclick();
+await ui.click($('quick-issues-select'));if(!$('quick-issues-summary').textContent.includes('已勾选 200 项')||!$('quick-issues-selection-note').textContent.includes('还有 6 项'))throw Error('cross-page bounded selection');
+const beforeBusyPage=$('quick-issues-summary').textContent;scope.operating=true;scope.syncQuickIssueControls();if(!$('quick-issues-next').disabled)throw Error('pagination enabled during operation');await ui.click($('quick-issues-next'));if($('quick-issues-summary').textContent!==beforeBusyPage)throw Error('page changed during operation');scope.operating=false;scope.syncQuickIssueControls();if($('quick-issues-next').disabled)throw Error('pagination did not recover');
+for(let i=0;i<3;i++)await ui.click($('quick-issues-next'));if(!Array.from($('quick-issues-list').querySelectorAll('input')).every(e=>e.checked))throw Error('later pages not selected');
+await ui.change($('quick-issues-kind'),'照片');if(!$('quick-issues-summary').textContent.includes('已勾选 0 项'))throw Error('hidden selection survived');
+await ui.click($('quick-issues-select'));if(!$('quick-issues-summary').textContent.includes('已勾选 1 项'))throw Error('photo filter');
+await ui.change($('quick-issues-kind'),'视频');await ui.change($('quick-issues-search'),'/video/204.mp4');await ui.click($('quick-issues-select'));
 $('quick-correction-field').value='region';$('quick-correction-field').onchange();$('quick-region').value='日韩';
 if($('quick-region').hidden||!$('quick-month').hidden||!$('quick-category').hidden)throw Error('irrelevant correction fields visible');
-scope.operating=true;scope.syncQuickIssueControls();if(!$('quick-issues-select').disabled||!$('quick-issues-kind').disabled||!$('quick-issues-list').querySelectorAll('input').every(e=>e.disabled))throw Error('busy controls enabled');
+scope.operating=true;scope.syncQuickIssueControls();if(!$('quick-issues-select').disabled||!$('quick-issues-kind').disabled||!Array.from($('quick-issues-list').querySelectorAll('input')).every(e=>e.disabled))throw Error('busy controls enabled');
 await $('quick-correct').onclick();if(correction)throw Error('busy correction submitted');scope.operating=false;
 await $('quick-correct').onclick();if(correction.ids.join()!=='v204'||correction.value!=='日韩'||scope.executionPreview!==null)throw Error('wrong correction or stale preview');
 if(!scope.selected.has('unrelated'))throw Error('main media selection changed');
-$('quick-issues-kind').value='';$('quick-issues-kind').onchange();$('quick-issues-search').value='';$('quick-issues-search').oninput();$('quick-issues-status').value='handled';$('quick-issues-status').onchange();
-if(!$('quick-issues-select').disabled||!$('quick-issues-list').querySelectorAll('input').every(e=>e.disabled))throw Error('completed records selectable');
-$('quick-issues-export').onclick();const body=await csv.text();if(body.split('\r\n').length!==210||!body.includes('已有成功记录')||!body.includes('/video/0.mp4'))throw Error('filtered export lost records');
+await ui.change($('quick-issues-kind'),'');await ui.change($('quick-issues-search'),'');await ui.change($('quick-issues-status'),'handled');
+if(!$('quick-issues-select').disabled||!Array.from($('quick-issues-list').querySelectorAll('input')).every(e=>e.disabled))throw Error('completed records selectable');
+await ui.click($('quick-issues-export'));const body=await csv.text();if(body.split('\r\n').length!==210||!body.includes('已有成功记录')||!body.includes('/video/0.mp4'))throw Error('filtered export lost records');
 const macPath='/generated/2024/Cafe\u0301/photo.jpg',windowsPath='\\\\NAS\\Share\\2024\\CAFÉ\\film.mp4';
-$('quick-issues-status').value='review';$('quick-issues-status').onchange();
+await ui.change($('quick-issues-status'),'review');
 scope.data.items.push({path:windowsPath,kind:'视频'});
 scope.mediaIds[windowsPath]='generated-video';
-scope.updateQuickIssues({items:[],skipped:[
+scope.syncQuickIssueControls();scope.updateQuickIssues({items:[],skipped:[
   {path:macPath,reason:'日期待确认'},
   {path:windowsPath,reason:'地区待确认'},
   {path:'C:\\Generated\\2023\\Café\\photo.jpg',reason:'日期待确认'}
 ]});
-$('quick-issues-search').value='待确认　2024  CAFÉ';$('quick-issues-search').oninput();
-const paths=issueList.children.map(row=>row.children[1]?.textContent);
+await ui.change($('quick-issues-search'),'待确认　2024  CAFÉ');
+const paths=Array.from(issueList.children).map(row=>row.children[1]?.textContent);
 if(paths.join('\n')!==[macPath,windowsPath].join('\n'))throw Error('keywords across path and reason missed Unicode-equivalent matches');
-$('quick-issues-reason').value='地区待确认';$('quick-issues-reason').onchange();
+await ui.change($('quick-issues-reason'),'地区待确认');
 if(issueList.children.length!==1||issueList.children[0].children[1].textContent!==windowsPath)throw Error('reason filter ignored during search');
-$('quick-issues-status').value='all';$('quick-issues-status').onchange();
-$('quick-issues-kind').value='视频';$('quick-issues-kind').onchange();
-$('quick-issues-reason').value='地区待确认';$('quick-issues-reason').onchange();
-$('quick-issues-select').onclick();
+await ui.change($('quick-issues-status'),'all');
+await ui.change($('quick-issues-kind'),'视频');
+await ui.change($('quick-issues-reason'),'地区待确认');
+await ui.click($('quick-issues-select'));
 if(!$('quick-issues-summary').textContent.includes('已勾选 1 项'))throw Error('generated item not selected');
-scope.updateQuickIssues({items:[],skipped:[{path:windowsPath,reason:'地区待确认'},{path:macPath,reason:'日期待确认'}]});
+scope.syncQuickIssueControls();scope.updateQuickIssues({items:[],skipped:[{path:windowsPath,reason:'地区待确认'},{path:macPath,reason:'日期待确认'}]});
 if($('quick-issues-status').value!=='all'||$('quick-issues-kind').value!=='视频'||$('quick-issues-search').value!=='待确认　2024  CAFÉ'||$('quick-issues-reason').value!=='地区待确认')throw Error('preview lost active filters');
 if(!$('quick-issues-summary').textContent.includes('已勾选 0 项')||issueList.children.length!==1||issueList.children[0].children[1].textContent!==windowsPath)throw Error('preview carried stale selection or ignored filters');
-scope.updateQuickIssues({items:[],skipped:[{path:windowsPath,reason:'地区仍待确认'}]});
+scope.syncQuickIssueControls();scope.updateQuickIssues({items:[],skipped:[{path:windowsPath,reason:'地区仍待确认'}]});
 if($('quick-issues-reason').value||issueList.children[0].children[1]?.textContent!==windowsPath)throw Error('obsolete reason blocked refreshed results');
-$('quick-issues-kind').value='';$('quick-issues-kind').onchange();
-$('quick-issues-search').value='';$('quick-issues-search').oninput();
+await ui.change($('quick-issues-kind'),'');
+await ui.change($('quick-issues-search'),'');
 const uncertain=[
   {path:'/generated/photo.jpg',relative:'照片/待确认日期/photo.jpg'},
   {path:'/generated/clip.mp4',relative:'家庭视频/待确认日期/clip.mp4'},
   {path:'/generated/film.mp4',relative:'电影/待确认地区/film/film.mp4'}
 ];
 scope.data.items.push(...uncertain.map((item,index)=>({path:item.path,kind:index?'视频':'照片'})));
-scope.updateQuickIssues({items:uncertain,skipped:[]});
+scope.syncQuickIssueControls();scope.updateQuickIssues({items:uncertain,skipped:[]});
 const reasonSelect=$('quick-issues-reason');
-if(reasonSelect.children.map(option=>option.value).join('|')!=='|待确认日期|待确认地区')throw Error('equivalent reasons split by file path');
-reasonSelect.value='待确认日期';reasonSelect.onchange();
-if(issueList.children.map(row=>row.children[1].textContent).join('|')!=='/generated/photo.jpg|/generated/clip.mp4')throw Error('date filter did not include photos and home videos');
-$('quick-issues-kind').value='视频';$('quick-issues-kind').onchange();
+if(Array.from(reasonSelect.children).map(option=>option.value).join('|')!=='|待确认日期|待确认地区')throw Error('equivalent reasons split by file path');
+await ui.change(reasonSelect,'待确认日期');
+if(Array.from(issueList.children).map(row=>row.children[1].textContent).join('|')!=='/generated/photo.jpg|/generated/clip.mp4')throw Error('date filter did not include photos and home videos');
+await ui.change($('quick-issues-kind'),'视频');
 if(reasonSelect.value!=='待确认日期'||issueList.children.length!==1||issueList.children[0].children[1].textContent!=='/generated/clip.mp4')throw Error('media filter discarded an applicable reason');
-reasonSelect.value='待确认地区';reasonSelect.onchange();
-$('quick-issues-kind').value='照片';$('quick-issues-kind').onchange();
+await ui.change(reasonSelect,'待确认地区');
+await ui.change($('quick-issues-kind'),'照片');
 if(reasonSelect.value||issueList.children[0].children[1]?.textContent!=='/generated/photo.jpg')throw Error('inapplicable reason blocked photo results');
-$('quick-issues-kind').value='视频';$('quick-issues-kind').onchange();
-reasonSelect.value='待确认日期';reasonSelect.onchange();
-$('quick-issues-status').value='review';$('quick-issues-status').onchange();
+await ui.change($('quick-issues-kind'),'视频');
+await ui.change(reasonSelect,'待确认日期');
+await ui.change($('quick-issues-status'),'review');
 if(reasonSelect.value!=='待确认日期')throw Error('status filter discarded an applicable reason');
-$('quick-issues-search').value='家庭视频';$('quick-issues-search').oninput();
+await ui.change($('quick-issues-search'),'家庭视频');
 if(issueList.children.length!==1||issueList.children[0].children[1].textContent!=='/generated/clip.mp4')throw Error('search lost suggested path detail');
-scope.updateQuickIssues({items:[{...uncertain[1],relative:'家庭视频/待确认日期/new/clip.mp4'}],skipped:[]});
+scope.syncQuickIssueControls();scope.updateQuickIssues({items:[{...uncertain[1],relative:'家庭视频/待确认日期/new/clip.mp4'}],skipped:[]});
 if(reasonSelect.value!=='待确认日期'||issueList.children[0].children[1]?.textContent!=='/generated/clip.mp4')throw Error('renamed destination reset the reason filter');
-$('quick-issues-export').onclick();
+await ui.click($('quick-issues-export'));
 if(!(await csv.text()).includes('家庭视频/待确认日期/new/clip.mp4'))throw Error('export lost detailed reason');
 })().catch(e=>{console.error(e);process.exitCode=1;});
 '''
-        result=subprocess.run([node,'-e',code,str(Path(__file__).parent/'management.js'),str(Path(__file__).parent/'management_browse.js')],capture_output=True,text=True,encoding='utf-8',timeout=15)
+        result=subprocess.run([node,'-e',code,str(Path(__file__).parent/'management.js'),str(Path(__file__).parent/'management_browse.js'),str(Path(__file__).parent/'frontend/issue-list-test.cjs')],capture_output=True,text=True,encoding='utf-8',timeout=15)
         self.assertEqual(result.returncode,0,result.stderr)
 
 
