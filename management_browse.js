@@ -56,32 +56,7 @@ function managementFolderRows(nodes, active, mode, query='', order='name') {
   const byName=(a,b)=>a.name.localeCompare(b.name,'zh-CN',{numeric:true})||a.path.localeCompare(b.path,'zh-CN',{numeric:true})||(a.key<b.key?-1:a.key>b.key?1:0);
   return rows.sort((a,b)=>(order==='size'?b.bytes-a.bytes:order==='count'?b.count-a.count:0)||byName(a,b));
 }
-function createManagementFolderBrowser({host,items,locked,changed,selectable,select,formatSize}) {
-  const make=(tag,text)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=text;return node;};
-  let mode='source',key='',descendants=true,folderPage=0,nodes=new Map(),active=null,prepared=false;
-  const locations=new Map(),folderSearch=make('input'),folderSort=make('select');folderSearch.type='search';folderSearch.placeholder='搜索当前目录下的文件夹名称或路径…';folderSearch.setAttribute('aria-label','搜索文件夹');folderSort.setAttribute('aria-label','文件夹排序');
-  for(const [value,text] of [['name','文件夹名称顺序'],['size','文件夹逻辑大小从大到小'],['count','媒体数量从多到少']]){const option=make('option',text);option.value=value;folderSort.append(option);}folderSort.value='name';
-  const title=make('h2','文件夹管理'),controls=make('div'),modeSelect=make('select'),within=make('input'),withinLabel=make('label',' 包含子文件夹'),top=make('button','全部文件夹'),up=make('button','返回上级'),pick=make('button','勾选目录内筛选结果'),summary=make('p'),cards=make('div'),pager=make('div'),previous=make('button','上一页文件夹'),next=make('button','下一页文件夹'),position=make('span');
-  controls.className='manage-controls';cards.className='folder-grid';pager.className='pager';summary.setAttribute('role','status');modeSelect.setAttribute('aria-label','文件夹浏览目录');within.type='checkbox';within.checked=true;within.setAttribute('aria-label','包含子文件夹');withinLabel.prepend(within);
-  for(const [value,text] of [['source','磁盘原有文件夹'],['target','整理分类目录（计划）']]){const option=make('option',text);option.value=value;modeSelect.append(option);}
-  controls.append(modeSelect,withinLabel,top,up,pick,folderSearch,folderSort);pager.append(previous,position,next);const help=make('details');help.className='folder-help';help.append(make('summary','目录说明'),make('p','这里只显示已扫描的媒体目录。点击文件夹进入，下方显示照片和电影。目录搜索不改变文件勾选；分类目录是整理建议，原文件位置不变。'));host.append(title,help,controls,summary,cards,pager);
-  const navigate=value=>{if(locked())return;key=value;folderPage=0;folderSearch.value='';changed();};
-  modeSelect.onchange=()=>{if(locked())return;locations.set(mode,{key,descendants,folderPage,query:folderSearch.value,order:folderSort.value});mode=modeSelect.value;const last=locations.get(mode);key=last?.key||'';descendants=last?.descendants??true;folderPage=last?.folderPage||0;folderSearch.value=last?.query||'';folderSort.value=last?.order||'name';within.checked=descendants;changed();};within.onchange=()=>{if(locked())return;descendants=within.checked;changed();};top.onclick=()=>navigate('');up.onclick=()=>navigate(active?.parent||'');
-  folderSearch.oninput=()=>{if(locked())return;folderPage=0;render();};folderSort.onchange=()=>{if(locked())return;folderPage=0;render();};
-  previous.onclick=()=>{if(locked())return;folderPage=Math.max(0,folderPage-1);render();};next.onclick=()=>{if(locked())return;folderPage++;render();};pick.onclick=()=>{if(locked())return;const chosen=selectable();if(!chosen.length||chosen.length>200)return;select(chosen);};
-  function prepare(){nodes=managementFolderTree(items(),mode);active=nodes.get(key)||nodes.get('');key=active.key;prepared=true;}
-  function render(){if(!prepared)prepare();prepared=false;
-    const rows=managementFolderRows(nodes,active,mode,folderSearch.value,folderSort.value),searching=!!folderSearch.value.trim();
-    const pages=Math.max(1,Math.ceil(rows.length/30));folderPage=Math.min(folderPage,pages-1);cards.replaceChildren();
-    summary.textContent=(key?active.path||active.name:'全部文件夹')+` · 照片 ${active.photos} · 视频 ${active.videos} · ${formatSize(active.bytes)}（含子目录） · 当前目录直接存放 ${active.direct} 项`;
-    for(const node of rows.slice(folderPage*30,folderPage*30+30)){const button=make('button');button.className='folder-card';button.setAttribute('aria-label','进入文件夹 '+node.path);button.append(make('strong','📁 '+node.name),make('span',node.path),make('span',`照片 ${node.photos} · 视频 ${node.videos} · ${formatSize(node.bytes)} · 子目录 ${node.children.length}`));button.disabled=locked();button.onclick=()=>navigate(node.key);cards.append(button);}
-    if(!rows.length)cards.append(make('p',searching?'没有匹配的文件夹，可清空目录搜索或返回上级。':key?'此目录没有已扫描媒体子目录，媒体内容在下方。':'没有符合媒体类型的已扫描目录。'));
-    const chosen=selectable();pick.disabled=locked()||!chosen.length||chosen.length>200;pick.textContent=chosen.length>200?'筛选结果超过 200 项，请缩小范围':`勾选目录内筛选结果（${chosen.length} 项）`;
-    up.disabled=locked()||!key;top.disabled=locked()||(!key&&!searching);modeSelect.disabled=folderSearch.disabled=folderSort.disabled=locked();within.disabled=locked()||!key;previous.disabled=locked()||folderPage===0;next.disabled=locked()||folderPage>=pages-1;position.textContent=`${searching?'匹配目录（含下级）':'子目录'} ${rows.length} 个 · 第 ${folderPage+1}/${pages} 页`;
-  }
-  return {prepare,render,matches:item=>managementFolderContains(item,active,mode,descendants),reset(){key='';folderPage=0;active=null;prepared=false;descendants=true;within.checked=true;folderSearch.value='';folderSort.value='name';locations.clear();},};
-}
-if(typeof module!=='undefined'&&module.exports)Object.assign(module.exports,{managementFolderParts,managementFolderTree,managementFolderContains,managementFolderRows,createManagementFolderBrowser});
+if(typeof module!=='undefined'&&module.exports)Object.assign(module.exports,{managementFolderParts,managementFolderTree,managementFolderContains,managementFolderRows});
 
 // Successful copy records only; filtering never reads the destination disk.
 function organizedResultView(items, {key='',kind='',query='',order='name',descendants=true}={}) {

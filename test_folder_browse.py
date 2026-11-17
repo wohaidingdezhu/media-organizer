@@ -46,26 +46,41 @@ assert.equal(b.managementFolderTree([],'source').get('').count,0);const unknown=
 
     def ui(self):
         return self.fixture()+r"""
-class Element{constructor(tag){this.tag=tag;this.children=[];this.textContent='';this.value='';this.attributes={};}append(...nodes){this.children.push(...nodes);}prepend(...nodes){this.children.unshift(...nodes);}replaceChildren(...nodes){this.children=nodes;}setAttribute(k,v){this.attributes[k]=v;}}
-global.document={createElement:tag=>new Element(tag)};
-const host=new Element('section');let busy=false,chosen=[],changes=0,visible=items;
-const browser=b.createManagementFolderBrowser({host,items:()=>items,locked:()=>busy,changed(){changes++;browser.render();visible=items.filter(item=>browser.matches(item));browser.render();},selectable:()=>visible,select:files=>chosen=files.map(i=>i.id),formatSize:n=>n+' B'});
-const controls=host.children[2],mode=controls.children[0],within=controls.children[1].children[0],top=controls.children[2],up=controls.children[3],pick=controls.children[4],summary=host.children[3],cards=host.children[4],pager=host.children[5];browser.render();
+const fs=require('node:fs'),path=require('node:path'),root=path.dirname(process.argv[1]);
+const {JSDOM}=require(require.resolve('jsdom',{paths:[root]}));
+const dom=new JSDOM('<section id="folders"></section>',{runScripts:'outside-only'});
+const {window}=dom,host=window.document.getElementById('folders');
+window.eval(fs.readFileSync(path.join(root,'issue_list_bundle.js'),'utf8'));
+let busy=false,chosen=[],changes=0,visible=items;
+const browser=window.createManagementFolderBrowser({host,items:()=>items,locked:()=>busy,
+  changed(){changes++;browser.prepare();visible=items.filter(item=>browser.matches(item));browser.render();},
+  selectable:()=>visible,select:files=>chosen=files.map(i=>i.id),formatSize:n=>n+' B'});
+browser.render();
+const controls=host.children[2],mode=controls.children[0],within=controls.children[1].children[0],
+  top=controls.children[2],up=controls.children[3],pick=controls.children[4],summary=host.children[3],
+  cards=host.children[4],pager=host.children[5];
+function change(element,value){
+  if(element.disabled)return;
+  const input=element.tagName==='INPUT',prototype=input?window.HTMLInputElement.prototype:window.HTMLSelectElement.prototype;
+  Object.getOwnPropertyDescriptor(prototype,'value').set.call(element,value);
+  element.dispatchEvent(new window.Event(input?'input':'change',{bubbles:true}));
+}
+
 """
 
     def test_real_interface_enters_folder_navigates_back_switches_mode_and_only_selects_visible_media(self):
         self.node(self.ui()+r"""
-assert.equal(cards.children.length,1);assert(cards.children[0].attributes['aria-label'].includes('/samples'));cards.children[0].onclick();assert.equal(cards.children.length,2);cards.children.find(n=>n.children[0].textContent.includes('photos')).onclick();cards.children[0].onclick();assert.deepEqual(visible.map(i=>i.id),['a','c']);assert(summary.textContent.includes('/samples/photos/旅行'));pick.onclick();assert.deepEqual(chosen,['a','c']);within.checked=false;within.onchange();assert.deepEqual(visible.map(i=>i.id),['a']);up.onclick();assert(summary.textContent.includes('/samples/photos'));top.onclick();assert(top.disabled);mode.value='target';mode.onchange();assert.equal(cards.children[0].children[0].textContent,'📁 用户');cards.children[0].onclick();cards.children.find(n=>n.children[0].textContent.includes('张三')).onclick();within.checked=true;within.onchange();assert.deepEqual(visible.map(i=>i.id),['a','b']);assert.equal(items[0].source_folder,'/samples/photos/旅行');assert(changes>0);within.checked=false;within.onchange();browser.reset();browser.render();assert(within.checked);
+assert.equal(cards.children.length,1);assert(cards.children[0].getAttribute('aria-label').includes('/samples'));cards.children[0].click();assert.equal(cards.children.length,2);[...cards.children].find(n=>n.children[0].textContent.includes('photos')).click();cards.children[0].click();assert.deepEqual(visible.map(i=>i.id),['a','c']);assert(summary.textContent.includes('/samples/photos/旅行'));pick.click();assert.deepEqual(chosen,['a','c']);within.click();assert.deepEqual(visible.map(i=>i.id),['a']);up.click();assert(summary.textContent.includes('/samples/photos'));top.click();assert(top.disabled);change(mode,'target');assert.equal(cards.children[0].children[0].textContent,'📁 用户');cards.children[0].click();[...cards.children].find(n=>n.children[0].textContent.includes('张三')).click();assert(within.checked);assert.deepEqual(visible.map(i=>i.id),['a','b']);assert.equal(items[0].source_folder,'/samples/photos/旅行');assert(changes>0);within.click();browser.reset();browser.render();assert(within.checked);
 """)
 
     def test_navigation_and_selection_blocked_when_busy_limit_refuses_partial_selection(self):
         self.node(self.ui()+r"""
-busy=true;browser.render();const before=changes;cards.children[0].onclick();pick.onclick();assert.equal(changes,before);assert.deepEqual(chosen,[]);assert(pick.disabled);assert(mode.disabled);busy=false;visible=Array.from({length:201},(_,n)=>({id:String(n)}));browser.render();assert(pick.disabled);pick.onclick();assert.deepEqual(chosen,[]);visible=[];browser.render();assert(pick.disabled);pick.onclick();assert.deepEqual(chosen,[]);
+busy=true;browser.render();const before=changes;cards.children[0].click();pick.click();assert.equal(changes,before);assert.deepEqual(chosen,[]);assert(pick.disabled);assert(mode.disabled);busy=false;visible=Array.from({length:201},(_,n)=>({id:String(n)}));browser.render();assert(pick.disabled);pick.click();assert.deepEqual(chosen,[]);visible=[];browser.render();assert(pick.disabled);pick.click();assert.deepEqual(chosen,[]);
 """)
 
     def test_folders_are_paginated_and_disappearing_plan_folder_resets_view(self):
         self.node(self.ui()+r"""
-items.splice(0,items.length,...Array.from({length:65},(_,n)=>({id:String(n),source_folder:'/samples/album'+n,suggested_path:'用户/张三/照片/a'+n+'.jpg',bytes:1,kind:'照片'})));browser.reset();browser.render();assert.equal(cards.children.length,1);cards.children[0].onclick();assert.equal(cards.children.length,30);pager.children[2].onclick();assert.equal(cards.children.length,30);pager.children[2].onclick();assert.equal(cards.children.length,5);assert(pager.children[2].disabled);cards.children[0].onclick();items.splice(0,items.length);browser.render();assert(top.disabled);assert.equal(cards.children.length,1);assert(cards.children[0].textContent.includes('没有符合'));
+items.splice(0,items.length,...Array.from({length:65},(_,n)=>({id:String(n),source_folder:'/samples/album'+n,suggested_path:'用户/张三/照片/a'+n+'.jpg',bytes:1,kind:'照片'})));browser.reset();browser.render();assert.equal(cards.children.length,1);cards.children[0].click();assert.equal(cards.children.length,30);pager.children[2].click();assert.equal(cards.children.length,30);pager.children[2].click();assert.equal(cards.children.length,5);assert(pager.children[2].disabled);cards.children[0].click();items.splice(0,items.length);browser.render();assert(top.disabled);assert.equal(cards.children.length,1);assert(cards.children[0].textContent.includes('没有符合'));
 """)
 
     def test_directory_search_finds_nested_paths_without_matching_sibling_prefix(self):
@@ -89,20 +104,20 @@ const records=[{source_folder:'/samples/album10',bytes:4},{source_folder:'/sampl
 
     def test_directory_search_and_sort_only_change_cards_then_click_enters_chosen_folder(self):
         self.node(self.ui()+r"""
-const search=controls.children[5],sort=controls.children[6],before=changes;chosen=['b'];search.value='day2';search.oninput();assert.equal(changes,before);assert.deepEqual(chosen,['b']);assert.equal(cards.children.length,1);assert(summary.textContent.includes('全部文件夹'));assert(pager.children[1].textContent.includes('匹配目录'));sort.value='size';sort.onchange();assert.equal(changes,before);assert.deepEqual(chosen,['b']);cards.children[0].onclick();assert.equal(search.value,'');assert.deepEqual(visible.map(i=>i.id),['c']);assert(summary.textContent.includes('/samples/photos/旅行/day2'));assert.equal(sort.value,'size');search.value='missing';search.oninput();assert(cards.children[0].textContent.includes('没有匹配'));assert.deepEqual(visible.map(i=>i.id),['c']);
+const search=controls.children[5],sort=controls.children[6],before=changes;chosen=['b'];change(search,'day2');assert.equal(changes,before);assert.deepEqual(chosen,['b']);assert.equal(cards.children.length,1);assert(summary.textContent.includes('全部文件夹'));assert(pager.children[1].textContent.includes('匹配目录'));change(sort,'size');assert.equal(changes,before);assert.deepEqual(chosen,['b']);cards.children[0].click();assert.equal(search.value,'');assert.deepEqual(visible.map(i=>i.id),['c']);assert(summary.textContent.includes('/samples/photos/旅行/day2'));assert.equal(sort.value,'size');change(search,'missing');assert(cards.children[0].textContent.includes('没有匹配'));assert.deepEqual(visible.map(i=>i.id),['c']);
 """)
 
     def test_source_and_target_modes_remember_independent_locations_and_search_settings(self):
         self.node(self.ui()+r"""
-const search=controls.children[5],sort=controls.children[6];search.value='day2';search.oninput();cards.children[0].onclick();within.checked=false;within.onchange();sort.value='size';sort.onchange();mode.value='target';mode.onchange();cards.children[0].onclick();cards.children.find(n=>n.children[0].textContent.includes('张三')).onclick();search.value='照片';search.oninput();mode.value='source';mode.onchange();assert(summary.textContent.includes('/samples/photos/旅行/day2'));assert.equal(within.checked,false);assert.equal(sort.value,'size');assert.equal(search.value,'');mode.value='target';mode.onchange();assert(summary.textContent.startsWith('用户/张三'));assert.equal(search.value,'照片');assert.equal(sort.value,'name');assert.equal(within.checked,true);browser.reset();browser.render();mode.value='source';mode.onchange();assert(top.disabled);assert.equal(search.value,'');assert.equal(sort.value,'name');assert(within.checked);
+const search=controls.children[5],sort=controls.children[6];change(search,'day2');cards.children[0].click();within.click();change(sort,'size');change(mode,'target');cards.children[0].click();[...cards.children].find(n=>n.children[0].textContent.includes('张三')).click();change(search,'照片');change(mode,'source');assert(summary.textContent.includes('/samples/photos/旅行/day2'));assert.equal(within.checked,false);assert.equal(sort.value,'size');assert.equal(search.value,'');change(mode,'target');assert(summary.textContent.startsWith('用户/张三'));assert.equal(search.value,'照片');assert.equal(sort.value,'name');assert.equal(within.checked,true);browser.reset();browser.render();change(mode,'source');assert(top.disabled);assert.equal(search.value,'');assert.equal(sort.value,'name');assert(within.checked);
 """)
 
     def test_remembered_folder_removed_from_plan_falls_back_and_busy_controls_do_nothing(self):
         self.node(self.ui()+r"""
-const search=controls.children[5],sort=controls.children[6];cards.children[0].onclick();cards.children.find(n=>n.children[0].textContent.includes('photos')).onclick();mode.value='target';mode.onchange();items.splice(0,items.length);mode.value='source';mode.onchange();assert(top.disabled);assert(summary.textContent.includes('全部文件夹'));busy=true;browser.render();const before=changes;search.value='x';search.oninput();sort.value='count';sort.onchange();mode.value='target';mode.onchange();within.checked=false;within.onchange();pager.children[2].onclick();assert.equal(changes,before);assert(search.disabled);assert(sort.disabled);assert(mode.disabled);
+const search=controls.children[5],sort=controls.children[6];cards.children[0].click();[...cards.children].find(n=>n.children[0].textContent.includes('photos')).click();change(mode,'target');items.splice(0,items.length);change(mode,'source');assert(top.disabled);assert(summary.textContent.includes('全部文件夹'));busy=true;browser.render();const before=changes;change(search,'x');change(sort,'count');change(mode,'target');within.click();pager.children[2].click();assert.equal(changes,before);assert(search.disabled);assert(sort.disabled);assert(mode.disabled);
 """)
 
     def test_directory_search_pagination_does_not_truncate_nested_results_and_enter_resets_page(self):
         self.node(self.ui()+r"""
-const search=controls.children[5];items.splice(0,items.length,...Array.from({length:65},(_,n)=>({id:String(n),kind:'照片',source_folder:'/samples/album'+n,bytes:1})));search.value='album';search.oninput();assert.equal(cards.children.length,30);assert(pager.children[1].textContent.includes('65'));pager.children[2].onclick();pager.children[2].onclick();assert.equal(cards.children.length,5);mode.value='target';mode.onchange();mode.value='source';mode.onchange();assert.equal(cards.children.length,5);assert.equal(search.value,'album');assert(pager.children[1].textContent.includes('第 3/3 页'));cards.children[0].onclick();assert.equal(search.value,'');assert(pager.children[1].textContent.includes('第 1/1 页'));
+const search=controls.children[5];items.splice(0,items.length,...Array.from({length:65},(_,n)=>({id:String(n),kind:'照片',source_folder:'/samples/album'+n,bytes:1})));browser.render();change(search,'album');assert.equal(cards.children.length,30);assert(pager.children[1].textContent.includes('65'));pager.children[2].click();pager.children[2].click();assert.equal(cards.children.length,5);change(mode,'target');change(mode,'source');assert.equal(cards.children.length,5);assert.equal(search.value,'album');assert(pager.children[1].textContent.includes('第 3/3 页'));cards.children[0].click();assert.equal(search.value,'');assert(pager.children[1].textContent.includes('第 1/1 页'));
 """)

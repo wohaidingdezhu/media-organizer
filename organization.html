@@ -95,7 +95,7 @@ let incomingUserPlan=location.hash.startsWith('#user-plan=')?location.hash.slice
 @@ISSUE_LIST@@
 const make=(tag,cls,text)=>{const el=document.createElement(tag);if(cls)el.className=cls;if(text!==undefined)el.textContent=text;return el;};
 const wallUsers=createWallUsers({host:$('wall-user-controls'),selectedPaths:()=>data?data.items.filter(item=>selected.has(item.id)).map(item=>item.path):[],locked:()=>saving||operating,changed:reset=>{if(reset)page=0;render();}});
-const folderBrowser=createManagementFolderBrowser({host:$('folder-browser'),items:()=>data?data.items.filter(item=>!$('kind').value||item.kind===$('kind').value):[],locked:()=>saving,changed:()=>{selected.clear();page=0;for(const id of ['search','state','risk','folder','photo-month','source-folder'])$(id).value='';wallUsers.reset();render();},selectable:()=>operating?[]:visible.filter(item=>mediaIds[item.path]===item.id&&!handledTrash.has(item.path)),select:items=>{if(saving||operating)return;selected=new Set(items.map(item=>item.id));$('risk').value='selected';$('notice').textContent=`已勾选目录内 ${items.length} 项筛选结果；仅勾选媒体，不处理整个文件夹。请核对分类计划，再预览确认。`;render();},formatSize:fileSize});
+const folderBrowser=createManagementFolderBrowser({host:$('folder-browser'),compact:location.pathname.endsWith('/photos.html')&&!incomingReview&&location.hash!=='#duplicates',items:()=>data?data.items.filter(item=>!$('kind').value||item.kind===$('kind').value):[],locked:()=>saving,changed:()=>{selected.clear();page=0;for(const id of ['search','state','risk','folder','photo-month','source-folder'])$(id).value='';wallUsers.reset();render();},selectable:()=>operating?[]:visible.filter(item=>mediaIds[item.path]===item.id&&!handledTrash.has(item.path)),select:items=>{if(saving||operating)return;selected=new Set(items.map(item=>item.id));$('risk').value='selected';$('notice').textContent=`已勾选目录内 ${items.length} 项筛选结果；仅勾选媒体，不处理整个文件夹。请核对分类计划，再预览确认。`;render();},formatSize:fileSize});
 const folderOf=item=>{if(!item.selectable)return '需核对的分类位置';const pos=item.suggested_path.lastIndexOf('/');return pos>=0?item.suggested_path.slice(0,pos):'根目录';};
 function error(message){$('error').textContent=message||'';$('error').hidden=!message;}
 function editorError(message){$('editor-error').textContent=message||'';$('editor-error').hidden=!message;}
@@ -184,7 +184,6 @@ function setupSimpleWorkspace(){
   workspace.prepend(quickPanel);workspace.append(advanced);
   const options=make('details','browse-options'),optionsSummary=make('summary','','筛选与排序'),fields=make('div','manage-controls');options.id='browse-options';optionsSummary.id='browse-options-summary';
   fields.append($('sort'),$('photo-month'),$('source-folder'));options.append(optionsSummary,fields);$('browse-controls').append(options);$('selection-toolbar').append($('compare'));
-  if(location.pathname.endsWith('/photos.html')){const folders=make('details');folders.id='photo-folders';folders.append(make('summary','','按文件夹浏览'),...$('folder-browser').children);$('folder-browser').replaceChildren(folders);}
   const hints=make('details','preview-hint');hints.append(make('summary','','预览说明'));
   for(const hint of [...workspace.children].filter(child=>child.classList.contains('preview-hint')))hints.append(hint);
   advanced.append(hints);
