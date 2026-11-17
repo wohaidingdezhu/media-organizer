@@ -158,6 +158,9 @@ def run():
                 assert '搜索文件夹'.encode('utf-8') in page and '文件夹排序'.encode('utf-8') in page
                 assert '批量调整分类目录'.encode('utf-8') in page
                 assert b'function createWallUsers' in page and b'@@WALL_USERS@@' not in page
+            with urlopen(prefix + 'users.html', timeout=10) as response:
+                page = response.read()
+                assert b'mountUserWorkspace' in page and b'@@ISSUE_LIST@@' not in page
             with urlopen(library_url, timeout=10) as response:
                 page = response.read()
                 assert b'function createWallUsers' in page and b'movieUsers.matches' in page

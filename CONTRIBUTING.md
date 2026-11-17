@@ -16,7 +16,7 @@
 | 影片及附件整组复制 | `movie_bundle.py` / `file_operations.py` | 仅扩展明确预览的复制，不扩展清理；附件沿用身份核对、无覆盖、完整副本校验、锁、日志和安全停止 |
 | 附件完整性核对 | `movie_attachments.py` | 只读报告；影片详情、封面关联与整组复制共用规则，不读取个人原片来检查 |
 | 整理浏览排序 | `management_browse.js` | 只读报告排序与连续照片序列，不访问原媒体 |
-| 整理检查清单 | `frontend/issue-list.jsx` 和 `frontend/issue-model.js` | React 组件负责筛选、分页与勾选，经现有整理接口交给后端保存 |
+| React 界面 | `frontend/` | 整理检查清单、媒体行与照片卡片、精确重复分组、空间统计、用户名分类。组件渲染状态，原有 API 负责文件校验和操作 |
 | 用户名分类 | `media_users.py` / `media_users.js` / `wall_users.js` | 共用用户名管理、墙面筛选与归属；日期模板沿用扫描日期，同名后缀不表示内容重复；资料写入走私有文件和跨进程锁，分类计划保留预览确认 |
 | 媒体中心 | `media_center.py` / `media_center.html` / `media_center.js` | 统一卡片和详情，默认浏览；收藏、标签、合集只写私有应用资料，真实文件操作继续复用原有安全接口 |
 | 页面交互 | 共用 HTML/JS | 使用通用文件管理器与清理术语，支持两平台路径显示 |

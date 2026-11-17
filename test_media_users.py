@@ -421,10 +421,10 @@ class MediaUserTests(unittest.TestCase):
         self.assertIn('200',request(server,prefix+'api/users','POST',payload,origin=origin)[0])
         headers,body=request(server,prefix+'users.html')
         self.assertIn('200',headers)
-        self.assertNotIn(b'@@MEDIA_USERS@@',body)
-        self.assertIn(b'function filteredUserItems',body)
-        self.assertIn('确认删除用户名'.encode(),body)
-        self.node("new(require('vm').Script)(JSON.parse(require('fs').readFileSync(0,'utf8')));",body.decode().split('<script>')[1].split('</script>')[0])
+        self.assertNotIn(b'@@ISSUE_LIST@@',body)
+        self.assertIn(b'mountUserWorkspace',body)
+        self.assertIn(b'id="user-workspace"',body)
+        self.node("new(require('vm').Script)(JSON.parse(require('fs').readFileSync(0,'utf8')));",body.decode().partition('<script>')[2].partition('</script>')[0])
         self.unchanged()
 
     def test_mutations_respect_existing_operation_mutex(self):
@@ -459,25 +459,15 @@ class MediaUserTests(unittest.TestCase):
         self.unchanged()
 
     def node(self, code, value=None):
-        result=subprocess.run(['node','-e',code,str(Path(__file__).with_name('media_users.js'))],input=json.dumps(value),text=True,encoding='utf-8',capture_output=True)
+        result=subprocess.run(['node','-e',code],input=json.dumps(value),text=True,encoding='utf-8',capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr)
 
     def test_actual_user_ui_crud_filter_preview_and_error_guards(self):
-        code=r"""
-const fs=require('fs'),vm=require('vm'),assert=require('assert');
-class E{constructor(tag='div'){this.tagName=tag.toUpperCase();this.children=[];this.value='';this.events={};this.open=false;}append(...x){this.children.push(...x);}replaceChildren(...x){this.children=x;}get childNodes(){return this.children;}get options(){return this.children;}setAttribute(){}addEventListener(n,h){this.events[n]=h;}showModal(){this.open=true;}close(){this.open=false;}focus(){}}
-const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,new E());return nodes.get(id);};
-const scope={document:{getElementById:get,createElement:t=>new E(t)},fetch:async()=>({ok:true,json:async()=>({revision:'r',users:[],items:[],jobs:[],warnings:[]})})};vm.createContext(scope);vm.runInContext(fs.readFileSync(process.argv[1],'utf8'),scope);
-(async()=>{
-await new Promise(setImmediate);
-const photo={id:'photo:1',title:'旅行.png',kind:'照片',username:'张三',user_id:'u',files:[{path:'C:\\pics\\旅行.png'}]},movie={id:'movie:2',title:'电影',kind:'电影',username:'未分配',user_id:'',files:[{path:'/films/movie.mp4'}]};
-const data={revision:'r',users:[{id:'u',name:'张三',file_count:1,media_count:1}],items:[photo,movie]};
-assert.equal(scope.filteredUserItems(data,'张三','','').length,1);assert.equal(scope.filteredUserItems(data,'','unassigned','电影')[0].id,movie.id);assert.equal(scope.filteredUserItems(data,'C:\\pics','','')[0].id,photo.id);
-scope.userApi=async(p,route)=>route?{jobs:[],warnings:[]}:data;await scope.refreshUsers();assert.equal(get('user-plan').disabled,true);
-scope.editUser(data.users[0]);get('user-name').value='张三改名';let calls=[];scope.userApi=async p=>{calls.push(p);return data;};await get('user-form').onsubmit({preventDefault(){}});assert.equal(calls[0].action,'rename');assert.equal(calls[0].revision,'r');assert.equal(get('user-editor').open,false);
-get('user-select-page').onclick();assert.equal(get('user-selected').textContent.includes('2'),true);get('assign-user').value='u';await get('user-assign').onclick();assert.deepEqual([...calls[1].ids],['photo:1','movie:2']);
-scope.userApi=async p=>{calls.push(p);return {revision:'plan-r',changed_count:2,ids:['a'.repeat(64)],items:[{path:'sample',before:'old',after:'用户/张三/photo.png'}]};};await get('user-plan').onclick();assert.equal(get('user-plan-dialog').open,true);await get('user-plan-save').onclick();assert.equal(calls.at(-1).plan_revision,'plan-r');assert.equal(get('user-plan-dialog').open,false);assert.ok(get('user-notice').children.at(-1).href.startsWith('organize.html#user-plan='));
-await get('user-plan').onclick();scope.userApi=async()=>{throw Error('用户名已变化');};await get('user-plan-save').onclick();assert.equal(get('user-plan-save').disabled,true);assert.ok(get('user-plan-error').textContent.includes('已变化'));
-})().catch(e=>{console.error(e);process.exitCode=1;});
-"""
-        self.node(code)
+        server, prefix = self.server()
+        page = request(server, prefix + 'users.html')[1]
+        script = Path(__file__).parent / 'frontend' / 'user-workspace-test.cjs'
+        result = subprocess.run(
+            ['node', str(script)], input=page.decode('utf-8'), capture_output=True,
+            text=True, encoding='utf-8', timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)

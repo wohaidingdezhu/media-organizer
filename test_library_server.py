@@ -4,6 +4,8 @@ from test_support import make_symlink
 from email.message import Message
 import io
 import json
+import shutil
+import subprocess
 from pathlib import Path
 import tempfile
 import time
@@ -305,11 +307,26 @@ class ReportServerTests(unittest.TestCase):
             self.assertEqual(catalog.call_count, 1)
         headers, body = request(server, self.prefix+'organize.html')
         self.assertIn('200 OK', headers)
-        self.assertIn('精确重复分组核对'.encode(), body)
+        self.assertIn(b'id="duplicate-section"', body)
         self.assertNotIn(b'@@DUPLICATE_REVIEW@@', body)
-        self.assertIn(b'async function previewDuplicateGroup', body)
+        self.assertIn(b'mountDuplicateReview', body)
         self.assertEqual((self.report/'report.json').read_bytes(), before)
         self.assertFalse((self.report/'operations').exists())
+
+    def test_react_workspaces_keep_duplicate_and_cleanup_workflows(self):
+        server = self.server()
+        pages = {
+            key: request(server, self.prefix + key + '.html')[1].decode('utf-8')
+            for key in ('organize', 'photos')
+        }
+        node = shutil.which('node')
+        self.assertIsNotNone(node, 'React browser regression requires Node.js')
+        script = Path(__file__).parent / 'frontend' / 'workspace-test.cjs'
+        result = subprocess.run(
+            [node, str(script)], input=json.dumps(pages), capture_output=True,
+            text=True, encoding='utf-8', timeout=45,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_csv_download_uses_safe_attachment_name(self):
         name = '影片 清单.csv' if viewer.sys.platform == 'win32' else '影片"清单.csv'
