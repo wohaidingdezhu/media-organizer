@@ -542,10 +542,29 @@ def create_library_server(report_dir, output_dir, *, dashboard_url=None, pending
                 if route in {"report.html", "library.html", "center.html"}:
                     if body is None:
                         body = stream.read()
-                    # Only loopback-served pages may use their own API/confirmation frame.
-                    # The saved offline report retains its original restrictive policy.
+                    frontend_marker = b'<script data-media-frontend>'
+                    if route == "report.html" and b'id="classification-data"' in body and frontend_marker not in body:
+                        try:
+                            from media_scan import render_report
+                            body = render_report(document).encode("utf-8")
+                        except (KeyError, TypeError, ValueError):
+                            # Keep reports from older schemas readable.
+                            pass
+                    # Only loopback-served pages may use their own APIs.
                     body = body.replace(b"img-src 'self' file: data:\"", b"img-src 'self' file: data:; connect-src 'self'\"")
                     body = body.replace(b"connect-src 'self'\"", b"connect-src 'self'; frame-src 'self'\"")
+                    if route != "center.html":
+                        with _open_report_file(Path(__file__).resolve().parent, ("issue_list_bundle.js",)) as script:
+                            frontend = frontend_marker + script.read() + b"</script>"
+                        # Detached reports carry the frontend shipped when they
+                        # were generated. On the service use the current build.
+                        start = body.find(frontend_marker)
+                        if start < 0:
+                            body += frontend
+                        else:
+                            end = body.find(b"</script>", start + len(frontend_marker))
+                            if end >= 0:
+                                body = body[:start] + frontend + body[end + len(b"</script>"):]
                     with _open_report_file(Path(__file__).resolve().parent, ("report_actions.js",)) as script:
                         body += b"<script>" + script.read() + b"</script>"
                 if dashboard_link and route in {"report.html", "library.html", "organize.html", "photos.html", "users.html", "center.html"}:

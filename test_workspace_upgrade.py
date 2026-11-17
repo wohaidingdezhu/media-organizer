@@ -4,6 +4,7 @@ import contextlib
 import hashlib
 import io
 import json
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -308,8 +309,23 @@ class WorkspaceTests(unittest.TestCase):
             self.assertIs(desktop_entry.native_value(window, 'false'), False)
         window.evaluate_js.assert_not_called()
 
+    def test_served_dashboard_react_scope_and_long_term_catalog(self):
+        with mock.patch.object(media_gui, "ThreadingHTTPServer", MemoryServer):
+            server, state, url = media_gui.create_dashboard_server(self.output)
+        self.addCleanup(state.close)
+        prefix = "/" + url.split("/")[-2] + "/"
+        headers, page = request(server, prefix)
+        self.assertIn("200 OK", headers)
+        self.assertNotIn(b"@@DASHBOARD_UI@@", page)
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "React UI regression requires Node.js")
+        result = subprocess.run(
+            [node, str(Path(__file__).with_name("frontend") / "dashboard-workflow-test.cjs")],
+            input=page.decode("utf-8"), capture_output=True, text=True, encoding="utf-8", timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_dashboard_script_syntax_and_metadata_search_in_actual_js(self):
-        import shutil
         node=shutil.which('node')
         self.assertIsNotNone(node,'Node is required by the dual-platform workflow')
         html=(Path(__file__).parent/'dashboard.html').read_text(encoding='utf-8')

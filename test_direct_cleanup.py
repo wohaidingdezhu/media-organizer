@@ -9,6 +9,9 @@ import unittest
 HARNESS = r'''
 const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
 const root=process.argv[1];
+const {loadView,mountTestView}=require(root+'/frontend/view-test-dom.cjs');
+const {ReportDialog}=loadView('report-dialog.jsx');
+const {DashboardFolderList}=loadView('dashboard-folders.jsx');
 class E{
  constructor(tag='div',text=''){this.tagName=tag.toUpperCase();this.textContent=text;this.children=[];this.attrs={};this.value='';this.hidden=false;this.open=false;this.style={};this.events={};this.classList={values:new Set(),contains(n){return this.values.has(n);},add(n){this.values.add(n);},toggle(n,v){if(v)this.values.add(n);else this.values.delete(n);}};}
  append(...x){this.children.push(...x);}prepend(...x){this.children.unshift(...x);}replaceChildren(...x){this.children=x;}
@@ -20,6 +23,8 @@ const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new E());return node
 const a={id:'a'.repeat(64),name:'a.jpg',path:'C:\\generated\\a.jpg',kind:'照片',bytes:12},b={...a,id:'b'.repeat(64),name:'b.jpg',path:'/generated/b.jpg'};
 let requests=[],failure=false,renders=0;
 const scope={$,make:(t,c,s)=>new E(t,s||''),data:{items:[a,b]},mediaAvailable:true,mediaIds:{[a.path]:a.id,[b.path]:b.id},handledTrash:new Set(),selected:new Set([b.id]),saving:false,operating:false,executionPreview:null,quickIssues:[],fileSize:n=>n+' B',render(){renders++;},error(message){$('error').textContent=message||'';$('error').hidden=!message;},api:async(route,body)=>{requests.push({route,body});if(failure)throw Error('至少保留一份');return {mode:body.mode,items:[{path:a.path,target:'系统废纸篓 / 回收站'}],bytes:12};}};
+scope.mountReportDialog=host=>mountTestView(host,tag=>new E(tag),ReportDialog,true);
+scope.mountDashboardFolders=host=>mountTestView(host,tag=>new E(tag),DashboardFolderList).render;
 vm.createContext(scope);
 const management=fs.readFileSync(root+'/management.js','utf8');
 vm.runInContext(management.slice(0,management.indexOf('function bundleReviewIds')),scope);
@@ -77,8 +82,8 @@ class DirectCleanupTests(unittest.TestCase):
 (async()=>{
 let refreshed=0,jobStatus='running',poll;const body=new E();Object.assign(scope,{document:{body,createElement:t=>new E(t),querySelector:()=>null},clearTimeout(){},setTimeout(fn){poll=fn;return 1;},fetch:async(path,options)=>{requests.push({path,body:options?.body&&JSON.parse(options.body)});return {ok:true,json:async()=>path.endsWith('/preview')?{token:'safe-preview',items:[{path:a.path}]}:path.endsWith('/start')?{id:'a'.repeat(24)}:{id:'a'.repeat(24),mode:'trash',status:jobStatus,items:[]}};}});
 vm.runInContext(fs.readFileSync(root+'/report_actions.js','utf8'),scope);
-scope.reportActionOpen('delete',[a.id],()=>refreshed++);await new Promise(setImmediate);let dialog=body.children[0],buttons=dialog.children.at(-1).children;assert(dialog.open);assert(!dialog.children.some(n=>n.tagName==='IFRAME'));assert(!buttons[2].disabled);buttons[0].onclick();assert(dialog.removed);assert.equal(refreshed,1);assert.equal(requests.length,1);assert(requests[0].path.endsWith('/preview'));
-scope.reportActionOpen('delete',[a.id],()=>refreshed++);await new Promise(setImmediate);dialog=body.children[1];buttons=dialog.children.at(-1).children;await buttons[2].onclick();await buttons[2].onclick();assert.equal(requests.filter(r=>r.path.endsWith('/start')).length,1);let prevented=false;dialog.events.cancel({preventDefault(){prevented=true;}});assert(prevented);buttons[0].onclick();assert(dialog.open);jobStatus='complete';await poll();assert(dialog.removed);assert.equal(refreshed,2);
+scope.reportActionOpen('delete',[a.id],()=>refreshed++);await new Promise(setImmediate);let dialog=body.children[0],buttons=dialog.children.at(-1).children;assert(dialog.open);assert(!dialog.children.some(n=>n.tagName==='IFRAME'));assert(!buttons[2].disabled);buttons[0].onclick();assert(!dialog.isConnected);assert.equal(refreshed,1);assert.equal(requests.length,1);assert(requests[0].path.endsWith('/preview'));
+scope.reportActionOpen('delete',[a.id],()=>refreshed++);await new Promise(setImmediate);dialog=body.children[0];buttons=dialog.children.at(-1).children;await buttons[2].onclick();await buttons[2].onclick();assert.equal(requests.filter(r=>r.path.endsWith('/start')).length,1);let prevented=false;dialog.events.cancel({preventDefault(){prevented=true;}});assert(prevented);buttons[0].onclick();assert(dialog.open);jobStatus='complete';await poll();assert(!dialog.isConnected);assert.equal(refreshed,2);
 })().catch(e=>{console.error(e);process.exitCode=1;});
 """)
 
@@ -87,14 +92,14 @@ scope.reportActionOpen('delete',[a.id],()=>refreshed++);await new Promise(setImm
 (async()=>{
 let failPreview=true;const body=new E();Object.assign(scope,{document:{body,createElement:t=>new E(t),querySelector:()=>null},clearTimeout(){},fetch:async(path)=>{requests.push(path);if(path.endsWith('/start'))throw Error('Disconnected');return {ok:!failPreview,json:async()=>failPreview?{error:'至少保留一份'}:{token:'safe',items:[{path:a.path}]}};}});vm.runInContext(fs.readFileSync(root+'/report_actions.js','utf8'),scope);
 scope.reportActionOpen('delete',[a.id]);await new Promise(setImmediate);let dialog=body.children[0],buttons=dialog.children.at(-1).children;assert(buttons[2].disabled);assert(dialog.children[1].children[0].textContent.includes('至少保留'));await buttons[2].onclick();assert.equal(requests.length,1);buttons[0].onclick();
-failPreview=false;scope.reportActionOpen('delete',[a.id]);await new Promise(setImmediate);dialog=body.children[1];buttons=dialog.children.at(-1).children;await buttons[2].onclick();assert(dialog.children[1].children[0].textContent.includes('启动结果未确认'));await buttons[2].onclick();assert.equal(requests.filter(p=>p.endsWith('/start')).length,1);assert(!buttons[0].disabled);
+failPreview=false;scope.reportActionOpen('delete',[a.id]);await new Promise(setImmediate);dialog=body.children[0];buttons=dialog.children.at(-1).children;await buttons[2].onclick();assert(dialog.children[1].children[0].textContent.includes('启动结果未确认'));await buttons[2].onclick();assert.equal(requests.filter(p=>p.endsWith('/start')).length,1);assert(!buttons[0].disabled);
 })().catch(e=>{console.error(e);process.exitCode=1;});
 """)
 
     def test_comparison_is_one_dialog_and_hands_off_to_one_delete_confirmation(self):
         self.node(r"""
 (async()=>{
-const body=new E(),photos=[a,b].map(file=>({kind:'photo',files:[file],metadata:{},preview:'previews/sample.png'}));Object.assign(scope,{document:{body,createElement:t=>new E(t),querySelector:()=>null},clearTimeout(){},fetch:async(path)=>({ok:true,json:async()=>path==='api/center'?{items:photos,operation_state:{warnings:[]}}:{available:true,ids_by_path:scope.mediaIds}})});vm.runInContext(fs.readFileSync(root+'/report_actions.js','utf8'),scope);let deleted=[];scope.reportTrashOpen=ids=>deleted.push(ids);scope.reportActionOpen('compare',[a.id,b.id]);await new Promise(setImmediate);const dialog=body.children[0];assert(dialog.open);assert(!dialog.children.some(n=>n.tagName==='IFRAME'));const cards=dialog.children[2].children;assert.equal(cards.length,2);cards[0].children.at(-1).onclick();assert(dialog.removed);assert.deepEqual(Array.from(deleted[0]),[a.id]);assert.equal(requests.length,0);
+const body=new E(),photos=[a,b].map(file=>({kind:'photo',files:[file],metadata:{},preview:'previews/sample.png'}));Object.assign(scope,{document:{body,createElement:t=>new E(t),querySelector:()=>null},clearTimeout(){},fetch:async(path)=>({ok:true,json:async()=>path==='api/center'?{items:photos,operation_state:{warnings:[]}}:{available:true,ids_by_path:scope.mediaIds}})});vm.runInContext(fs.readFileSync(root+'/report_actions.js','utf8'),scope);let deleted=[];scope.reportTrashOpen=ids=>deleted.push(ids);scope.reportActionOpen('compare',[a.id,b.id]);await new Promise(setImmediate);const dialog=body.children[0];assert(dialog.open);assert(!dialog.children.some(n=>n.tagName==='IFRAME'));const cards=dialog.children[2].children;assert.equal(cards.length,2);cards[0].children.at(-1).onclick();assert(!dialog.isConnected);assert.deepEqual(Array.from(deleted[0]),[a.id]);assert.equal(requests.length,0);
 })().catch(e=>{console.error(e);process.exitCode=1;});
 """)
 
@@ -125,7 +130,7 @@ assert.deepEqual(decisions,['keep_both']);assert.deepEqual(deleted,[]);
 finish();await pending;
 assert(dialog.open&&!keep.disabled&&!trash.disabled);assert(status.textContent.includes('未能保存'));
 await keep.onclick();
-assert(dialog.removed);assert.equal(reloads,0);assert.deepEqual(decisions,['keep_both','keep_both']);
+assert(!dialog.isConnected);assert.equal(reloads,0);assert.deepEqual(decisions,['keep_both','keep_both']);
 })().catch(e=>{console.error(e);process.exitCode=1;});
 """)
 

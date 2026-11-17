@@ -3,6 +3,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 from pathlib import Path
 import struct
 import subprocess
@@ -311,7 +312,7 @@ class MediaTests(unittest.TestCase):
             self.assertEqual(len((report_dir / "video_groups.csv").read_text().splitlines()), 3)
             page = (report_dir / "report.html").read_text()
             self.assertIn("<img loading='lazy' src='previews/", page)
-            self.assertIn("筛选全部分类建议", page)
+            self.assertIn('id="report-classification"', page)
             self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in source.iterdir()})
 
     def test_image_worker_reuses_process_after_unreadable_sample(self):
@@ -559,6 +560,13 @@ class MediaTests(unittest.TestCase):
         self.assertIn("视频/last.mp4", page)
         self.assertIn(r"\u003c/script\u003e", page)
         self.assertNotIn("</script><script>alert(1)", page)
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "React UI regression requires Node.js")
+        result = subprocess.run(
+            [node, str(Path(__file__).with_name("frontend") / "report-classification-test.cjs")],
+            input=page, capture_output=True, text=True, encoding="utf-8", timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_similarity_threshold_and_exact_exclusion(self):
         def record(path, value, sha=""):
