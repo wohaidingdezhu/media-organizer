@@ -17,7 +17,9 @@ const video = {id: id(749), kind: 'video', title: '同一作品的两个版本',
   folder: 'G:\\电影', preview: 'covers/movie.png', metadata: {}, tags: [], local_tags: [],
   files: [{id: id(1249), name: '1.mp4', path: 'G:\\电影\\1.mp4', bytes: 220},
     {id: id(1250), name: '2.mp4', path: 'G:\\电影\\2.mp4', bytes: 230}]};
+photos[0].tags = ['精选'];
 const items = [...photos, video];
+const albumPath = photos[1].folder;
 const available = {available: true, ids_by_path: Object.fromEntries(items.flatMap(item => item.files.map(file => [file.path, file.id])))};
 const exact = [{sha256: 'a'.repeat(64), files: photos.map(item => ({...item.files[0], kind: 'photo', owner: item.id, preview: item.preview}))}];
 const similarId = id(1100);
@@ -45,7 +47,7 @@ const dom = new JSDOM(source, {
         case 'api/media': return reply(available);
         case 'api/center':
           if (payload?.action === 'review_similarity') dismissed = payload.dismissed;
-          return reply({items, folders: {}, directories: {}, media_access: available, recent: [],
+          return reply({items, folders: {[albumPath]: [photos[1].id]}, directories: {}, media_access: available, recent: [],
             state: {collections: {}}, review: {exact, similar: dismissed ? [] : similar,
               dismissed_similar: dismissed ? similar.map(group => ({...group, decision: 'not_similar'})) : [], warnings: []}});
         case 'api/media/cover':
@@ -147,6 +149,17 @@ async function run() {
   await until(() => find('.review-group'), 'dismissed group can still be reviewed');
   button(find('.review-group'), '恢复到待核对').click();
   await until(() => button(element('center-content'), '相似照片 · 1'), 'restoration saved');
+  route('home');
+  await until(() => find('.counts .count'), 'home count cards mount');
+  assert([...document.querySelectorAll('.counts strong')].some(node => node.textContent === '105'));
+  route('collections');
+  await until(() => find('.collection .album-path'), 'collection card shows original path');
+  find('.collection').click();
+  await until(() => find('.card h3')?.textContent === photos[1].title, 'open the correct album');
+  route('tags');
+  await until(() => button(element('center-content'), '精选 · 1'), 'tag shortcuts mount');
+  button(element('center-content'), '精选 · 1').click();
+  await until(() => find('.card h3')?.textContent === photos[0].title, 'open media for selected tag');
   assert.deepEqual(errors, []);
 }
 

@@ -460,7 +460,7 @@ if(path==='api/operations')return {ok:true,json:async()=>({jobs:operationState.r
 return {ok:true,json:async()=>path==='api/media'?access:{items:items.map(i=>({...i,favorite:state.favorites[i.id]||false})),state,folders,directories,review,operation_state:operationState,hidden_files:hiddenFiles,recent:state.recent,restored:false}};
 }};
 '''+setup+r'''
-const {mountTestGallery,mountTestReview,mountTestDetail}=require(process.argv[2]);scope.mountCenterGallery=host=>mountTestGallery(host,tag=>new E(tag));scope.mountCenterReview=host=>mountTestReview(host,tag=>new E(tag));scope.mountCenterDetail=(content,buttons)=>mountTestDetail(content,buttons,tag=>new E(tag));
+const {mountTestGallery,mountTestReview,mountTestDetail,mountTestNavigation}=require(process.argv[2]);scope.mountCenterGallery=host=>mountTestGallery(host,tag=>new E(tag));scope.mountCenterReview=host=>mountTestReview(host,tag=>new E(tag));scope.mountCenterDetail=(content,buttons)=>mountTestDetail(content,buttons,tag=>new E(tag));scope.mountCenterNavigation=host=>mountTestNavigation(host,tag=>new E(tag));
 vm.createContext(scope);vm.runInContext(fs.readFileSync(process.argv[1],'utf8'),scope);
 (async()=>{await new Promise(resolve=>setImmediate(resolve));if($('center-error').textContent)throw Error($('center-error').textContent);
 '''+assertions+r'''

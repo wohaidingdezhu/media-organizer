@@ -153,25 +153,23 @@ function previewStatus(){const jobs=[...previewWork.values()];previewTotal=jobs.
 function previewFile(item){return item.files?.[0]||byFile.get(item.id);}
 function previewAllowed(item){const file=previewFile(item);return file&&mediaAccess.available&&!catalog.restored&&mediaAccess.ids_by_path[file.path]===file.id;}
 function previewUnavailable(item){if(previewFile(item)?.browse_only)return '扫描处理中或备份记录：清单可浏览，完成核对后才能操作';return catalog.restored?'备份中没有预览，需重新扫描本机原文件':!mediaAccess.available?'原文件暂时无法访问，请检查磁盘连接后刷新':'原文件不在当前可访问列表，请重新扫描来源目录';}
-function previewPlaceholder(item,parent,text){
-  if(parent.reactArtwork){parent.reactArtwork({message:text});return;}
-  parent.replaceChildren();const block=make('div','placeholder');block.append(make('span','',item.kind==='photo'?'▧':'▷'),make('small','',text));parent.append(block);}
+function setPreviewMessage(parent,text){parent.reactArtwork({message:text});}
 function previewControl(parent,state){parent.reactRepair?.(state);}
 function queuePreview(item,parent,manual=false){
   if(!previewAllowed(item))return Promise.resolve(false);
   const file=previewFile(item);let job=previewWork.get(file.id);
-  if(job?.state==='done'){replacePreview({...item,preview:job.preview},parent);previewControl(parent,'done');return Promise.resolve(true);}
-  if(job?.state==='failed'&&!manual){previewPlaceholder(item,parent,'预览未生成：'+job.error);previewControl(parent,'failed');return Promise.resolve(false);}
+  if(job?.state==='done'){setPreviewArt({...item,preview:job.preview},parent);previewControl(parent,'done');return Promise.resolve(true);}
+  if(job?.state==='failed'&&!manual){setPreviewMessage(parent,'预览未生成：'+job.error);previewControl(parent,'failed');return Promise.resolve(false);}
   if(!job||job.state==='failed'){
     job={id:file.id,state:'queued',targets:[]};job.promise=new Promise(resolve=>{job.resolve=resolve;});previewWork.set(file.id,job);if(manual)previewQueue.unshift(job);else previewQueue.push(job);
   }
   if(!job.targets.some(target=>target.parent===parent))job.targets.push({item,parent});
-  previewControl(parent,'queued');previewPlaceholder(item,parent,'正在排队生成预览…');previewStatus();runPreviewQueue();return job.promise;
+  previewControl(parent,'queued');setPreviewMessage(parent,'正在排队生成预览…');previewStatus();runPreviewQueue();return job.promise;
 }
 function observePreview(item,parent){
-  if(!previewAllowed(item)){if(parent.previewFallback?.())return;previewPlaceholder(item,parent,previewUnavailable(item));return;}
-  if(previewFile(item)?.auto_preview===false||catalog.preview_policy?.[item.kind==='photo'?'images':'videos']===false){if(parent.previewFallback?.())return;previewPlaceholder(item,parent,'本次未启用解析，可点击补预览单独生成');return;}
-  const previous=previewWork.get(previewFile(item).id);if(previous?.state==='failed'){if(parent.previewFallback?.())return;previewPlaceholder(item,parent,'预览未生成：'+previous.error);previewControl(parent,'failed');return;}
+  if(!previewAllowed(item)){if(parent.previewFallback?.())return;setPreviewMessage(parent,previewUnavailable(item));return;}
+  if(previewFile(item)?.auto_preview===false||catalog.preview_policy?.[item.kind==='photo'?'images':'videos']===false){if(parent.previewFallback?.())return;setPreviewMessage(parent,'本次未启用解析，可点击补预览单独生成');return;}
+  const previous=previewWork.get(previewFile(item).id);if(previous?.state==='failed'){if(parent.previewFallback?.())return;setPreviewMessage(parent,'预览未生成：'+previous.error);previewControl(parent,'failed');return;}
   if(typeof IntersectionObserver==='undefined'){Promise.resolve().then(()=>{if(parent.isConnected!==false)queuePreview(item,parent);});return;}
   if(!previewObserver)previewObserver=new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting){previewObserver.unobserve(entry.target);entry.target.previewObserved=false;if(entry.target.isConnected!==false)entry.target.previewEnqueue?.();}},{rootMargin:'160px'});
   parent.previewEnqueue=()=>queuePreview(item,parent);parent.previewObserved=true;previewObserver.observe(parent);
@@ -195,35 +193,29 @@ async function runPreviewQueue(){
       // Rebuilt on each accepted catalog load: update only current records for
       // this file, including overlapping review groups and multipart movies.
       for(const record of previewRecords.get(job.id)||[]){record.preview=result.preview;delete record.preview_status;}
-      for(const target of job.targets)if(target.parent.isConnected!==false){replacePreview({...target.item,preview:result.preview},target.parent);previewControl(target.parent,'done');if(!target.parent.reactArtwork)target.parent.closest?.('.card,.review-file')?.querySelector('.preview-status')?.remove();}
+      for(const target of job.targets)if(target.parent.isConnected!==false){setPreviewArt({...target.item,preview:result.preview},target.parent);previewControl(target.parent,'done');}
       if(detailBindings&&job.targets.some(target=>target.parent===detailBindings.art))detailBindings.preview=result.preview;
       job.resolve(true);
-    }catch(error){job.state='failed';job.error=error.message;for(const target of job.targets)if(target.parent.isConnected!==false){if(target.parent.previewFallback?.())continue;previewPlaceholder(target.item,target.parent,'预览未生成：'+error.message);previewControl(target.parent,'failed');}job.resolve(false);}
+    }catch(error){job.state='failed';job.error=error.message;for(const target of job.targets)if(target.parent.isConnected!==false){if(target.parent.previewFallback?.())continue;setPreviewMessage(target.parent,'预览未生成：'+error.message);previewControl(target.parent,'failed');}job.resolve(false);}
     finally{job.targets=[];previewStatus();}
   }}finally{previewWorking=false;previewStatus();}
-}
-function replacePreview(item,parent){
-  if(!parent.reactArtwork)parent.replaceChildren();
-  image(item,parent);
 }
 function handleImageError(item,parent){
   const file=previewFile(item),job=file&&previewWork.get(file.id);
   const wasDone=job?.state==='done';if(wasDone){job.state='failed';job.error='预览文件不可读取，可点击重试';previewStatus();}
   if(parent.previewFallback?.())return;
   previewControl(parent,'failed');
-  if(wasDone){previewPlaceholder(item,parent,job.error);return;}
-  previewPlaceholder(item,parent,'预览缺失，正在准备补充…');observePreview({...item,preview:''},parent);
+  if(wasDone){setPreviewMessage(parent,job.error);return;}
+  setPreviewMessage(parent,'预览缺失，正在准备补充…');observePreview({...item,preview:''},parent);
 }
-function image(item,parent,large=false){
+function setPreviewArt(item,parent){
   const art=centerArt(item.preview);
   if(!art){
-    previewPlaceholder(item,parent,catalog.restored?'备份中没有预览，需重新扫描本机原文件':'滚动到这里会自动补充预览');
+    setPreviewMessage(parent,catalog.restored?'备份中没有预览，需重新扫描本机原文件':'滚动到这里会自动补充预览');
     observePreview(item,parent);
     return;
   }
-  const onError=()=>handleImageError(item,parent);
-  if(parent.reactArtwork){parent.reactArtwork({source:art,onError});return;}
-  const img=make('img');img.src=art;img.alt=item.title;img.loading=large?'eager':'lazy';img.onerror=onError;parent.append(img);
+  parent.reactArtwork({source:art,onError:()=>handleImageError(item,parent)});
 }
 function button(label,handler,cls=''){const node=make('button',cls,label);node.type='button';node.onclick=handler;return node;}
 
@@ -263,8 +255,8 @@ function previewEntry(item, invalidate) {
     repairPreview() {
       if (entry.cover) return queuePreview(item, entry.cover, true);
     },
-    initPreview(large = false) {
-      image(item, entry.cover, large);
+    initPreview() {
+      setPreviewArt(item, entry.cover);
       const state = previewWork.get(previewFile(item)?.id)?.state;
       if (state && (!item.preview || state === 'failed' || state === 'queued')) previewControl(entry.cover, state);
     },
@@ -310,19 +302,59 @@ function showRows(rows, parent, kind = '') {
   paint();
 }
 function sourceFolder(path){return path.split(/[\\/]/).filter(Boolean).pop()||path;}
-function collectionCard(name,ids,handler,preview,path='',missing=0){
-  const card=button('',handler,'collection'),items=ids.map(id=>byId.get(id)).filter(Boolean);
-  // Try at most three distinct files, preferring existing art over decoding.
-  const rank=item=>centerArt(item.preview)?2:previewAllowed(item)?1:0;
-  const candidates=[...new Map([...items].sort((a,b)=>rank(b)-rank(a)).map(item=>[previewFile(item)?.id,item])).values()].slice(0,3);
-  if(candidates.length){const art=make('div','collection-art');let index=0;art.previewFallback=()=>{if(index+1>=candidates.length)return false;art.replaceChildren();image(candidates[++index],art);return true;};image(candidates[0],art);card.append(art);}
-  const count=ids.length+' 项媒体'+(missing?' · 另有 '+missing+' 项不在本次扫描结果或已隐藏':'');card.append(make('strong','',name),make('span','muted',count));if(path){const location=make('div','muted album-path',path);location.setAttribute('title',path);card.append(location);card.setAttribute('aria-label',name+' · '+path+' · '+count);}return card;
+function collectionTile(name, ids, select, path='', missing=0, directory=false) {
+  return {id:path ? 'folder:' + path : 'collection:' + name, name, ids, select, path, directory,
+    count:ids.length + ' 项媒体' + (missing ? ' · 另有 ' + missing + ' 项不在本次扫描结果或已隐藏' : '')};
+}
+function collectionArtwork(ids, invalidate) {
+  const items = ids.map(id => byId.get(id)).filter(Boolean);
+  // Limit retries to distinct files and prefer existing art.
+  const rank = item => centerArt(item.preview) ? 2 : previewAllowed(item) ? 1 : 0;
+  const candidates = [...new Map(items.sort((a,b) => rank(b)-rank(a)).map(item => [previewFile(item)?.id,item])).values()].slice(0,3);
+  if (!candidates.length) return null;
+
+  let index = 0;
+  const preview = previewEntry(candidates[0], invalidate);
+  const attach = preview.attachCover;
+  const useCandidate = () => {
+    const item = candidates[index];
+    preview.title = item.title;
+    preview.photo = item.kind === 'photo';
+    setPreviewArt(item, preview.cover);
+  };
+  preview.attachCover = element => {
+    attach(element);
+    if (!element) return;
+    element.previewFallback = () => {
+      if (index + 1 >= candidates.length) return false;
+      index++;
+      useCandidate();
+      return true;
+    };
+  };
+  preview.start = useCandidate;
+  return preview;
+}
+function showNavigationCards(cards, className, type) {
+  const host = make('div', className);
+  const view = mountCenterNavigation(host);
+  let initializing = true;
+  const render = () => view.render({cards, type});
+  if (type === 'collection') {
+    for (const card of cards) card.preview = collectionArtwork(card.ids, () => { if (!initializing) render(); });
+  }
+  reactMediaViews.push({dispose:view.dispose});
+  $('center-content').append(host);
+  render();
+  for (const card of cards) card.preview?.start();
+  initializing = false;
+  if (type === 'collection') render();
 }
 
 const availabilityControls=new Map();
 let collectionOptionsSignature='';
 function trackAvailability(control,allowed){availabilityControls.set(control,allowed);control.disabled=!allowed();}
-function syncAvailability(){for(const [control,allowed]of availabilityControls){if(control.isConnected===false)availabilityControls.delete(control);else control.disabled=!allowed();}for(const gallery of reactMediaViews)gallery.paint();detailBindings?.paint();}
+function syncAvailability(){for(const [control,allowed]of availabilityControls){if(control.isConnected===false)availabilityControls.delete(control);else control.disabled=!allowed();}for(const view of reactMediaViews)view.paint?.();detailBindings?.paint();}
 function syncSelection(){if(!catalog)return;if(selected.size<200&&['已达到200项选择上限，请分批处理。','一次最多选择200项，请分批处理。'].includes($('center-error').textContent))message();syncAvailability();$('select-page').disabled=$('invert-page').disabled=busy||!pageItems.length;$('collection-submit').disabled=busy;$('collection-submit').textContent=busy?'正在保存…':'保存';const reviewing=view==='review'&&!globalSearch();$('manage-bar').hidden=!manage||reviewing;$('manage-toggle').hidden=reviewing;$('selected-count').textContent=`已选 ${selected.size} 项`;$('manage-toggle').textContent=manage?'完成整理':'整理模式';$('manage-toggle').setAttribute('aria-pressed',String(manage));
   for(const id of ['add-collection','create-selection-collection','delete-selected','remove-collection','clear-selection'])$(id).disabled=busy||!selected.size;
   const chosen=[...selected].map(id=>byId.get(id)).filter(Boolean),chosenFiles=centerMediaIds(chosen);if(selected.size)$('selected-count').textContent+=` · ${chosenFiles.length} 个文件 · ${size(chosenFiles.reduce((total,id)=>total+(byFile.get(id)?.bytes||0),0))}`+(chosenFiles.length>200?' · 每次最多清理 200 个文件，请减少选择':'');$('compare-selected').disabled=busy||chosen.length!==2||chosen.some(item=>item.kind!=='photo'||item.files.length!==1);$('delete-selected').disabled=!canTrash(centerMediaIds(chosen));$('add-collection').disabled=busy||!selected.size||!Object.keys(catalog.state.collections).length;$('remove-collection').hidden=!collection||globalSearch();
@@ -354,7 +386,9 @@ function renderDirectories(paths){
   const matching=filtering?new Set(centerFilter(catalog.items,{kind,year,genre,duration,resolution}).map(item=>item.id)):null;
   const rows=paths.filter(path=>!filtering||matching.size>0&&centerFolderHasMatch(nodes,path,matching)).map(path=>({path}));
   rows.sort((a,b)=>centerNameCompare(a.path,b.path));const pages=Math.max(1,Math.ceil(rows.length/galleryPageSize));folderPage=Math.max(0,Math.min(folderPage,pages-1));
-  const wall=make('div','wall video-wall');for(const row of rows.slice(folderPage*galleryPageSize,folderPage*galleryPageSize+galleryPageSize)){const items=folderItems(row.path);const card=collectionCard(nodes[row.path].name,items.map(item=>item.id),()=>enterDirectory(row.path),'',row.path);card.classList.add('directory-card');wall.append(card);}$('center-content').append(wall);
+  const cards = rows.slice(folderPage * galleryPageSize, (folderPage + 1) * galleryPageSize).map(({path}) =>
+    collectionTile(nodes[path].name, folderItems(path).map(item => item.id), () => enterDirectory(path), path, 0, true));
+  showNavigationCards(cards, 'wall video-wall', 'collection');
   if(rows.length>galleryPageSize){const pager=make('div','pager'),previous=button('上一页文件夹',()=>turnPage(-1,true)),next=button('下一页文件夹',()=>turnPage(1,true));previous.disabled=folderPage===0;next.disabled=folderPage>=pages-1;pager.append(previous,make('span','muted',`文件夹第 ${folderPage+1}/${pages} 页 · 共 ${rows.length} 个`),next);$('center-content').append(pager);}
   if(!rows.length&&!directory)$('center-content').append(make('p','empty','没有匹配的媒体目录。试试清除筛选，或从“媒体库”添加目录并扫描。'));return rows.length;
 }
@@ -591,26 +625,60 @@ function render(){if(!catalog)return;announceCenterView();syncMediaFilters();pre
   if(all)$('center-breadcrumb').append(button('← 返回'+context,clearSearch));
   if(directory&&!all)renderDirectoryBreadcrumb();
   if(!all&&(album||collection||tag)){$('center-breadcrumb').append(button('← 返回'+(tag?'标签':'相册与合集'),()=>{resetSearch();browseTo();}));if(collection){$('center-breadcrumb').append(button('重命名合集',()=>editCollection(collection)),button('删除合集记录',async()=>{const id=collection;if(await update({action:'delete_collection',id})&&view==='collections'&&collection===id){resetLocation();render();}}));$('center-breadcrumb').append(make('span','muted','只修改合集记录，原文件保留。'));}}
-  if(view==='home'&&!query&&!kind&&!tag&&!$('filter-year').value&&!$('filter-genre').value&&!$('filter-duration').value&&!$('filter-resolution').value&&$('media-order').value==='recent'){const counts=make('div','counts');for(const [value,label]of [['movie','电影'],['video','视频'],['photo','照片'],['favorite','收藏']]){const target={movie:'movies',video:'videos',photo:'photos',favorite:'favorites'}[value],node=button('',()=>switchCenterView(target),'count');node.setAttribute('aria-label','查看'+label);node.append(make('span','muted',label),make('strong','',catalog.items.filter(item=>value==='favorite'?item.favorite:item.kind===value).length));if(value==='movie')node.append(make('small','muted','部作品 · '+catalog.items.filter(item=>item.kind==='movie').reduce((sum,item)=>sum+item.files.length,0)+' 个视频文件'));else if(value==='video')node.append(make('small','muted','个普通视频文件'));node.append(make('span','count-link','查看'+label+' →'));counts.append(node);}$('center-content').append(counts);
+  if(view==='home'&&!query&&!kind&&!tag&&!$('filter-year').value&&!$('filter-genre').value&&!$('filter-duration').value&&!$('filter-resolution').value&&$('media-order').value==='recent'){
+    const counts = {movie:0, video:0, photo:0, favorite:0};
+    let movieFiles = 0;
+    for (const item of catalog.items) {
+      counts[item.kind]++;
+      if (item.favorite) counts.favorite++;
+      if (item.kind === 'movie') movieFiles += item.files.length;
+    }
+    showNavigationCards([['movie','电影','movies'],['video','视频','videos'],['photo','照片','photos'],['favorite','收藏','favorites']].map(([id,label,target]) => ({
+      id, label, count:counts[id], description:id === 'movie' ? '部作品 · ' + movieFiles + ' 个视频文件' : id === 'video' ? '个普通视频文件' : '',
+      select:() => switchCenterView(target),
+    })), 'counts', 'count');
     const recentItems=catalog.recent.map(id=>byId.get(id)).filter(Boolean).slice(0,8),latestItems=visible.slice(0,12);if(recentItems.length){$('center-content').append(make('h2','','最近打开'));showRows(recentItems,$('center-content'));}
     $('center-content').append(make('h2','','最近更新'),make('p','muted','按文件修改时间展示；系统播放器不回传播放进度。'));pageItems=[...new Map([...recentItems,...latestItems].map(item=>[item.id,item])).values()];showRows(latestItems,$('center-content'));
-    const albums=Object.entries(catalog.folders).map(([path,ids])=>({path,ids,mtime:ids.reduce((value,id)=>Math.max(value,byId.get(id)?.mtime||0),0)})).sort((a,b)=>b.mtime-a.mtime).slice(0,4).map(item=>[item.path,item.ids]);if(albums.length){$('center-content').append(make('h2','','目录相册'));const grid=make('div','wall');for(const [path,ids]of albums)grid.append(collectionCard(sourceFolder(path),ids,()=>browseTo({view:'collections',album:path}),'',path));$('center-content').append(grid);}
+    const albums = Object.entries(catalog.folders)
+      .map(([path,ids]) => ({path,ids,mtime:ids.reduce((value,id) => Math.max(value,byId.get(id)?.mtime || 0),0)}))
+      .sort((a,b) => b.mtime-a.mtime).slice(0,4);
+    if (albums.length) {
+      $('center-content').append(make('h2','','目录相册'));
+      showNavigationCards(albums.map(({path,ids}) => collectionTile(sourceFolder(path), ids,
+        () => browseTo({view:'collections',album:path}), path)), 'wall', 'collection');
+    }
     syncSelection();return;
   }
   if(view==='resources'&&!query){const nodes=catalog.directories||{};const folderCount=renderDirectories(directory?nodes[directory]?.children||[]:Object.keys(nodes).filter(path=>!nodes[path].parent));if(directory)$('center-subtitle').textContent=(catalog.restored?'备份快照 · ':'')+folderCount+' 个子文件夹 · '+($('include-subfolders').checked?'含子目录 ':'本层 ')+visible.length+' 项媒体';if(!directory){$('center-subtitle').textContent='选择目录逐层浏览 · '+catalog.items.length+' 项媒体';syncSelection();return;}if(visible.length)$('center-content').append(make('h2','', $('include-subfolders').checked?'本目录及子目录的媒体':'本层媒体'));}
   if(view==='collections'&&!query&&!collection&&!album){
-    const grid=make('div','wall video-wall'),tiles=[],matched=new Set(visible.map(item=>item.id)),filtered=kind||$('filter-year').value||$('filter-genre').value||$('filter-duration').value||$('filter-resolution').value;
-    function tile(name,ids,handler,path=''){
+    const tiles=[],matched=new Set(visible.map(item=>item.id)),filtered=kind||$('filter-year').value||$('filter-genre').value||$('filter-duration').value||$('filter-resolution').value;
+    function tile(id,name,ids,handler,path=''){
       const shown=ids.filter(id=>matched.has(id));if(filtered&&!shown.length)return;
-      const items=shown.map(id=>byId.get(id)),missing=ids.filter(id=>!byId.has(id)).length;tiles.push({name,mtime:items.reduce((value,item)=>Math.max(value,item.mtime),0),oldest:items.length?items.reduce((value,item)=>Math.min(value,item.mtime),Infinity):0,bytes:items.reduce((value,item)=>value+item.bytes,0),create:()=>collectionCard(name,shown,handler,items[0]?.preview,path,missing)});
+      const items=shown.map(id=>byId.get(id)),missing=ids.filter(id=>!byId.has(id)).length;tiles.push({name,mtime:items.reduce((value,item)=>Math.max(value,item.mtime),0),oldest:items.length?items.reduce((value,item)=>Math.min(value,item.mtime),Infinity):0,bytes:items.reduce((value,item)=>value+item.bytes,0),card:{...collectionTile(name,shown,handler,path,missing),id}});
     }
-    for(const [id,item]of Object.entries(catalog.state.collections))tile(item.name,item.ids,()=>browseTo({collection:id}));
-    for(const [path,ids]of Object.entries(catalog.folders))tile(sourceFolder(path),ids,()=>browseTo({album:path}),path);
+    for(const [id,item]of Object.entries(catalog.state.collections))tile('collection:'+id,item.name,item.ids,()=>browseTo({collection:id}));
+    for(const [path,ids]of Object.entries(catalog.folders))tile('album:'+path,sourceFolder(path),ids,()=>browseTo({album:path}),path);
     const order=$('media-order').value,name=(a,b)=>centerNameCompare(a.name,b.name);tiles.sort((a,b)=>order==='name'?name(a,b):order==='size'?b.bytes-a.bytes||name(a,b):order==='oldest'?a.oldest-b.oldest||name(a,b):b.mtime-a.mtime||name(a,b));
-    const tilePages=Math.max(1,Math.ceil(tiles.length/galleryPageSize));page=Math.max(0,Math.min(page,tilePages-1));grid.append(...tiles.slice(page*galleryPageSize,page*galleryPageSize+galleryPageSize).map(tile=>tile.create()));$('center-content').append(grid);$('center-pager').hidden=!tiles.length;$('center-page').textContent=`第 ${page+1}/${tilePages} 页 · ${tiles.length} 个相册与合集`;$('center-prev').disabled=page===0;$('center-next').disabled=page>=tilePages-1;
+    const tilePages=Math.max(1,Math.ceil(tiles.length/galleryPageSize));page=Math.max(0,Math.min(page,tilePages-1));showNavigationCards(tiles.slice(page*galleryPageSize,page*galleryPageSize+galleryPageSize).map(tile=>tile.card),'wall video-wall','collection');$('center-pager').hidden=!tiles.length;$('center-page').textContent=`第 ${page+1}/${tilePages} 页 · ${tiles.length} 个相册与合集`;$('center-prev').disabled=page===0;$('center-next').disabled=page>=tilePages-1;
     if(!tiles.length)$('center-content').append(make('p','empty','没有匹配的相册与合集。试试清除筛选，或添加媒体目录。'));syncSelection();return;
   }
-  if(view==='tags'&&!query&&!tag){const counts=new Map();for(const item of visible)for(const label of item.tags)counts.set(label,(counts.get(label)||0)+1);const chips=make('div','chips');for(const [label,count]of [...counts].sort((a,b)=>b[1]-a[1]))chips.append(button(label+' · '+count,()=>browseTo({tag:label}),'chip'));$('center-content').append(chips);$('center-subtitle').textContent=counts.size+' 个标签 · '+visible.length+' 项媒体';if(!counts.size){$('center-content').append(make('p','empty',catalog.items.some(item=>item.tags.length)?'当前筛选下没有标签，可清除筛选查看已有标签。':'还没有标签，不需要重新扫描。可在媒体详情添加标签，或直接用下方的文件夹名创建标签。'));const folders=make('div','actions');for(const path of Object.keys(catalog.folders).slice(0,20)){const label=sourceFolder(path),control=button('以“'+label+'”建标签',()=>update({action:'folder_label',path,label}));control.setAttribute('title',path);folders.append(control);}$('center-content').append(folders);}syncSelection();return;}
+  if(view === 'tags' && !query && !tag) {
+    const counts = new Map();
+    for (const item of visible) for (const label of item.tags) counts.set(label, (counts.get(label) || 0) + 1);
+    showNavigationCards([...counts].sort((a,b) => b[1]-a[1]).map(([label,count]) => ({
+      id:label, label:label + ' · ' + count, select:() => browseTo({tag:label}),
+    })), 'chips', 'tag');
+    $('center-subtitle').textContent = counts.size + ' 个标签 · ' + visible.length + ' 项媒体';
+    if (!counts.size) {
+      $('center-content').append(make('p','empty',catalog.items.some(item => item.tags.length)
+        ? '当前筛选下没有标签，可清除筛选查看已有标签。' : '还没有标签，不需要重新扫描。可在媒体详情添加标签，或直接用下方的文件夹名创建标签。'));
+      showNavigationCards(Object.keys(catalog.folders).slice(0,20).map(path => {
+        const label = sourceFolder(path);
+        return {id:path,path,label:'以“' + label + '”建标签',select:() => update({action:'folder_label',path,label})};
+      }), 'actions', 'folderLabel');
+    }
+    syncSelection();return;
+  }
   if(view==='photos'&&!all&&$('photo-layout').value==='timeline'){const order=$('media-order').value||'recent';visible=centerTimelineOrder(visible,order);$('center-subtitle').textContent+=' · '+(order==='oldest'?'月份从旧到新':'月份从新到旧')+' · 月内'+({recent:'最近更新',oldest:'最早更新',name:'按名称',size:'按大小'}[order]||'最近更新');}
   const pages=Math.max(1,Math.ceil(visible.length/galleryPageSize));page=Math.max(0,Math.min(page,pages-1));pageItems=visible.slice(page*galleryPageSize,page*galleryPageSize+galleryPageSize);if(view==='photos'&&!all&&$('photo-layout').value==='timeline'){const months=new Map();for(const item of pageItems){const month=item.metadata.timeline_month||'';if(!months.has(month))months.set(month,[]);months.get(month).push(item);}for(const [month,items]of months){$('center-content').append(make('h2','',month||'日期未知'),make('p','muted',items.some(item=>item.metadata.timeline_source!=='EXIF 拍摄日期')?'含文件名或文件时间推测日期，详情可查看来源。':'按拍摄日期归组'));showRows(items,$('center-content'),'photo');}}else showRows(pageItems,$('center-content'),kind||(!query&&(view==='photos'?'photo':view==='videos'?'video':''))||(visible.length&&visible.every(item=>item.kind===visible[0].kind)?visible[0].kind:''));
   const unclassifiedMovies=view==='movies'&&!query&&!filters&&!catalog.items.some(item=>item.kind==='movie')&&catalog.items.some(item=>item.kind==='video');if(!visible.length&&unclassifiedMovies){$('center-content').append(make('p','empty','目前没有归类为电影的项目。普通视频仍在“视频”中；没有本地影片资料或明确电影目录时不会自动猜测，不必为分类重新扫描。'),button('查看视频并标为电影',()=>switchCenterView('videos'),'primary'));}
@@ -760,7 +828,7 @@ function renderDetail() {
   const art = previewEntry(item, () => { if (!initializing) binding.paint(); });
   const attach = art.attachCover;
   art.attachCover = node => { attach(node); binding.art = node; };
-  binding.updateArt = updated => replacePreview(updated, binding.art);
+  binding.updateArt = updated => setPreviewArt(updated, binding.art);
   binding.paint = () => {
     root.render({actions, refs, state: {
       item:binding.item, photo, busy, manage, facts, preview:art, restored:catalog.restored,
@@ -776,7 +844,7 @@ function renderDetail() {
     }});
   };
   binding.paint();
-  art.initPreview(true);
+  art.initPreview();
   initializing = false;
   binding.paint();
 }

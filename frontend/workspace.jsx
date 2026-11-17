@@ -1,3 +1,4 @@
+import {mountCenterNavigation} from './center-navigation.jsx';
 import {mountCenterDetail} from './center-detail.jsx';
 import {mountCenterReview} from './center-review.jsx';
 import {mountCenterGallery} from './center-gallery.jsx';
@@ -11,6 +12,7 @@ import {mountWorkspaceMedia} from './workspace-media.jsx';
 
 import {mountUserWorkspace} from './user-workspace.jsx';
 
+globalThis.mountCenterNavigation = mountCenterNavigation;
 globalThis.mountCenterDetail = mountCenterDetail;
 globalThis.mountCenterReview = mountCenterReview;
 globalThis.mountCenterGallery = mountCenterGallery;

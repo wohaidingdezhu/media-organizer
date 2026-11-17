@@ -11,6 +11,7 @@ function loadView(file) {
 }
 const {CenterGallery} = loadView('center-gallery.jsx');
 const {CenterReview} = loadView('center-review.jsx');
+const {CenterNavigationCards} = loadView('center-navigation.jsx');
 const {CenterDetailContent, CenterDetailActions} = loadView('center-detail.jsx');
 
 function mountTestView(host, createElement, renderView, append) {
@@ -82,4 +83,5 @@ function mountTestDetail(content, buttons, createElement) {
     dispose() { view.dispose(); footer.dispose(); },
   };
 }
-module.exports = {mountTestGallery, mountTestReview, mountTestDetail};
+const mountTestNavigation = (host, createElement) => mountTestView(host, createElement, CenterNavigationCards);
+module.exports = {mountTestGallery, mountTestReview, mountTestDetail, mountTestNavigation};
