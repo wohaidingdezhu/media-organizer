@@ -4,7 +4,7 @@ const {JSDOM, VirtualConsole} = require('jsdom');
 const paths = [String.raw`\\nas\share\图片`, '/generated/照片'];
 const item = {id:'a'.repeat(64), report_id:'scan-sample', name:'样例.jpg', path:paths[1] + '/样例.jpg',
   kind:'照片', state:'new', created_at:'2026-10-01'};
-let finishScan;
+let finishScan, finishPreview, finishRestore;
 const requests = [], errors = [];
 const ready = {running:false, status:'准备就绪', folders:paths, manual_scan_folders:[paths[0]],
   latest_report:'', monitor:{enabled:false}, logs:[]};
@@ -15,13 +15,20 @@ const dom = new JSDOM(fs.readFileSync(0, 'utf8'), {
   beforeParse(window) {
     window.scrollTo = () => {};
     window.fetch = async (route, options) => {
-      const payload = options?.body ? JSON.parse(options.body) : null;
+      const payload = typeof options?.body === 'string' ? JSON.parse(options.body) : null;
       requests.push({route,payload});
       const reply = data => ({ok:true,json:async()=>data});
       switch (route) {
         case 'api/status': return reply(ready);
         case 'api/reports': return reply({reports:[]});
         case 'api/scan/start': return new Promise(resolve => {finishScan = () => resolve(reply(ready));});
+        case 'api/restore/preview':
+          return new Promise(resolve => {finishPreview = () => resolve(reply({token:options.body.name, reports:1, files:3}));});
+        case 'api/restore/confirm':
+          return new Promise((resolve, reject) => {
+            finishRestore = succeeds => succeeds ? resolve(reply({...ready, folders:[], status:'已恢复为独立资料库副本'}))
+              : reject(Error('连接已断开'));
+          });
         case 'api/catalog': return reply({items:[item], folders:[{path:paths[1],name:'照片',count:1}], warnings:[],
           total:1, all_count:1, scans:1, page:0, pages:1});
         default: throw Error('Unexpected route: ' + route);
@@ -71,6 +78,42 @@ async function run() {
   document.querySelector('#catalog-folders button').click();
   await until(() => requests.some(call => call.route === 'api/catalog' && call.payload.folder === paths[1]), 'folder card preserves its full path');
   await until(() => get('catalog-location').textContent === paths[1] && document.querySelector('.catalog-card'), 'catalog request committed');
+  get('nav-settings').click();
+  const input = get('restore-file'), confirm = get('restore-confirm');
+  function choose(name) {
+    Object.defineProperty(input, 'files', {configurable:true, value:[new dom.window.File(['generated'], name)]});
+    input.dispatchEvent(new dom.window.Event('change', {bubbles:true}));
+  }
+  choose('最先.zip');
+  await until(() => finishPreview && input.disabled, 'the pending validation locks the picker');
+  choose('另一份.zip');
+  assert.equal(requests.filter(call => call.route === 'api/restore/preview').length, 1);
+  finishPreview();
+  await until(() => !confirm.disabled, 'validated archive can be confirmed');
+  assert(get('restore-summary').textContent.includes('最先.zip'));
+
+  confirm.click();
+  confirm.click();
+  await until(() => finishRestore && input.disabled, 'restoring locks the backup controls');
+  assert(get('backup-status').textContent.includes('正在恢复'));
+  assert.equal(requests.filter(call => call.route === 'api/restore/confirm').length, 1);
+  assert.deepEqual(requests.find(call => call.route === 'api/restore/confirm').payload, {token:'最先.zip'});
+  finishRestore(false);
+  await until(() => !input.disabled && get('backup-status').textContent.includes('恢复未确认'), 'failed submission returns to safe state');
+  assert(confirm.hidden && confirm.disabled);
+  assert(get('backup-status').textContent.includes('核对当前资料库'));
+
+  finishPreview = finishRestore = null;
+  choose('另一份.zip');
+  await until(() => finishPreview && input.disabled, 'fresh validation');
+  finishPreview();
+  await until(() => !confirm.disabled && get('restore-summary')?.textContent.includes('另一份.zip'), 'only the second token is offered');
+  confirm.click();
+  await until(() => finishRestore, 'submit second token');
+  finishRestore(true);
+  await until(() => get('platform-main').getAttribute('data-pane') === 'catalog' &&
+    get('backup-status').textContent.includes('已恢复'), 'restored workspace is shown');
+  assert.deepEqual(requests.filter(call => call.route === 'api/restore/confirm').map(call => call.payload.token), ['最先.zip','另一份.zip']);
   assert.deepEqual(errors, []);
 }
 

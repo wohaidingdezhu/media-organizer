@@ -1,3 +1,4 @@
+import {mountDashboardBackup} from './dashboard-backup.jsx';
 import {mountDashboardCatalog} from './dashboard-catalog.jsx';
 import {mountDashboardFolders} from './dashboard-folders.jsx';
 import {mountReportClassification} from './report-classification.jsx';
@@ -30,3 +31,4 @@ globalThis.mountReportDialog = mountReportDialog;
 globalThis.mountReportClassification = mountReportClassification;
 globalThis.mountDashboardFolders = mountDashboardFolders;
 globalThis.mountDashboardCatalog = mountDashboardCatalog;
+globalThis.mountDashboardBackup = mountDashboardBackup;

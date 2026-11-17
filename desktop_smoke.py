@@ -276,7 +276,7 @@ def run():
             with urlopen(url, timeout=10) as response:
                 page = response.read()
                 assert '长期资料库'.encode('utf-8') in page and b'@@DASHBOARD_UI@@' not in page
-                assert b'mountDashboardFolders' in page and b'mountDashboardCatalog' in page
+                assert all(asset in page for asset in (b'mountDashboardFolders', b'mountDashboardCatalog', b'mountDashboardBackup'))
         finally:
             server.shutdown()
             state.close()
