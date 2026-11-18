@@ -9,7 +9,7 @@ import unittest
 HARNESS = r'''
 const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
 const root=process.argv[1];
-const {loadView,mountTestView}=require(root+'/frontend/view-test-dom.cjs');
+const {loadView,mountTestView,mountTestScanStatus}=require(root+'/frontend/view-test-dom.cjs');
 const {ReportDialog}=loadView('report-dialog.jsx');
 const {DashboardFolderList}=loadView('dashboard-folders.jsx');
 class E{
@@ -25,6 +25,7 @@ let requests=[],failure=false,renders=0;
 const scope={$,make:(t,c,s)=>new E(t,s||''),data:{items:[a,b]},mediaAvailable:true,mediaIds:{[a.path]:a.id,[b.path]:b.id},handledTrash:new Set(),selected:new Set([b.id]),saving:false,operating:false,executionPreview:null,quickIssues:[],fileSize:n=>n+' B',render(){renders++;},error(message){$('error').textContent=message||'';$('error').hidden=!message;},api:async(route,body)=>{requests.push({route,body});if(failure)throw Error('至少保留一份');return {mode:body.mode,items:[{path:a.path,target:'系统废纸篓 / 回收站'}],bytes:12};}};
 scope.mountReportDialog=host=>mountTestView(host,tag=>new E(tag),ReportDialog,true);
 scope.mountDashboardFolders=host=>mountTestView(host,tag=>new E(tag),DashboardFolderList).render;
+scope.mountDashboardScanStatus=(banner,panel)=>mountTestScanStatus(banner,panel,tag=>new E(tag),node=>nodes.set(node.id,node));
 vm.createContext(scope);
 const management=fs.readFileSync(root+'/management.js','utf8');
 vm.runInContext(management.slice(0,management.indexOf('function bundleReviewIds')),scope);

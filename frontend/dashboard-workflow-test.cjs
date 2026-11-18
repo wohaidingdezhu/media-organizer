@@ -4,10 +4,13 @@ const {JSDOM, VirtualConsole} = require('jsdom');
 const paths = [String.raw`\\nas\share\图片`, '/generated/照片'];
 const item = {id:'a'.repeat(64), report_id:'scan-sample', name:'样例.jpg', path:paths[1] + '/样例.jpg',
   kind:'照片', state:'new', created_at:'2026-10-01'};
-let finishScan, finishPreview, finishRestore;
+let finishScan, finishCancel, finishPreview, finishRestore;
 const requests = [], errors = [];
 const ready = {running:false, status:'准备就绪', folders:paths, manual_scan_folders:[paths[0]],
   latest_report:'', monitor:{enabled:false}, logs:[]};
+let status = ready;
+const running = {...ready, running:true, logs:['读取样例视频'],
+  progress:{stage:'video', label:'读取视频信息', total:2, completed:2, percent:100, current:'样例.mp4'}};
 const console = new VirtualConsole();
 console.on('jsdomError', error => errors.push(error.message));
 const dom = new JSDOM(fs.readFileSync(0, 'utf8'), {
@@ -19,9 +22,13 @@ const dom = new JSDOM(fs.readFileSync(0, 'utf8'), {
       requests.push({route,payload});
       const reply = data => ({ok:true,json:async()=>data});
       switch (route) {
-        case 'api/status': return reply(ready);
+        case 'api/status': return reply(status);
         case 'api/reports': return reply({reports:[]});
-        case 'api/scan/start': return new Promise(resolve => {finishScan = () => resolve(reply(ready));});
+        case 'api/scan/start':
+          return new Promise(resolve => {finishScan = () => resolve(reply(status = running));});
+        case 'api/scan/cancel':
+          return new Promise(resolve => {finishCancel = () => resolve(reply(status = {...running,
+            cancel_requested:true, logs:[...running.logs, '已请求取消']}));});
         case 'api/restore/preview':
           return new Promise(resolve => {finishPreview = () => resolve(reply({token:options.body.name, reports:1, files:3}));});
         case 'api/restore/confirm':
@@ -62,7 +69,41 @@ async function run() {
   assert.equal(submissions.length, 1);
   assert.deepEqual(submissions[0].payload.scan_folders, [paths[1]]);
   finishScan();
-  await until(() => !picks()[1].disabled, 'scope unlocks');
+  await until(() => !get('cancel').disabled, 'scan starts');
+  assert.equal(get('scan-banner-progress').getAttribute('value'), '100');
+  assert(get('scan-progress-label').textContent.includes('100%'));
+
+  const log = get('log');
+  Object.defineProperties(log, {scrollHeight:{value:400,writable:true}, clientHeight:{value:100}});
+  log.scrollTop = 70;
+  log.dispatchEvent(new dom.window.Event('scroll'));
+  get('cancel').click();
+  get('cancel').click();
+  await until(() => finishCancel, 'cancel request starts');
+  assert.equal(requests.filter(call => call.route === 'api/scan/cancel').length, 1);
+  assert(get('status-text').textContent.includes('正在提交取消请求'));
+  assert(get('scan-progress-label').textContent.includes('正在提交取消请求'));
+  for (const id of ['scan-progress', 'scan-banner-progress']) assert(!get(id).hasAttribute('value'));
+
+  log.scrollHeight = 500;
+  finishCancel();
+  await until(() => log.textContent.includes('已请求取消'), 'accepted cancellation renders its log');
+  assert.equal(log.scrollTop, 70);
+  assert(get('scan-details').open);
+  assert(get('status-text').textContent.includes('正在取消扫描'));
+  assert(get('scan-progress-label').textContent.includes('正在取消扫描'));
+  for (const id of ['scan-progress', 'scan-banner-progress']) assert(!get(id).hasAttribute('value'));
+  get('cancel').click();
+  assert.equal(requests.filter(call => call.route === 'api/scan/cancel').length, 1);
+
+  log.scrollTop = 400;
+  log.dispatchEvent(new dom.window.Event('scroll'));
+  log.scrollHeight = 600;
+  status = {...ready, status:'扫描已取消', logs:[...running.logs, '扫描已取消']};
+  await until(() => !picks()[1].disabled, 'scope unlocks after cancellation');
+  assert(get('scan-banner').hidden && get('bar').hidden);
+  assert.equal(get('status-text').textContent, '扫描已取消');
+  assert.equal(log.scrollTop, 600);
   assert(picks()[1].checked);
 
   get('nav-catalog').click();

@@ -277,11 +277,12 @@ photo.preview='';items=[photo];location.hash='#photos';events.hashchange();await
         node=shutil.which('node');self.assertIsNotNone(node)
         code=r'''
 const fs=require('fs'),vm=require('vm'),assert=require('assert/strict'),html=fs.readFileSync(process.argv[1]+'/dashboard.html','utf8');
-class E{constructor(tag='div'){this.tagName=tag.toUpperCase();this.children=[];this.classList={toggle(){}};}replaceChildren(){this.children=[];}append(...x){this.children.push(...x);}removeAttribute(key){delete this[key];}}
-const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new E());return nodes.get(id);},scope={$: $,folderSelection:new Map(),lastFolders:'',lastLog:'',monitorEditing:false,document:{activeElement:null,createElement:()=>new E()},act(){}};
-const {loadView,mountTestView}=require(process.argv[1]+'/frontend/view-test-dom.cjs');
+class E{constructor(tag='div'){this.tagName=tag.toUpperCase();this.children=[];this.classList={toggle(){}};}replaceChildren(){this.children=[];}append(...x){this.children.push(...x);}removeAttribute(key){delete this[key];}setAttribute(key,value){this[key]=value;}}
+const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new E());return nodes.get(id);},scope={$: $,folderSelection:new Map(),lastFolders:'',monitorEditing:false,document:{activeElement:null,createElement:()=>new E()},act(){}};
+const {loadView,mountTestView,mountTestScanStatus}=require(process.argv[1]+'/frontend/view-test-dom.cjs');
 const {DashboardFolderList}=loadView('dashboard-folders.jsx');
 scope.mountDashboardFolders=host=>mountTestView(host,tag=>new E(tag),DashboardFolderList).render;
+scope.mountDashboardScanStatus=(banner,panel)=>mountTestScanStatus(banner,panel,tag=>new E(tag),node=>nodes.set(node.id,node));
 vm.createContext(scope);vm.runInContext(html.slice(html.indexOf('function syncScanScope('),html.indexOf('async function refresh(')),scope);
 const data={folders:[],running:true,status:'Scanning',logs:[],monitor:{enabled:false},progress:{stage:'photos',label:'Photos',completed:2,total:4,percent:50,current:'sample.jpg'}};
 scope.renderStatus(data);assert.equal($('scan-progress').value,50);assert.equal($('scan-banner-progress').value,50);assert($('scan-progress-label').textContent.includes('50%'));assert.equal($('scan-progress-current').textContent,'sample.jpg');assert(!$('scan-banner').hidden);

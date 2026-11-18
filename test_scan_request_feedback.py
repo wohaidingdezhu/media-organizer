@@ -16,7 +16,7 @@ class ScanRequestFeedbackTests(unittest.TestCase):
 const html=fs.readFileSync(root+'/dashboard.html','utf8');
 E.prototype.removeAttribute=function(k){delete this.attrs[k];};
 const initial={folders:['C:\\generated'],running:false,cancel_requested:false,status:'ready',logs:[],monitor:{enabled:false},progress:null};let replies=[],resolveAction,fail=false;
-Object.assign(scope,{stopped:false,previousRunning:false,knownLatest:'old',selectedReport:'old',folderSelection:new Map(),lastFolders:'',lastLog:'',monitorEditing:false,document:{activeElement:null,createElement:t=>new E(t)},notice(e){$('notice').textContent=e?String(e):'';},request:async(path,body)=>{requests.push({path,body});if(path==='status')return replies.shift()||initial;return new Promise(resolve=>resolveAction=resolve);},setTimeout(){return 1;},loadReports:async()=>true});
+Object.assign(scope,{stopped:false,previousRunning:false,knownLatest:'old',selectedReport:'old',folderSelection:new Map(),lastFolders:'',monitorEditing:false,document:{activeElement:null,createElement:t=>new E(t)},notice(e){$('notice').textContent=e?String(e):'';},request:async(path,body)=>{requests.push({path,body});if(path==='status')return replies.shift()||initial;return new Promise(resolve=>resolveAction=resolve);},setTimeout(){return 1;},loadReports:async()=>true});
 vm.runInContext(html.slice(html.indexOf('function syncScanScope('),html.indexOf('async function beginFirstScan(')),scope);
 vm.runInContext(html.slice(html.indexOf("$('add-folder').onclick="),html.indexOf("$('quit').onclick=")),scope);
 scope.renderStatus(initial);
@@ -41,9 +41,31 @@ resolveAction(initial);await job;assert(!$('add-folder').disabled);assert(!$('sc
     def test_cancellation_survives_progress_poll_and_finishes_cleanly(self):
         self.dashboard(r'''
 const running={...initial,running:true,progress:{stage:'photos',label:'解析照片',total:100,completed:50,percent:50}};scope.renderStatus(running);
-const job=$('cancel').onclick();assert($('cancel').disabled);assert($('cancel').textContent.includes('请求'));await $('cancel').onclick();assert.equal(requests.length,1);
-resolveAction({...running,cancel_requested:true});await job;scope.renderStatus({...running,cancel_requested:true,progress:{...running.progress,completed:51,percent:51}});assert($('cancel').disabled);assert($('status-text').textContent.includes('正在取消'));assert($('scan-progress-label').textContent.includes('正在取消'));await $('cancel').onclick();assert.equal(requests.length,1);
+const job=$('cancel').onclick();assert($('cancel').disabled);assert($('cancel').textContent.includes('请求'));
+for(const id of ['status-text','scan-progress-label'])assert($(id).textContent.includes('正在提交取消请求'));
+for(const id of ['scan-progress','scan-banner-progress'])assert.equal($(id).value,undefined);
+await $('cancel').onclick();assert.equal(requests.length,1);
+resolveAction({...running,cancel_requested:true});await job;scope.renderStatus({...running,cancel_requested:true,progress:{...running.progress,completed:51,percent:51}});assert($('cancel').disabled);assert($('status-text').textContent.includes('正在取消'));assert($('scan-progress-label').textContent.includes('正在取消'));assert.equal($('scan-banner-progress').value,undefined);await $('cancel').onclick();assert.equal(requests.length,1);
 scope.renderStatus({...initial,status:'扫描已取消'});assert(!$('scan').disabled);assert($('cancel').disabled);assert.equal($('cancel').textContent,'取消扫描');assert($('scan-banner').hidden);
+''')
+
+    def test_failed_cancel_restores_progress_and_can_be_retried(self):
+        self.dashboard(r'''
+const running={...initial,running:true,progress:{stage:'photos',label:'解析照片',total:100,completed:50,percent:50}};
+scope.renderStatus(running);replies.push(running);
+const request=scope.request;
+let failCancel=true;
+scope.request=async(path,body)=>{
+  if(path==='scan/cancel'&&failCancel){failCancel=false;throw Error('网络连接失败');}
+  return request(path,body);
+};
+await $('cancel').onclick();
+assert(!$('cancel').disabled);
+assert($('notice').textContent.includes('网络连接失败'));
+for(const id of ['scan-progress','scan-banner-progress'])assert.equal($(id).value,50);
+const retry=$('cancel').onclick();
+assert($('cancel').disabled);resolveAction({...running,cancel_requested:true});await retry;
+assert($('scan-progress-label').textContent.includes('正在取消扫描'));
 ''')
 
     def test_failed_request_recovers_controls_and_keeps_error(self):
