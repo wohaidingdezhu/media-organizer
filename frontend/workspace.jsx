@@ -1,3 +1,4 @@
+import {mountDashboardScanStatus} from './dashboard-scan-status.jsx';
 import {mountDashboardBackup} from './dashboard-backup.jsx';
 import {mountDashboardCatalog} from './dashboard-catalog.jsx';
 import {mountDashboardFolders} from './dashboard-folders.jsx';
@@ -32,3 +33,4 @@ globalThis.mountReportClassification = mountReportClassification;
 globalThis.mountDashboardFolders = mountDashboardFolders;
 globalThis.mountDashboardCatalog = mountDashboardCatalog;
 globalThis.mountDashboardBackup = mountDashboardBackup;
+globalThis.mountDashboardScanStatus = mountDashboardScanStatus;

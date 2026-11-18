@@ -68,4 +68,21 @@ function mountTestView(host, createElement, renderView, append) {
   };
 }
 
-module.exports = {loadView, mountTestView};
+function mountTestScanStatus(banner, panel, createElement, register) {
+  const {scanProgressState, ScanBanner, ScanPanel} = loadView('dashboard-scan-status.jsx');
+  const bannerView = mountTestView(banner, createElement, ScanBanner);
+  const panelView = mountTestView(panel, createElement, ScanPanel);
+  function registerChildren(node) {
+    if (node.id) register(node);
+    for (const child of node.children) registerChildren(child);
+  }
+  return (data, pending) => {
+    const props = {state: scanProgressState(data, pending)};
+    bannerView.render(props);
+    panelView.render(props);
+    registerChildren(banner);
+    registerChildren(panel);
+  };
+}
+
+module.exports = {loadView, mountTestView, mountTestScanStatus};
