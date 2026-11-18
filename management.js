@@ -237,9 +237,12 @@ function operationItemText(job,item){
 function renderOperationRows(view){
   const query=view.search.value.trim().toLocaleLowerCase(),status=view.filter.value;
   const rows=view.records.filter(item=>(!status||operationItemState(view.job,item)===status)&&(!query||(item.path+' '+item.target+' '+(item.error||'')).toLocaleLowerCase().includes(query)));
-  const pages=Math.max(1,Math.ceil(rows.length/50));view.page=Math.max(0,Math.min(view.page,pages-1));view.rows.replaceChildren();
-  for(const item of rows.slice(view.page*50,(view.page+1)*50))view.rows.append(make('pre',operationItemState(view.job,item)==='attention'?'warning':'',operationItemText(view.job,item)));
-  if(!rows.length)view.rows.append(make('p','muted','当前筛选没有文件。'));
+  const pages=Math.max(1,Math.ceil(rows.length/50));view.page=Math.max(0,Math.min(view.page,pages-1));
+  if(!view.rowsRenderer)view.rowsRenderer=mountOperationRows(view.rows);
+  view.rowsRenderer.render(rows.slice(view.page*50,(view.page+1)*50).map(item=>({
+    path:item.path, attention:operationItemState(view.job,item)==='attention',
+    text:operationItemText(view.job,item),
+  })));
   view.position.textContent=`明细 ${rows.length}/${view.records.length} 项 · 第 ${view.page+1}/${pages} 页（每页 50 项）`;
   view.previous.disabled=view.page===0;view.next.disabled=view.page>=pages-1;
 }
@@ -259,7 +262,12 @@ function operationCard(job){
     view.search.oninput=view.filter.onchange=()=>{view.page=0;renderOperationRows(view);};
     view.previous.onclick=()=>{view.page--;renderOperationRows(view);};view.next.onclick=()=>{view.page++;renderOperationRows(view);};
     view.attention.onclick=()=>{view.filter.value='attention';view.search.value='';view.page=0;renderOperationRows(view);};
-    view.stop.onclick=async()=>{view.stopping=true;try{await stopOperation(view.job.id,view.stop);}finally{view.stopping=false;}};
+    view.stop.onclick=async()=>{
+      if(view.stopping||view.job.stop_requested||!activeOperation(view.job))return;
+      view.stopping=true;operationCard(view.job);
+      try{await stopOperation(view.job.id,view.stop);}
+      finally{view.stopping=false;if(operationViews.get(view.job.id)===view)operationCard(view.job);}
+    };
     view.reviewResult.setAttribute('role','status');view.review.onclick=()=>reviewRemaining(view.job.id,view.review,view.reviewResult);
     operationViews.set(job.id,view);
   }
@@ -275,7 +283,7 @@ function operationCard(job){
   view.current.hidden=!current;view.current.textContent=current?operationItemText(job,current):'';
   view.error.hidden=!job.error;view.error.textContent=job.error||'';
   view.stop.hidden=view.stopHint.hidden=!active;view.stop.disabled=!!job.stop_requested||!!view.stopping;
-  view.stop.textContent=job.stop_requested?'正在安全停止…':job.queue?'安全停止整个整理任务':'安全停止此批次';
+  view.stop.textContent=job.stop_requested?'正在安全停止…':view.stopping?'正在提交停止请求…':job.queue?'安全停止整个整理任务':'安全停止此批次';
   view.stopHint.textContent=job.mode==='copy'?'停止会清理当前未完成临时副本，已完成副本保留；磁盘正在响应时可能需要等待。':'当前文件的系统废纸篓 / 回收站操作会完成，再停止后续项；不会自动恢复已成功项。';
   view.attention.hidden=!counts.attention;view.attention.textContent=`查看需核对的 ${counts.attention} 项`;
   view.unknown.hidden=!!job.planned_items||job.total<=job.items.length;view.unknown.textContent=`还有 ${job.total-job.items.length} 项未记录处理结果。旧记录没有完整批次清单，请对照报告核对。`;
@@ -287,7 +295,9 @@ function operationCard(job){
 function renderOperationCards(result){
   const log=$('operation-log');if(log&&((result.warnings||[]).length||result.jobs.some(activeOperation)))log.open=true;
   const parent=$('operations'),keys=new Set(result.jobs.map(job=>job.id));
-  for(const key of operationViews.keys())if(!keys.has(key))operationViews.delete(key);
+  for(const [key,view] of operationViews)if(!keys.has(key)){
+    view.rowsRenderer?.dispose();operationViews.delete(key);
+  }
   const desired=[...(result.warnings||[]).map(warning=>make('p','warning',warning)),...result.jobs.map(operationCard)];
   if(!desired.length)desired.push(make('p','','本次扫描还没有文件操作记录。'));
   for(const child of [...parent.children])if(!desired.includes(child))child.remove();
@@ -315,7 +325,7 @@ async function stopOperation(id,button){
     await api('api/operations/stop',{id});
     $('notice').textContent='已请求安全停止，请等待逐项结果；已完成项保留。';
   }catch(err){error('停止请求未确认，请查看进度后重试：'+err.message);}
-  refreshOperations();
+  await refreshOperations();
 }
 async function refreshOperations(){
   clearTimeout(operationTimer);

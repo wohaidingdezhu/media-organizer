@@ -28,14 +28,17 @@ async function until(fn, reason) {
   assert.fail(reason);
 }
 
-function fixture(html, route) {
+function fixture(html, route, initialJobs = []) {
   const errors = [];
   const console = new VirtualConsole();
   console.on('jsdomError', error => errors.push(error.message));
   const calls = [];
   const basket = new Set();
   let dupeLoads = 0;
-  let completePreview;
+  let completePreview, completeStop, completeHistory;
+  let operationJobs = initialJobs, delayHistory = false;
+  const history = () => ({jobs:operationJobs, record_count:operationJobs.length,
+    warnings:[], handled:{copy:[],trash:[]}});
   const dom = new JSDOM(html, {
     url: 'http://127.0.0.1:43210/generated/' + route, runScripts: 'dangerously', virtualConsole: console,
     beforeParse(window) {
@@ -63,7 +66,19 @@ function fixture(html, route) {
           case 'api/roots':
             return reply({roots: []});
           case 'api/operations':
-            return reply({jobs: [], warnings: [], handled: {copy: [], trash: []}});
+            if (delayHistory) return new Promise(resolve => {
+              completeHistory = () => {delayHistory = false; resolve(reply(history()));};
+            });
+            return reply(history());
+          case 'api/operations/stop':
+            delayHistory = true;
+            return new Promise((resolve, reject) => {
+              completeStop = succeeds => {
+                if (!succeeds) return reject(Error('停止请求连接中断'));
+                operationJobs = operationJobs.map(job => ({...job, stop_requested:true}));
+                resolve(reply({stopped:true}));
+              };
+            });
           case 'api/organize-settings':
             return reply({destination: '', all_batches: false});
           case 'api/duplicates':
@@ -86,7 +101,10 @@ function fixture(html, route) {
       };
     },
   });
-  return {dom, errors, calls, finish: () => completePreview()};
+  return {dom, errors, calls, finish: () => completePreview(),
+    stop:succeeds => completeStop(succeeds), updateJobs:jobs => {operationJobs = jobs;},
+    finishHistory:() => {assert(completeHistory); completeHistory(); completeHistory = null;},
+    waitingHistory:() => Boolean(completeHistory)};
 }
 function change(window, element, value) {
   const input = element.tagName === 'INPUT';
@@ -182,7 +200,81 @@ async function verifyWorkspace() {
   }
 }
 
-(async () => { await verifyDuplicates(); await verifyWorkspace(); })().catch(error => {
+async function verifyOperationProgress() {
+  const planned = items.map(item => ({...item, target:item.path + '.copy'}));
+  planned[0] = {...planned[0], bytes:100 * 1024 ** 3};
+  const job = {id:'a'.repeat(24), mode:'copy', quick:true, queue:true, completed_batches:0,
+    batch_count:2, total:201, status:'running', planned_items:planned,
+    items:[{...planned[0], status:'processing', phase:'copying', processed_bytes:1024}]};
+  const ui = fixture(organize, 'organize.html', [job]);
+  const {dom, calls, errors} = ui, {document} = dom.window;
+  const node = id => get(document, id);
+  const button = label => [...document.querySelectorAll('#operations button')].find(b => b.textContent === label);
+  const refresh = async () => {
+    const count = calls.filter(call => call.path === 'api/operations').length;
+    node('refresh-operations').click();
+    await until(() => calls.filter(call => call.path === 'api/operations').length > count, 'operation history request');
+    await pause(20);
+  };
+  try {
+    await until(() => button('安全停止整个整理任务'), 'operation card ready');
+    assert(node('operations').textContent.includes('100.00 GB'), 'large-file size is retained');
+    assert(node('operations').textContent.includes('正在复制'), 'active large-file transfer is visible');
+    const rows = [...document.querySelectorAll('#operations pre')];
+    const first = rows.find(row => row.textContent.includes(planned[1].path));
+    const selection = dom.window.getSelection(), range = document.createRange();
+    range.selectNodeContents(first);
+    selection.addRange(range);
+    const selectedText = selection.toString();
+    await refresh();
+    assert(first.isConnected, 'poll keeps the file row attached');
+    assert.equal(selection.toString(), selectedText, 'poll retains selected path text');
+    assert.equal(document.querySelectorAll('#operations pre').length, 51);
+    button('下一页明细').click();
+    assert(node('operations').textContent.includes('第 2/5 页'));
+    await refresh();
+    assert(node('operations').textContent.includes('第 2/5 页'));
+    assert.equal(document.querySelectorAll('#operations pre').length, 51);
+
+    const stop = button('安全停止整个整理任务');
+    stop.click();
+    stop.click();
+    assert.equal(stop.textContent, '正在提交停止请求…');
+    assert(stop.disabled);
+    assert.equal(calls.filter(call => call.path === 'api/operations/stop').length, 1);
+    ui.updateJobs([job]);
+    dom.window.eval('renderOperationCards(' + JSON.stringify({jobs:[job],warnings:[]}) + ')');
+    assert(stop.disabled, 'poll cannot unlock an in-flight stop');
+    ui.stop(false);
+    await until(ui.waitingHistory, 'failed stop reconciles history');
+    assert(stop.disabled);
+    ui.finishHistory();
+    await until(() => !stop.disabled, 'failed stop can be retried after reconciliation');
+    assert(node('error').textContent.includes('停止请求连接中断'));
+
+    stop.click();
+    ui.stop(true);
+    await until(ui.waitingHistory, 'accepted stop reconciles history');
+    assert(stop.disabled);
+    ui.finishHistory();
+    await until(() => stop.textContent === '正在安全停止…', 'server acknowledges stop');
+    assert(stop.disabled);
+    assert.equal(calls.filter(call => call.path === 'api/operations/stop').length, 2);
+    ui.updateJobs([{...job, status:'cancelled', stop_requested:true}]);
+    await refresh();
+    assert(stop.hidden);
+    assert(node('operations').textContent.includes('需核对 1'));
+    assert.equal(calls.filter(call => call.path === 'api/operations/start').length, 0);
+    ui.updateJobs([]);
+    await refresh();
+    assert.equal(document.querySelectorAll('#operations pre').length, 0);
+    assert.deepEqual(errors, []);
+  } finally {
+    dom.window.close();
+  }
+}
+
+(async () => { await verifyDuplicates(); await verifyWorkspace(); await verifyOperationProgress(); })().catch(error => {
   console.error(error);
   process.exitCode = 1;
 });
