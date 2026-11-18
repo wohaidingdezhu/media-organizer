@@ -1,3 +1,4 @@
+import {mountOperationRows} from './operation-progress.jsx';
 import {mountDashboardScanStatus} from './dashboard-scan-status.jsx';
 import {mountDashboardBackup} from './dashboard-backup.jsx';
 import {mountDashboardCatalog} from './dashboard-catalog.jsx';
@@ -34,3 +35,5 @@ globalThis.mountDashboardFolders = mountDashboardFolders;
 globalThis.mountDashboardCatalog = mountDashboardCatalog;
 globalThis.mountDashboardBackup = mountDashboardBackup;
 globalThis.mountDashboardScanStatus = mountDashboardScanStatus;
+
+globalThis.mountOperationRows = mountOperationRows;

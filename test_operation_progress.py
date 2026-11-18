@@ -9,7 +9,7 @@ HARNESS = r'''
 const fs=require('fs'),vm=require('vm');
 let created=0,moves=0,stopped=null,reviewed=null;
 class E{
-  constructor(tag,text=''){this.tag=tag;this.textContent=text;this.children=[];this.value='';this.attrs={};created++;}
+  constructor(tag,text=''){this.tag=tag;this.tagName=tag.toUpperCase();this.textContent=text;this.children=[];this.value='';this.attrs={};created++;}
   append(...children){for(const child of children){child.parent=this;this.children.push(child);}}
   replaceChildren(...children){for(const child of this.children)child.parent=null;this.children=[];this.append(...children);}
   setAttribute(key,value){this.attrs[key]=value;}
@@ -21,7 +21,10 @@ function all(root){return [root,...root.children.flatMap(all)];}
 function text(root){return root.hidden?'':[root.textContent,...root.children.map(text)].join(' ');}
 function control(root,label){return all(root).find(node=>node.textContent===label);}
 function check(value,message){if(!value)throw Error(message);}
-const scope={$,make:(tag,cls,content)=>new E(tag,content||''),fileSize:String,operating:false,saving:false,stopOperation:async(id)=>{stopped=id;},reviewRemaining:async(id)=>{reviewed=id;}};
+const path=require('path');
+const {loadView,mountTestView}=require(path.join(path.dirname(process.argv[1]),'frontend/view-test-dom.cjs'));
+const {OperationRows}=loadView('operation-progress.jsx');
+const scope={mountOperationRows:host=>mountTestView(host,tag=>new E(tag),rows=>OperationRows({rows})),$,make:(tag,cls,content)=>new E(tag,content||''),fileSize:String,operating:false,saving:false,stopOperation:async(id)=>{stopped=id;},reviewRemaining:async(id)=>{reviewed=id;}};
 vm.createContext(scope);const source=fs.readFileSync(process.argv[1],'utf8');vm.runInContext(source.slice(source.indexOf('function activeOperation'),source.indexOf('async function reviewRemaining')),scope);
 const planned=Array.from({length:10000},(_,i)=>({path:'C:\\样例\\source-'+String(i).padStart(5,'0')+'.jpg',target:'C:\\副本\\photo-'+i+'.jpg',bytes:100,role:'照片'}));
 function job(overrides={}){return {id:'a'.repeat(24),mode:'copy',quick:true,queue:true,batch_count:50,completed_batches:0,status:'running',total:planned.length,planned_items:planned,items:[],...overrides};}
@@ -76,10 +79,29 @@ const record=job();scope.renderOperationCards({jobs:[record],warnings:[]});const
 control(card,'下一页明细').onclick();const before=moves;created=0;
 scope.renderOperationCards({jobs:[record],warnings:[]});
 check(moves===before,'polling detached a focused control');check(parent.children[0]===card&&all(card).includes(search),'polling replaced controls');
-check(created===50&&text(card).includes('第 2/200 页'),'polling should only replace visible detail rows');
+check(created===0&&text(card).includes('第 2/200 页'),'unchanged progress replaced visible rows');
 scope.renderOperationCards({jobs:[record],warnings:['损坏记录请核对']});check(text(parent).includes('损坏记录请核对'),'history warning missing');
 scope.renderOperationCards({jobs:[],warnings:[]});check(text(parent).includes('还没有文件操作记录'),'empty history');
 check(vm.runInContext('operationViews.size',scope)===0,'detached histories retained');
+''')
+
+    def test_pending_stop_survives_polling_and_rejects_repeated_handlers(self):
+        self.run_ui(r'''
+(async()=>{
+let finish,calls=0;
+scope.stopOperation=()=>{calls++;return new Promise(resolve=>finish=resolve);};
+const record=job(),card=scope.operationCard(record),stop=control(card,'安全停止整个整理任务');
+const pending=stop.onclick();
+check(stop.disabled&&stop.textContent==='正在提交停止请求…','missing pending stop feedback');
+scope.operationCard({...record,items:[{...planned[0],status:'processing',phase:'verifying',processed_bytes:50}]});
+await stop.onclick();check(calls===1&&stop.disabled,'poll or repeated handler submitted another stop');
+finish();await pending;
+check(!stop.disabled&&stop.textContent==='安全停止整个整理任务','unacknowledged stop cannot be retried');
+const retry=stop.onclick();check(calls===2,'retry was not submitted');
+scope.operationCard({...record,stop_requested:true});finish();await retry;
+check(stop.disabled&&stop.textContent==='正在安全停止…','acknowledged stop was unlocked');
+await stop.onclick();check(calls===2,'acknowledged stop submitted again');
+})().catch(error=>{console.error(error);process.exitCode=1;});
 ''')
 
     def test_stop_targets_whole_queue_and_legacy_history_keeps_unknown_outcomes(self):
