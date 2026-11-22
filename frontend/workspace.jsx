@@ -1,3 +1,4 @@
+import {mountOrganizedNavigation} from './organized-navigation.jsx';
 import {mountExecutionPreview} from './execution-preview.jsx';
 import {mountOperationRows} from './operation-progress.jsx';
 import {mountDashboardScanStatus} from './dashboard-scan-status.jsx';
@@ -40,3 +41,5 @@ globalThis.mountDashboardScanStatus = mountDashboardScanStatus;
 globalThis.mountOperationRows = mountOperationRows;
 
 globalThis.mountExecutionPreview = mountExecutionPreview;
+
+globalThis.mountOrganizedNavigation = mountOrganizedNavigation;

@@ -14,7 +14,7 @@ function copy(id,parts,name,kind='照片',bytes=10){
   return {id,path:'/generated/'+id,name,folder,result_parts:parts,target:folder+separator+name,kind,bytes,can_open:kind==='照片'||kind==='视频'};
 }
 class E {
-  constructor(tag,text=''){this.tag=tag;this.textContent=text;this.children=[];this.value='';this.attrs={};this.disabled=false;this.events={};this.open=false;}
+  constructor(tag,text=''){this.tag=tag;this.tagName=tag.toUpperCase();this.textContent=text;this.children=[];this.value='';this.attrs={};this.disabled=false;this.events={};this.open=false;}
   append(...values){this.children.push(...values);}
   replaceChildren(...values){this.children=values;}
   setAttribute(key,value){this.attrs[key]=value;}
@@ -33,6 +33,8 @@ const scope={...browse,$,make:(tag,cls,value)=>new E(tag,value||''),organizedIte
   if(route==='api/organized-results')return {items:records,message:'generated records'};
   calls.push({route,body});if(failure)throw Error(failure);return {opened:true};
 }};
+const path=require('path'),{mountTestOrganizedNavigation}=require(path.join(path.dirname(process.argv[2]),'frontend/view-test-dom.cjs'));
+scope.mountOrganizedNavigation=(breadcrumbs,folders,onNavigate)=>mountTestOrganizedNavigation(breadcrumbs,folders,onNavigate,tag=>new E(tag));
 vm.createContext(scope);const source=fs.readFileSync(process.argv[2],'utf8');
 vm.runInContext(source.slice(source.indexOf('async function openOrganizedCopy'),
   source.indexOf('// Initialize the organizing workspace')),scope);
@@ -84,6 +86,38 @@ $('organized-kind').value='视频';$('organized-kind').onchange();assert.equal(c
 $('organized-breadcrumbs').children[1].onclick();assert($('organized-summary').textContent.startsWith('/copies ·'));assert.equal($('organized-kind').value,'视频');
 $('organized-reset').onclick();assert.equal(cards().length,50);assert.equal($('organized-kind').value,'');assert($('organized-descendants').checked);assert($('organized-up').disabled);
 records=[];await scope.refreshOrganizedResults();assert.equal(cards().length,0);assert(text($('organized-items')).includes('还没有成功复制记录'));assert($('organized-next').disabled);assert($('organized-folder-next').disabled);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+''')
+
+    def test_refresh_ignores_out_of_order_results_and_old_errors_preserving_scope_and_page(self):
+        self.node(r'''
+(async()=>{
+records=Array.from({length:65},(_,i)=>copy('p'+i,['/copies','旅行'],'photo'+i+'.jpg'));
+await scope.refreshOrganizedResults();scope.navigateOrganizedResults(JSON.stringify(['/copies','旅行']));
+$('organized-next').onclick();assert.equal(scope.organizedPage,1);
+const pending=[];
+scope.api=()=>new Promise((resolve,reject)=>pending.push({resolve,reject}));
+const old=scope.refreshOrganizedResults(),latest=scope.refreshOrganizedResults();
+assert($('organized-refresh').disabled);assert($('organized-message').textContent.includes('正在读取'));
+pending[0].resolve({items:[],message:'旧空结果'});await old;
+assert($('organized-refresh').disabled);assert.equal(cards().length,15);
+pending[1].resolve({items:records,message:'当前结果'});await latest;
+assert(!$('organized-refresh').disabled);assert.equal(scope.organizedPage,1);
+assert.equal(scope.organizedNode,JSON.stringify(['/copies','旅行']));
+assert($('organized-message').textContent.includes('当前结果'));
+const stale=scope.refreshOrganizedResults(),fresh=scope.refreshOrganizedResults();
+pending[3].resolve({items:records,message:'更新结果'});await fresh;
+pending[2].reject(Error('旧连接错误'));await stale;
+assert($('organized-message').textContent.includes('更新结果'));
+assert(!$('organized-message').textContent.includes('旧连接错误'));
+const before=$('organized-summary').textContent,failed=scope.refreshOrganizedResults();
+pending[4].reject(Error('磁盘暂时断开'));await failed;
+assert(!$('organized-refresh').disabled);assert($('organized-message').textContent.includes('可以重试'));
+assert.equal($('organized-summary').textContent,before);assert.equal(cards().length,15);
+const retry=scope.refreshOrganizedResults();
+pending[5].resolve({items:records,message:'恢复成功'});await retry;
+assert($('organized-message').textContent.includes('恢复成功'));assert.equal(scope.organizedPage,1);
+assert.equal(calls.length,0);
 })().catch(error=>{console.error(error);process.exitCode=1;});
 ''')
 

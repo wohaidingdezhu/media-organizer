@@ -91,4 +91,15 @@ function mountTestExecutionPreview(host, createElement) {
     ExecutionItems({...props, summary:executionSummary(props.preview)})).render;
 }
 
-module.exports = {loadView, mountTestView, mountTestScanStatus, mountTestExecutionPreview};
+function mountTestOrganizedNavigation(breadcrumbs, folders, onNavigate, createElement) {
+  const {OrganizedBreadcrumbs, OrganizedFolders} = loadView('organized-navigation.jsx');
+  const breadcrumbView = mountTestView(breadcrumbs, createElement, OrganizedBreadcrumbs);
+  const folderView = mountTestView(folders, createElement, OrganizedFolders);
+  return props => {
+    const state = {...props, onNavigate};
+    breadcrumbView.render(state);
+    folderView.render(state);
+  };
+}
+
+module.exports = {loadView, mountTestView, mountTestScanStatus, mountTestExecutionPreview, mountTestOrganizedNavigation};
