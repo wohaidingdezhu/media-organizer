@@ -9,7 +9,7 @@ import unittest
 HARNESS = r'''
 const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
 const root=process.argv[1];
-const {loadView,mountTestView,mountTestScanStatus}=require(root+'/frontend/view-test-dom.cjs');
+const {loadView,mountTestView,mountTestScanStatus,mountTestExecutionPreview}=require(root+'/frontend/view-test-dom.cjs');
 const {ReportDialog}=loadView('report-dialog.jsx');
 const {DashboardFolderList}=loadView('dashboard-folders.jsx');
 class E{
@@ -23,6 +23,7 @@ const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new E());return node
 const a={id:'a'.repeat(64),name:'a.jpg',path:'C:\\generated\\a.jpg',kind:'照片',bytes:12},b={...a,id:'b'.repeat(64),name:'b.jpg',path:'/generated/b.jpg'};
 let requests=[],failure=false,renders=0;
 const scope={$,make:(t,c,s)=>new E(t,s||''),data:{items:[a,b]},mediaAvailable:true,mediaIds:{[a.path]:a.id,[b.path]:b.id},handledTrash:new Set(),selected:new Set([b.id]),saving:false,operating:false,executionPreview:null,quickIssues:[],fileSize:n=>n+' B',render(){renders++;},error(message){$('error').textContent=message||'';$('error').hidden=!message;},api:async(route,body)=>{requests.push({route,body});if(failure)throw Error('至少保留一份');return {mode:body.mode,items:[{path:a.path,target:'系统废纸篓 / 回收站'}],bytes:12};}};
+scope.mountExecutionPreview=host=>mountTestExecutionPreview(host,tag=>new E(tag));
 scope.mountReportDialog=host=>mountTestView(host,tag=>new E(tag),ReportDialog,true);
 scope.mountDashboardFolders=host=>mountTestView(host,tag=>new E(tag),DashboardFolderList).render;
 scope.mountDashboardScanStatus=(banner,panel)=>mountTestScanStatus(banner,panel,tag=>new E(tag),node=>nodes.set(node.id,node));
@@ -142,6 +143,33 @@ let history={jobs:[{id:'other',mode:'trash',status:'complete'}],handled:{trash:[
 Object.assign(scope,{operationTimer:null,monitorRevision:0,monitorFailures:0,renderOperationCards(){},clearTimeout(){},setTimeout(){return 1;},api:async()=>history,window:{dispatchEvent:event=>notifications.push(event)},CustomEvent:class{constructor(type,options){this.type=type;this.detail=options.detail;}}});
 vm.runInContext(management.slice(management.indexOf('function notifyReview('),management.indexOf("$('execution-start').onclick")),scope);vm.runInContext(management.slice(management.indexOf('function activeOperation('),management.indexOf('const operationViews=')),scope);vm.runInContext(management.slice(management.indexOf('async function refreshOperations()'),management.indexOf("$('refresh-operations').onclick")),scope);vm.runInContext("submittedOperationId='mine'",scope);
 await scope.refreshOperations();assert.equal(notifications.length,0);history.jobs=[{id:'mine',mode:'trash',status:'running'}];await scope.refreshOperations();assert.equal(notifications.length,0);history.jobs[0].status='complete';await scope.refreshOperations();assert.equal(notifications.length,1);assert.equal(notifications[0].type,'media-operation-finished');assert.equal(notifications[0].detail.status,'complete');assert.equal(notifications[0].detail.mode,'trash');await scope.refreshOperations();assert.equal(notifications.length,1);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+""")
+
+    def test_pending_submission_keeps_confirmation_locked_after_idle_poll_and_failure_preserves_picks(self):
+        self.node(r"""
+(async()=>{
+Object.assign(scope,{monitorRevision:0,operationTimer:null,clearTimeout(){},refreshOperations(){},error(message){$('error').textContent=message;}});
+vm.runInContext(management.slice(management.indexOf("$('execution-confirm').onchange"),management.indexOf('function activeOperation(')),scope);
+scope.executionPreview={mode:'trash',token:'generated-token'};
+$('execution').showModal();$('execution-confirm').checked=true;
+let rejectStart,calls=0;
+scope.api=()=>{calls++;return new Promise((resolve,reject)=>rejectStart=reject);};
+const pending=$('execution-start').onclick();
+assert(scope.saving);assert($('execution-start').textContent.includes('正在提交'));
+scope.operating=false;
+$('execution-confirm').onchange();
+assert($('execution-start').disabled);
+await $('execution-start').onclick();
+$('execution-cancel').onclick();
+let prevented=false;$('execution').events.cancel({preventDefault(){prevented=true;}});
+assert(prevented&&$('execution').open);
+assert.equal(calls,1);
+rejectStart(Error('连接中断'));await pending;
+assert(!scope.saving&&!$('execution').open);
+assert.deepEqual([...scope.selected],[b.id]);
+assert($('error').textContent.includes('请勿重复执行'));
+assert.equal($('execution-start').textContent,'确认执行');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """)
 

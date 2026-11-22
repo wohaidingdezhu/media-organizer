@@ -35,7 +35,7 @@ function fixture(html, route, initialJobs = []) {
   const calls = [];
   const basket = new Set();
   let dupeLoads = 0;
-  let completePreview, completeStop, completeHistory;
+  let completePreview, completeStop, completeHistory, failStart;
   let operationJobs = initialJobs, delayHistory = false;
   const history = () => ({jobs:operationJobs, record_count:operationJobs.length,
     warnings:[], handled:{copy:[],trash:[]}});
@@ -70,6 +70,8 @@ function fixture(html, route, initialJobs = []) {
               completeHistory = () => {delayHistory = false; resolve(reply(history()));};
             });
             return reply(history());
+          case 'api/operations/start':
+            return new Promise((resolve, reject) => {failStart = () => reject(Error('模拟提交连接中断'));});
           case 'api/operations/stop':
             delayHistory = true;
             return new Promise((resolve, reject) => {
@@ -91,8 +93,9 @@ function fixture(html, route, initialJobs = []) {
             if (payload?.action === 'add') for (const id of payload.ids) basket.add(id);
             return reply({ids: [...basket], limit: 200});
           case 'api/operations/preview':
+          case 'api/operations/quick-preview':
             return new Promise(resolve => {
-              completePreview = () => resolve(reply({mode: 'trash', token: 'test-only', bytes: payload.ids.length * 12,
+              completePreview = value => resolve(reply(value || {mode: 'trash', token: 'test-only', bytes: payload.ids.length * 12,
                 items: items.filter(item => payload.ids.includes(item.id)), skipped: []}));
             });
           default:
@@ -101,8 +104,8 @@ function fixture(html, route, initialJobs = []) {
       };
     },
   });
-  return {dom, errors, calls, finish: () => completePreview(),
-    stop:succeeds => completeStop(succeeds), updateJobs:jobs => {operationJobs = jobs;},
+  return {dom, errors, calls, finish: preview => completePreview(preview),
+    failStart:() => failStart(), stop:succeeds => completeStop(succeeds), updateJobs:jobs => {operationJobs = jobs;},
     finishHistory:() => {assert(completeHistory); completeHistory(); completeHistory = null;},
     waitingHistory:() => Boolean(completeHistory)};
 }
@@ -200,6 +203,95 @@ async function verifyWorkspace() {
   }
 }
 
+async function verifyPendingSubmission() {
+  const ui = fixture(photos, 'photos.html');
+  const {dom, calls, errors} = ui, {document} = dom.window;
+  const node = id => get(document, id);
+  try {
+    await until(() => document.querySelector('#photo-wall input')?.disabled === false, 'photo selection ready');
+    document.querySelector('#photo-wall input').click();
+    document.querySelector('#photo-wall [data-trash-id]').click();
+    ui.finish();
+    await until(() => node('execution').open, 'single-photo confirmation');
+    node('execution-confirm').click();
+    assert(!node('execution-start').disabled);
+    node('execution-start').click();
+    node('execution-start').click();
+    assert(node('execution-start').disabled);
+    assert(node('execution-start').textContent.includes('正在提交'));
+    await dom.window.eval('refreshOperations()');
+    node('execution-confirm').dispatchEvent(new dom.window.Event('change'));
+    await node('execution-start').onclick();
+    assert(node('execution-start').disabled);
+    assert.equal(calls.filter(call => call.path === 'api/operations/start').length, 1);
+    assert(node('execution-cancel').disabled);
+    const cancel = new dom.window.Event('cancel', {cancelable:true});
+    node('execution').dispatchEvent(cancel);
+    assert(cancel.defaultPrevented && node('execution').open);
+    ui.failStart();
+    await until(() => !node('execution').open && !dom.window.eval('saving'), 'uncertain submission releases the dialog');
+    assert.equal(dom.window.eval('selected.size'), 1);
+    assert(node('error').textContent.includes('启动请求未确认'));
+    assert.equal(node('execution-start').textContent, '确认执行');
+    await node('execution-start').onclick();
+    assert.equal(calls.filter(call => call.path === 'api/operations/start').length, 1);
+    assert.deepEqual(errors, []);
+  } finally {
+    dom.window.close();
+  }
+}
+
+async function verifyLargeConfirmation() {
+  const ui = fixture(organize, 'organize.html');
+  const {dom, calls, errors} = ui, {document} = dom.window;
+  const node = id => get(document, id);
+  const files = Array.from({length:5000}, (_, index) => ({
+    path:'/generated/' + index + (index % 2 ? '.mp4' : '.jpg'), target:'/copies/' + index,
+    relative:(index % 2 ? '电影/样例/' : '照片/2026/11/') + index,
+    role:index % 2 ? '视频' : '照片',
+  }));
+  let walks = 0;
+  Object.defineProperty(files, Symbol.iterator, {value:function* () {
+    walks++;
+    yield* Array.prototype.values.call(this);
+  }});
+  files.map = () => {throw Error('a confirmation page traversed every file');};
+  const skipped = Array.from({length:151}, (_, index) => ({path:'/skipped/' + index, reason:'模拟磁盘断连'}));
+  try {
+    await until(() => !node('quick-preview').disabled, 'copy preview can be requested');
+    node('quick-preview').click();
+    await until(() => calls.some(call => call.path === 'api/operations/quick-preview'), 'quick preview request');
+    ui.finish({mode:'copy', quick:true, queue:true, batch_count:25, items:files, skipped,
+      groups:[{notes:['请核对样例日期']}], bytes:100 * 1024 ** 3, token:'generated-only'});
+    await until(() => node('execution').open, 'large confirmation opens');
+    const initialWalks = walks;
+    assert(initialWalks > 0);
+    assert(node('execution-summary').textContent.includes('100.00 GB'));
+    assert(node('execution-items').textContent.includes('自动执行 25 批'));
+    assert(node('execution-items').textContent.includes('视频'));
+    assert(node('execution-items').textContent.includes('照片'));
+    assert(node('execution-start').disabled);
+    assert.equal(node('execution-items').querySelectorAll('div.path').length, 200);
+    node('execution-items').scrollTop = 300;
+    node('execution-next').click();
+    assert.equal(node('execution-items').scrollTop, 0);
+    assert.equal(walks, initialWalks, 'paging reuses the summary');
+    for (let page = 2; page < 52; page++) node('execution-next').click();
+    assert(node('execution-page').textContent.includes('52/52'));
+    assert(node('execution-items').textContent.includes('/skipped/150'));
+    assert(node('execution-items').textContent.includes('模拟磁盘断连'));
+    assert.equal(node('execution-items').querySelectorAll('div.path').length, 51);
+    assert.equal(walks, initialWalks);
+    assert(node('execution-next').disabled);
+    node('execution-cancel').click();
+    assert(!node('execution').open);
+    assert.equal(calls.filter(call => call.path === 'api/operations/start').length, 0);
+    assert.deepEqual(errors, []);
+  } finally {
+    dom.window.close();
+  }
+}
+
 async function verifyOperationProgress() {
   const planned = items.map(item => ({...item, target:item.path + '.copy'}));
   planned[0] = {...planned[0], bytes:100 * 1024 ** 3};
@@ -274,7 +366,7 @@ async function verifyOperationProgress() {
   }
 }
 
-(async () => { await verifyDuplicates(); await verifyWorkspace(); await verifyOperationProgress(); })().catch(error => {
+(async () => { await verifyDuplicates(); await verifyWorkspace(); await verifyOperationProgress(); await verifyLargeConfirmation(); await verifyPendingSubmission(); })().catch(error => {
   console.error(error);
   process.exitCode = 1;
 });
