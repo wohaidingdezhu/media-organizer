@@ -154,37 +154,22 @@ $('check-disks').onclick=checkDisks;
 async function loadExtras(){const results=await Promise.allSettled([api('api/photos'),api('api/changes')]);if(results[0].status==='fulfilled'){const items=results[0].value.items;photos=new Map(items.map(item=>[item.id,item]));optionsFor('photo-month',items.map(item=>item.month),'全部照片年月');render();renderOrganizedResults();if($('picture-viewer').open&&!pictureCopies)renderPictureViewer();}else error('照片清单读取失败：'+results[0].reason.message);if(results[1].status==='fulfilled'){const result=results[1].value;const labels={added:'新增',changed:'发生变化',absent:'本次未扫描到'};$('changes-list').replaceChildren();$('changes-list').append(make('p','',result.message||`对比 ${result.previous_created_at}：新增 ${result.counts.added} · 变化 ${result.counts.changed} · 本次未扫描到 ${result.counts.absent}`));for(const item of result.items.slice(0,200))$('changes-list').append(make('p','path',labels[item.state]+'：'+item.path));if(result.items.length>200)$('changes-list').append(make('p','','仅展示前 200 项。'));}else $('changes-list').textContent='比较失败：'+results[1].reason.message;checkDisks();refreshOperations();refreshBasket();}
 const oldBuildFolders=buildFolders;buildFolders=function(){oldBuildFolders();optionsFor('source-folder',data.items.map(item=>item.source_folder),'全部原文件夹');};
 $('choose-destination').onclick=async()=>{if(operating||saving)return;const button=$('choose-destination');button.disabled=true;try{const result=await api('api/operations/destination',{});if(result.destination)$('destination').value=result.destination;}catch(err){error(err.message);}finally{render();}};
-let executionPage=0, executionKeeper='';
+let executionPage=0, executionKeeper='', executionRowsView;
 function renderExecutionPreview(){
   const result=executionPreview;if(!result)return;
-  const quick=!!result.quick,photoBundle=result.bundle_kind==='photo',limit=100;
-  $('execution-items').replaceChildren();
-  if(executionKeeper){
-    const row=make('li');
-    row.append(make('strong','','本组保留项'),make('div','path',executionKeeper));
-    $('execution-items').append(row);
-  }
-  if(quick){
-    if(!result.items.length)$('execution-items').append(make('li','',
-      (result.skipped||[]).some(item=>!['handled','held'].includes(item.category))?'没有可执行文件，请查看需要处理的问题。':'本次无需复制；已有成功记录和暂缓项可在整理检查清单查看。'));
-    $('execution-items').append(make('li','',`${result.queue?'一次确认后自动执行':'本次执行'} ${result.batch_count??1} 批 · 未加入 ${result.skipped.length} 项。每组配套文件不拆开。`));
-    if(result.remaining_count)$('execution-items').append(make('li','warning',`还有 ${result.remaining_count} 个文件留待下一批检查；超过单次确认范围的文件须再次预览。`));
-    const totals=new Map();for(const item of result.items){const key=item.relative?item.relative.split('/').slice(0,item.relative.startsWith('电影/')?2:3).join('/'):'分类目录';totals.set(key,(totals.get(key)||0)+1);}
-    for(const [folder,count]of [...totals].slice(0,30))$('execution-items').append(make('li','',folder+' · '+count+' 项'));
-    const notes=[...new Set((result.groups||[]).flatMap(group=>group.notes||[]))];for(const note of notes)$('execution-items').append(make('li','warning',note));
-  }
-  if(photoBundle)$('execution-items').append(make('li','warning','同名视频仅为配对候选，请人工核对。配套文件使用照片目录和原文件名；展开项也须确认。'));
-  for(const group of (result.bundles||[]).slice(0,30)){
-    const row=make('li');row.append(make('strong','',group.title+(group.edition?' · '+group.edition:'')),make('p','',photoBundle?Object.entries(group.counts).map(([label,count])=>label+' '+count).join(' · '):`${group.videos} 视频 · 字幕 ${group.counts.subtitle} · NFO ${group.counts.nfo} · 封面 ${group.counts.cover} · 剧照 ${group.counts.still}`));$('execution-items').append(row);
-  }
-  const rows=[...result.items.map(item=>({...item,copy:true})),...(result.skipped||[])],pages=Math.max(1,Math.ceil(rows.length/limit));executionPage=Math.min(executionPage,pages-1);
-  for(const item of rows.slice(executionPage*limit,(executionPage+1)*limit)){
-    const row=make('li',item.copy?'':'warning');row.append(make('strong','',item.copy?item.role||'媒体':'未加入复制：'+item.reason),make('div','path',item.path));if(item.copy)row.append(make('div','path','→ '+item.target));$('execution-items').append(row);
-  }
+  const pages=Math.max(1,Math.ceil((result.items.length+(result.skipped||[]).length)/100));
+  executionPage=Math.max(0,Math.min(executionPage,pages-1));
+  if(!executionRowsView)executionRowsView=mountExecutionPreview($('execution-items'));
+  executionRowsView({preview:result,keeper:executionKeeper,page:executionPage});
   $('execution-page').textContent=`确认清单第 ${executionPage+1}/${pages} 页 · 共 ${result.items.length} 项${result.mode==='trash'?'待清理':'复制'}、${(result.skipped||[]).length} 项未加入`;
   $('execution-previous').disabled=executionPage===0;$('execution-next').disabled=executionPage>=pages-1;
 }
-$('execution-previous').onclick=()=>{executionPage--;renderExecutionPreview();};$('execution-next').onclick=()=>{executionPage++;renderExecutionPreview();};
+function changeExecutionPage(change){
+  if(saving||operating)return;
+  executionPage+=change;renderExecutionPreview();$('execution-items').scrollTop=0;
+}
+$('execution-previous').onclick=()=>changeExecutionPage(-1);
+$('execution-next').onclick=()=>changeExecutionPage(1);
 async function previewOperation(mode,bundle=false,photoBundle=false,quick=false,explicitIds=null,keeper=''){
   if(operating||saving||!quick&&!(explicitIds?explicitIds.length:selected.size))return;
   saving=true;error();$('notice').textContent='正在检查文件和目标位置…';render();
@@ -203,23 +188,25 @@ $('copy-bundles').onclick=()=>previewOperation('copy',true);
 $('copy-photo-bundles').onclick=()=>previewOperation('copy',false,true);
 $('quick-preview').onclick=()=>previewOperation('copy',false,false,true);
 $('quick-choose').onclick=async()=>{if(operating||saving)return;saving=true;render();try{const result=await api('api/operations/destination',{});if(result.destination)$('quick-destination').value=result.destination;}catch(err){error(err.message);}finally{saving=false;render();}};
-$('execution-confirm').onchange=()=>$('execution-start').disabled=!$('execution-confirm').checked||!executionPreview?.token||operating;
+$('execution-confirm').onchange=()=>$('execution-start').disabled=!$('execution-confirm').checked||!executionPreview?.token||operating||saving;
 function notifyReview(type,detail){if(typeof CustomEvent==='function'&&typeof window!=='undefined'&&typeof window.dispatchEvent==='function')window.dispatchEvent(new CustomEvent(type,{detail}));}
 function cancelPreview(){const mode=executionPreview?.mode;executionPreview=null;$('notice').textContent='已取消预览，未执行文件操作。';if(mode)notifyReview('media-review-cancelled',{mode});}
-$('execution-cancel').onclick=()=>{if(operating)return;cancelPreview();$('execution').close();};
-$('execution').addEventListener('cancel',event=>{if(operating)event.preventDefault();else cancelPreview();});
+$('execution-cancel').onclick=()=>{if(operating||saving)return;cancelPreview();$('execution').close();};
+$('execution').addEventListener('cancel',event=>{if(operating||saving)event.preventDefault();else cancelPreview();});
 let submittedOperationId='';
 $('execution-start').onclick=async()=>{
-  if(!executionPreview?.token||!$('execution-confirm').checked||operating)return;
-  operating=true;monitorRevision++;clearTimeout(operationTimer);render();
-  $('execution-start').disabled=true;$('execution-cancel').disabled=true;
+  if(!executionPreview?.token||!$('execution-confirm').checked||operating||saving)return;
+  saving=operating=true;monitorRevision++;clearTimeout(operationTimer);render();
+  for(const id of ['execution-start','execution-cancel','execution-confirm','execution-previous','execution-next'])$(id).disabled=true;
+  $('execution-start').textContent='正在提交…';
   try{
     const started=await api('api/operations/start',{token:executionPreview.token});submittedOperationId=started.id;
     selected.clear();if($('risk').value==='selected')$('risk').value='';$('notice').textContent='操作已开始，请保持本机服务运行，完成后重新扫描。';
   }catch(err){
     error('启动请求未确认：'+err.message+'。正在读取操作记录，请勿重复执行。');
   }finally{
-    executionPreview=null;$('execution').close();$('execution-cancel').disabled=false;
+    executionPreview=null;$('execution').close();saving=false;operating=true;
+    $('execution-start').textContent='确认执行';$('execution-cancel').disabled=false;
     refreshOperations();
   }
 };

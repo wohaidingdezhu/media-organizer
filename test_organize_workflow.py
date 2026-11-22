@@ -224,10 +224,13 @@ class WorkflowTests(unittest.TestCase):
         node=shutil.which('node');self.assertIsNotNone(node)
         code=r'''
 const fs=require('fs'),vm=require('vm');
-class E{constructor(t,s){this.textContent=s||'';this.children=[];}append(...x){this.children.push(...x);}replaceChildren(...x){this.children=x;}}
+class E{constructor(t,s){this.tagName=(t||'div').toUpperCase();this.textContent=s||'';this.children=[];}append(...x){this.children.push(...x);}replaceChildren(...x){this.children=x;}}
 const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new E());return nodes.get(id);};
 const items=Array.from({length:203},(_,i)=>({path:'/src/'+i+'.jpg',relative:'照片/2021/05/'+i+'.jpg',target:'/copies/'+i+'.jpg',role:'照片'}));
-const skipped=Array.from({length:151},(_,i)=>({path:'/skip/'+i,reason:'问题'+i}));const scope={$,make:(t,c,s)=>new E(t,s),executionPreview:{quick:true,queue:true,batch_count:2,items,skipped,groups:[]}};vm.createContext(scope);
+const skipped=Array.from({length:151},(_,i)=>({path:'/skip/'+i,reason:'问题'+i}));const scope={$,saving:false,operating:false,make:(t,c,s)=>new E(t,s),executionPreview:{quick:true,queue:true,batch_count:2,items,skipped,groups:[]}};
+const path=require('path'),{mountTestExecutionPreview}=require(path.join(path.dirname(process.argv[1]),'frontend/view-test-dom.cjs'));
+scope.mountExecutionPreview=host=>mountTestExecutionPreview(host,tag=>new E(tag));
+vm.createContext(scope);
 const source=fs.readFileSync(process.argv[1],'utf8');vm.runInContext(source.slice(source.indexOf('let executionPage='),source.indexOf('async function previewOperation')),scope);scope.renderExecutionPreview();
 if(!JSON.stringify($('execution-items').children).includes('自动执行 2 批'))throw Error('queue scope missing');
 for(let page=1;page<4;page++)$('execution-next').onclick();

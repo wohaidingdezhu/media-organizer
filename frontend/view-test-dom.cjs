@@ -85,4 +85,10 @@ function mountTestScanStatus(banner, panel, createElement, register) {
   };
 }
 
-module.exports = {loadView, mountTestView, mountTestScanStatus};
+function mountTestExecutionPreview(host, createElement) {
+  const {ExecutionItems, executionSummary} = loadView('execution-preview.jsx');
+  return mountTestView(host, createElement, props =>
+    ExecutionItems({...props, summary:executionSummary(props.preview)})).render;
+}
+
+module.exports = {loadView, mountTestView, mountTestScanStatus, mountTestExecutionPreview};

@@ -263,9 +263,11 @@ class SimpleOrganizeTests(unittest.TestCase):
         node = shutil.which('node'); self.assertIsNotNone(node)
         code = r'''
 const fs=require('fs'),vm=require('vm');
-class E{constructor(tag,text){this.textContent=text||'';this.children=[];this.value='/generated/copies';this.checked=true;}append(...v){this.children.push(...v);}replaceChildren(...v){this.children=v;}showModal(){this.open=true;}}
+class E{constructor(tag,text){this.tagName=(tag||'div').toUpperCase();this.textContent=text||'';this.children=[];this.value='/generated/copies';this.checked=true;}append(...v){this.children.push(...v);}replaceChildren(...v){this.children=v;}showModal(){this.open=true;}}
 const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new E());return nodes.get(id);};
 let route,payload,empty=false;const scope={$,make:(t,c,s)=>new E(t,s),operating:false,saving:false,selected:new Set(),error(){},render(){},fileSize:String,api:async(r,b)=>{route=r;payload=b;return {quick:true,token:empty?null:'preview',items:empty?[]:[{path:'/generated/a.jpg',target:'/copies/照片/2021/05/a.jpg'}],bytes:1,groups:[{title:'a',count:1,notes:['日期待核对']}],remaining_count:3,skipped:[]};}};
+const path=require('path'),{mountTestExecutionPreview}=require(path.join(path.dirname(process.argv[1]),'frontend/view-test-dom.cjs'));
+scope.mountExecutionPreview=host=>mountTestExecutionPreview(host,tag=>new E(tag));
 vm.createContext(scope);const source=fs.readFileSync(process.argv[1],'utf8');vm.runInContext(source.slice(source.indexOf('let executionPage='),source.indexOf('function cancelPreview')),scope);
 (async()=>{await $('quick-preview').onclick();if(route!=='api/operations/quick-preview'||Object.keys(payload).sort().join()!=='all_batches,destination')throw Error('must not require selections or send arbitrary targets');if(!$('execution').open||$('execution-confirm').checked||!$('execution-start').disabled)throw Error('confirmation required');if(!JSON.stringify($('execution-items').children).includes('下一批'))throw Error('missing remainder');$('execution-confirm').checked=true;$('execution-confirm').onchange();if($('execution-start').disabled)throw Error('valid proposal should be confirmable');empty=true;await $('quick-preview').onclick();$('execution-confirm').checked=true;$('execution-confirm').onchange();if(!$('execution-start').disabled||!$('execution-confirm').disabled)throw Error('empty proposal must not start');})().catch(e=>{console.error(e);process.exitCode=1;});
 '''
