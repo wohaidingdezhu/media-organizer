@@ -393,8 +393,22 @@ async function openOrganizedCopy(item,action,button,onError=error){
   catch(err){onError(err.message);}
   finally{button.copyPending=false;button.disabled=operating||saving;}
 }
+let organizedRefreshRevision=0,organizedNavigationView;
 async function refreshOrganizedResults(){
-  try{const result=await api('api/organized-results');organizedItems=result.items;$('organized-message').textContent=result.message+' 缩略图沿用扫描预览。';renderOrganizedResults();}catch(err){$('organized-summary').textContent='结果未读取：'+err.message;}
+  const revision=++organizedRefreshRevision,button=$('organized-refresh');
+  button.disabled=true;button.textContent='正在读取…';
+  $('organized-message').textContent='正在读取整理结果，可继续浏览已有清单…';
+  try{
+    const result=await api('api/organized-results');
+    if(revision!==organizedRefreshRevision)return;
+    organizedItems=result.items;
+    $('organized-message').textContent=result.message+' 缩略图沿用扫描预览。';
+    renderOrganizedResults();
+  }catch(err){
+    if(revision===organizedRefreshRevision)$('organized-message').textContent='整理结果暂时无法读取：'+err.message+'。可以重试。';
+  }finally{
+    if(revision===organizedRefreshRevision){button.disabled=false;button.textContent='刷新整理结果';}
+  }
 }
 function navigateOrganizedResults(key){
   organizedNode=key;organizedPage=organizedFolderPage=0;$('organized-search').value='';renderOrganizedResults();
@@ -402,13 +416,10 @@ function navigateOrganizedResults(key){
 function renderOrganizedResults(){
   const view=organizedResultView(organizedItems,{key:organizedNode,kind:$('organized-kind').value,query:$('organized-search').value,order:$('organized-sort').value,descendants:$('organized-descendants').checked});
   const {active:node,folders,rows,ancestors}=view;organizedNode=node.key;
-  $('organized-breadcrumbs').replaceChildren();
-  for(const ancestor of ancestors){const button=make('button','',ancestor.key?ancestor.name:'全部整理结果');button.disabled=ancestor.key===node.key;button.setAttribute('aria-label','前往整理目录 '+(ancestor.path||'全部整理结果'));if(button.disabled)button.setAttribute('aria-current','location');button.onclick=()=>navigateOrganizedResults(ancestor.key);$('organized-breadcrumbs').append(button);}
   const folderPages=Math.max(1,Math.ceil(folders.length/30));organizedFolderPage=Math.max(0,Math.min(organizedFolderPage,folderPages-1));
-  $('organized-folders').replaceChildren();for(const child of folders.slice(organizedFolderPage*30,organizedFolderPage*30+30)){
-    const button=make('button','folder-card'),label=child.parts.length===1?child.name.split(/[\\/]/).filter(Boolean).pop()||child.name:child.name;
-    button.setAttribute('aria-label','进入整理目录 '+child.path);button.append(make('strong','','📁 '+label),make('span','',child.path),make('span','',child.count+' 项 · '+fileSize(child.bytes)+'（含子目录）'));button.onclick=()=>navigateOrganizedResults(child.key);$('organized-folders').append(button);
-  }
+  if(!organizedNavigationView)organizedNavigationView=mountOrganizedNavigation($('organized-breadcrumbs'),$('organized-folders'),navigateOrganizedResults);
+  organizedNavigationView({ancestors,currentKey:node.key,
+    folders:folders.slice(organizedFolderPage*30,organizedFolderPage*30+30),formatSize:fileSize});
   $('organized-folder-page').textContent=`当前类型的子目录 ${folders.length} 个 · 第 ${organizedFolderPage+1}/${folderPages} 页`;
   $('organized-folder-previous').disabled=organizedFolderPage===0;$('organized-folder-next').disabled=organizedFolderPage>=folderPages-1;
   const pages=Math.max(1,Math.ceil(rows.length/50));organizedPage=Math.max(0,Math.min(organizedPage,pages-1));$('organized-items').replaceChildren();

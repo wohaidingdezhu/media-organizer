@@ -33,7 +33,8 @@ function fixture(html, route, initialJobs = []) {
   const console = new VirtualConsole();
   console.on('jsdomError', error => errors.push(error.message));
   const calls = [];
-  const basket = new Set();
+  const basket = new Set(), resultRequests = [];
+  let delayResults = false;
   let dupeLoads = 0;
   let completePreview, completeStop, completeHistory, failStart;
   let operationJobs = initialJobs, delayHistory = false;
@@ -81,6 +82,11 @@ function fixture(html, route, initialJobs = []) {
                 resolve(reply({stopped:true}));
               };
             });
+          case 'api/organized-results':
+            if (delayResults) return new Promise((resolve, reject) => resultRequests.push({
+              resolve:data => resolve(reply(data)), reject,
+            }));
+            return reply({items:[], message:'生成样例记录'});
           case 'api/organize-settings':
             return reply({destination: '', all_batches: false});
           case 'api/duplicates':
@@ -104,7 +110,7 @@ function fixture(html, route, initialJobs = []) {
       };
     },
   });
-  return {dom, errors, calls, finish: preview => completePreview(preview),
+  return {dom, errors, calls, resultRequests, deferResults:() => {delayResults = true;}, finish: preview => completePreview(preview),
     failStart:() => failStart(), stop:succeeds => completeStop(succeeds), updateJobs:jobs => {operationJobs = jobs;},
     finishHistory:() => {assert(completeHistory); completeHistory(); completeHistory = null;},
     waitingHistory:() => Boolean(completeHistory)};
@@ -197,6 +203,56 @@ async function verifyWorkspace() {
     change(dom.window, node('view-mode'), 'list');
     await until(() => node('rows').children.length === 50, 'switching to table renders React rows');
     assert.equal(node('photo-wall').children.length, 0);
+    assert.deepEqual(errors, []);
+  } finally {
+    dom.window.close();
+  }
+}
+
+async function verifyResultNavigation() {
+  const ui = fixture(organize, 'organize.html');
+  const {dom, calls, errors, resultRequests} = ui, {document} = dom.window;
+  const node = id => get(document, id);
+  const copied = items.slice(0, 65).map(item => ({...item, target:'/copies/旅行/' + item.name,
+    folder:'/copies/旅行', result_parts:['/copies','旅行'], can_open:true}));
+  const result = message => ({items:copied, message});
+  try {
+    await until(() => !node('organized-refresh').disabled &&
+      node('organized-message').textContent.includes('生成样例记录'), 'initial result load');
+    ui.deferResults();
+    node('organized-refresh').click();
+    await until(() => resultRequests.length === 1, 'manual result refresh');
+    assert(node('organized-refresh').disabled);
+    assert(node('organized-message').textContent.includes('正在读取'));
+    resultRequests[0].resolve(result('已读取样例'));
+    await until(() => document.querySelectorAll('#organized-items article').length === 50, 'copied photo cards');
+    document.querySelector('#organized-folders button').click();
+    document.querySelector('#organized-folders button').click();
+    node('organized-next').click();
+    assert(node('organized-page').textContent.includes('2/2'));
+    const ancestor = document.querySelector('#organized-breadcrumbs button');
+    ancestor.focus();
+    const stale = dom.window.eval('refreshOrganizedResults()');
+    const fresh = dom.window.eval('refreshOrganizedResults()');
+    await until(() => resultRequests.length === 3, 'overlapping background refreshes');
+    resultRequests[2].resolve(result('最新记录'));
+    await fresh;
+    assert.equal(document.querySelector('#organized-breadcrumbs button'), ancestor);
+    assert.equal(document.activeElement, ancestor);
+    assert(node('organized-page').textContent.includes('2/2'));
+    assert.equal(document.querySelectorAll('#organized-items article').length, 15);
+    resultRequests[1].resolve({items:[], message:'旧空结果'});
+    await stale;
+    assert(node('organized-message').textContent.includes('最新记录'));
+    assert.equal(document.querySelectorAll('#organized-items article').length, 15);
+    const failed = dom.window.eval('refreshOrganizedResults()');
+    resultRequests[3].reject(Error('模拟断连'));
+    await failed;
+    assert(node('organized-message').textContent.includes('模拟断连'));
+    assert(!node('organized-refresh').disabled);
+    assert(node('organized-page').textContent.includes('2/2'));
+    assert.equal(document.querySelectorAll('#organized-items article').length, 15);
+    assert.equal(calls.filter(call => call.path === 'api/organized-results/action').length, 0);
     assert.deepEqual(errors, []);
   } finally {
     dom.window.close();
@@ -366,7 +422,7 @@ async function verifyOperationProgress() {
   }
 }
 
-(async () => { await verifyDuplicates(); await verifyWorkspace(); await verifyOperationProgress(); await verifyLargeConfirmation(); await verifyPendingSubmission(); })().catch(error => {
+(async () => { await verifyDuplicates(); await verifyWorkspace(); await verifyOperationProgress(); await verifyLargeConfirmation(); await verifyPendingSubmission(); await verifyResultNavigation(); })().catch(error => {
   console.error(error);
   process.exitCode = 1;
 });
