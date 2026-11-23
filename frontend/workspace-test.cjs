@@ -574,6 +574,39 @@ async function verifyOperationProgress() {
   }
 }
 
+async function verifyPhotoViewerFallback() {
+  const ui = fixture(photos, 'photos.html');
+  const {dom, calls, errors} = ui, {document} = dom.window;
+  const node = id => get(document, id);
+  const visibleFallbacks = () => [...node('picture-body').querySelectorAll('.photo-placeholder')].filter(element => !element.hidden);
+  try {
+    await until(() => document.querySelector('#photo-wall .photo-card img'), 'photo previews ready');
+    dom.window.eval('viewPictures(data.items.slice(0,2))');
+    assert(node('picture-viewer').open);
+    const images = [...node('picture-body').querySelectorAll('img')];
+    assert.equal(images.length, 2);
+    const requestCount = calls.length;
+    images[0].dispatchEvent(new dom.window.Event('error'));
+    images[0].dispatchEvent(new dom.window.Event('error'));
+    assert(images[0].hidden);
+    assert(!images[1].hidden, 'one failed preview does not hide the other photo');
+    assert.equal(visibleFallbacks().length, 1, 'repeated errors create one fallback');
+    assert(visibleFallbacks()[0].textContent.includes('可打开原图'));
+    assert.equal(images[0].previousElementSibling, visibleFallbacks()[0], 'fallback stays in the preview position');
+    images[1].dispatchEvent(new dom.window.Event('error'));
+    assert.equal(visibleFallbacks().length, 2);
+    assert.equal([...node('picture-body').querySelectorAll('button')].filter(button => button.textContent === '打开原图' && !button.disabled).length, 2);
+    assert.equal(calls.length, requestCount, 'preview failure does not open files or start tasks');
+    node('picture-close').click();
+    document.querySelector('#photo-wall .photo-card img').click();
+    assert(!node('picture-body').querySelector('img').hidden, 'reopening retries the thumbnail');
+    assert.equal(visibleFallbacks().length, 0);
+    assert.deepEqual(errors, []);
+  } finally {
+    dom.window.close();
+  }
+}
+
 async function verifyOperationRecovery() {
   const planned = items.map(item => ({...item, target:item.path + '.copy'}));
   const job = {id:'c'.repeat(24), mode:'copy', total:201, status:'cancelled', planned_items:planned,
@@ -644,7 +677,7 @@ async function verifyOperationRecovery() {
   }
 }
 
-(async () => { await verifyDuplicates(); await verifyWorkspace(); await verifyOperationProgress(); await verifyOperationRecovery(); await verifyLargeConfirmation(); await verifyExternalBatchConfirmation(); await verifyPendingSubmission(); await verifyResultNavigation(); await verifyOrganizedCopyCards(); })().catch(error => {
+(async () => { await verifyDuplicates(); await verifyWorkspace(); await verifyOperationProgress(); await verifyOperationRecovery(); await verifyPhotoViewerFallback(); await verifyLargeConfirmation(); await verifyExternalBatchConfirmation(); await verifyPendingSubmission(); await verifyResultNavigation(); await verifyOrganizedCopyCards(); })().catch(error => {
   console.error(error);
   process.exitCode = 1;
 });

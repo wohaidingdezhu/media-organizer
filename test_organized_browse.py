@@ -17,6 +17,7 @@ class E {
   constructor(tag,text=''){this.tag=tag;this.tagName=tag.toUpperCase();this.textContent=text;this.children=[];this.value='';this.attrs={};this.disabled=false;this.events={};this.open=false;}
   append(...values){this.children.push(...values);}
   replaceChildren(...values){this.children=values;}
+  insertBefore(value,before){const index=this.children.indexOf(before);this.children.splice(index<0?this.children.length:index,0,value);}
   setAttribute(key,value){this.attrs[key]=value;}
   getAttribute(key){return this.attrs[key];}
   addEventListener(name,handler){this.events[name]=handler;}

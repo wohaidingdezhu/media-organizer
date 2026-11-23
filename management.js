@@ -48,7 +48,19 @@ $('bundle-review-select').onclick=async()=>{
   finally{saving=false;render();syncBundleReviewControls();}
 };
 function photoPreviewSource(id){const preview=photos.get(id)?.preview;return /^previews\/[A-Za-z0-9_-]+\.png$/.test(preview||'')?preview:'';}
-function picture(item,parent,interactive=true,missingLabel='预览未生成 · 可打开原图'){const preview=photoPreviewSource(item.id);if(preview){const img=make('img');img.src=preview;img.alt=item.name;img.loading='lazy';if(interactive)img.onclick=()=>viewPictures([item]);parent.append(img);}else parent.append(make('div','photo-placeholder',missingLabel));}
+function picture(item,parent,interactive=true,missingLabel='预览未生成 · 可打开原图'){
+  const preview=photoPreviewSource(item.id);
+  if(!preview){parent.append(make('div','photo-placeholder',missingLabel));return;}
+  const img=make('img');img.src=preview;img.alt=item.name;img.loading='lazy';
+  let failed=false;
+  img.onerror=()=>{
+    if(failed)return;
+    failed=true;img.hidden=true;
+    parent.insertBefore(make('div','photo-placeholder','小预览读取失败 · '+missingLabel),img);
+  };
+  if(interactive)img.onclick=()=>viewPictures([item]);
+  parent.append(img);
+}
 const workspaceMediaActions = {
   formatSize: bytes => fileSize(bytes),
   owner: item => wallUsers.label([item.path]),
