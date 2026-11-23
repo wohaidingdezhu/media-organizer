@@ -246,94 +246,80 @@ function operationItemText(job,item){
   const label=item.status==='processing'?(activeOperation(job)?`正在${({copying:'复制',verifying:'校验副本',verified:'完成校验'})[item.phase]||'处理'}${job.mode==='copy'?'（'+fileSize(item.processed_bytes||0)+' / '+fileSize(item.bytes||0)+'）':''}`:'处理结果待确认'):labels[item.status]||'结果待核对';
   return `${label}：${item.role?'['+item.role+'] ':''}${item.path}\n→ ${item.trashed_path||item.target}${item.error?'\n'+item.error:''}`;
 }
-function renderOperationRows(view){
+function renderOperationView(view){
   const query=view.query.trim().toLocaleLowerCase(),status=view.filterStatus;
   const rows=view.records.filter(item=>(!status||operationItemState(view.job,item)===status)&&(!query||(item.path+' '+item.target+' '+(item.trashed_path||'')+' '+(item.error||'')).toLocaleLowerCase().includes(query)));
   const pages=Math.max(1,Math.ceil(rows.length/50));view.page=Math.max(0,Math.min(view.page,pages-1));
-  if(!view.rowsRenderer)view.rowsRenderer=mountOperationRows(view.rows);
-  view.rowsRenderer.render(rows.slice(view.page*50,(view.page+1)*50).map(item=>({
-    path:item.path, attention:operationItemState(view.job,item)==='attention',
-    text:operationItemText(view.job,item),
-  })));
   view.pages=pages;
-  view.controlsRenderer.render({id:view.job.id,query:view.query,filter:view.filterStatus,
-    page:view.page,pages,total:view.records.length,matching:rows.length});
+  view.renderer.render({id:view.job.id,job:view.job,counts:view.counts,active:activeOperation(view.job),
+    current:view.current,canReview:view.canReview,busy:operating||saving,stopping:!!view.stopping,
+    recovering:!!view.recovering,recovery:view.recovery,recoveryPage:view.recoveryPage,
+    rows:rows.slice(view.page*50,(view.page+1)*50).map(item=>({path:item.path,
+      attention:operationItemState(view.job,item)==='attention',text:operationItemText(view.job,item)})),
+    query:view.query,filter:view.filterStatus,page:view.page,pages,total:view.records.length,matching:rows.length});
 }
 function operationCard(job){
   let view=operationViews.get(job.id);
   if(!view){
-    view={page:0,query:'',filterStatus:'',box:make('div','operation'),title:make('strong'),date:make('p','muted'),counts:make('p'),current:make('pre'),error:make('p','warning'),
-      stop:make('button'),stopHint:make('p','muted'),rows:make('div'),attention:make('button'),
-      unknown:make('p','warning'),incomplete:make('p','warning'),review:make('button','','核对此批次未处理项'),reviewResult:make('div')};
-    const controls=make('div','manage-controls'),pager=make('div','pager');
-    view.controlsRenderer=mountOperationControls(controls,pager,{
-      search:value=>{view.query=value;view.page=0;renderOperationRows(view);},
-      filter:value=>{view.filterStatus=value;view.page=0;renderOperationRows(view);},
-      previous:()=>{if(view.page>0){view.page--;renderOperationRows(view);}},
-      next:()=>{if(view.page+1<view.pages){view.page++;renderOperationRows(view);}},
+    view={page:0,query:'',filterStatus:'',recoveryPage:0,box:make('div','operation')};
+    view.renderer=mountOperationCard(view.box,{
+      search:value=>{view.query=value;view.page=0;renderOperationView(view);},
+      filter:value=>{view.filterStatus=value;view.page=0;renderOperationView(view);},
+      previous:()=>{if(view.page>0){view.page--;renderOperationView(view);}},
+      next:()=>{if(view.page+1<view.pages){view.page++;renderOperationView(view);}},
+      attention:()=>{view.filterStatus='attention';view.query='';view.page=0;renderOperationView(view);},
+      stop:async()=>{
+        if(view.stopping||view.job.stop_requested||!activeOperation(view.job))return;
+        view.stopping=true;operationCard(view.job);
+        try{await stopOperation(view.job.id);}
+        finally{view.stopping=false;if(operationViews.get(view.job.id)===view)operationCard(view.job);}
+      },
+      review:()=>reviewRemaining(view.job.id),
+      previousRecovery:()=>{if(view.recoveryPage>0){view.recoveryPage--;renderOperationView(view);}},
+      nextRecovery:()=>{if((view.recoveryPage+1)*50<(view.recovery?.advice?.skipped.length||0)){view.recoveryPage++;renderOperationView(view);}},
     });
-    view.box.append(view.title,view.date,view.counts,view.current,view.error,view.stop,view.stopHint,view.attention,controls,view.rows,pager,view.unknown,view.review,view.reviewResult,view.incomplete,
-      make('p','muted','记录保存在本次报告的 operations 文件夹。已成功项不会自动撤销；结果未确认时先在 文件管理器 核对。'));
-    view.attention.onclick=()=>{view.filterStatus='attention';view.query='';view.page=0;renderOperationRows(view);};
-    view.stop.onclick=async()=>{
-      if(view.stopping||view.job.stop_requested||!activeOperation(view.job))return;
-      view.stopping=true;operationCard(view.job);
-      try{await stopOperation(view.job.id,view.stop);}
-      finally{view.stopping=false;if(operationViews.get(view.job.id)===view)operationCard(view.job);}
-    };
-    view.reviewResult.setAttribute('role','status');view.review.onclick=()=>reviewRemaining(view.job.id,view.review,view.reviewResult);
     operationViews.set(job.id,view);
   }
   view.job=job;
-  const active=activeOperation(job),state={running:'执行中',external_running:'另一服务执行中',complete:'已完成',stopped:'遇到问题已停止',cancelled:'已安全停止',interrupted:'服务曾中断'};
+  const active=activeOperation(job);
   const started=new Set(job.items.map(item=>item.path)),pending=(job.planned_items||[]).filter(item=>!started.has(item.path));
   view.records=[...job.items,...pending.map(item=>({...item,status:'pending'}))];
   const counts={success:0,attention:0,processing:0,pending:0,cancelled:0};for(const item of view.records)counts[operationItemState(job,item)]++;
-  view.title.textContent=`${job.quick?(job.queue?'省心整理自动分批 '+job.completed_batches+'/'+job.batch_count:'省心整理'):job.bundle?(job.bundle_kind==='photo'?'照片和配套文件整组复制':'影片和附件整组复制'):job.mode==='copy'?'复制分类':'废纸篓 / 回收站清理'} · ${state[job.status]||job.status} · ${counts.success}/${job.total}`;
-  view.date.textContent=job.created_at||'';
-  view.counts.textContent=`成功 ${counts.success} · 需核对 ${counts.attention} · 处理中 ${counts.processing} · 未开始 ${counts.pending} · 已取消 ${counts.cancelled}`;
+  view.counts=counts;
   const current=active?job.items.find(item=>item.status==='processing'):null;
-  view.current.hidden=!current;view.current.textContent=current?operationItemText(job,current):'';
-  view.error.hidden=!job.error;view.error.textContent=job.error||'';
-  view.stop.hidden=view.stopHint.hidden=!active;view.stop.disabled=!!job.stop_requested||!!view.stopping;
-  view.stop.textContent=job.stop_requested?'正在安全停止…':view.stopping?'正在提交停止请求…':job.queue?'安全停止整个整理任务':'安全停止此批次';
-  view.stopHint.textContent=job.mode==='copy'?'停止会清理当前未完成临时副本，已完成副本保留；磁盘正在响应时可能需要等待。':'当前文件的系统废纸篓 / 回收站操作会完成，再停止后续项；不会自动恢复已成功项。';
-  view.attention.hidden=!counts.attention;view.attention.textContent=`查看需核对的 ${counts.attention} 项`;
-  view.unknown.hidden=!!job.planned_items||job.total<=job.items.length;view.unknown.textContent=`还有 ${job.total-job.items.length} 项未记录处理结果。旧记录没有完整批次清单，请对照报告核对。`;
-  view.review.hidden=!!job.bundle||!!job.quick||!['cancelled','stopped'].includes(job.status)||!!job.error||!job.planned_items||!(pending.length||counts.cancelled);
-  view.review.disabled=operating||saving;view.reviewResult.hidden=view.review.hidden;
-  view.incomplete.hidden=!(job.bundle||job.quick)||active||job.status==='complete';view.incomplete.textContent='整组未全部完成，请按媒体和配套文件逐项核对。已成功副本保留；重新整组预览遇到已有目标会拒绝覆盖，不会自动重试。';
-  renderOperationRows(view);return view.box;
+  view.current=current?operationItemText(job,current):'';
+  view.canReview=!job.bundle&&!job.quick&&['cancelled','stopped'].includes(job.status)&&!job.error&&!!job.planned_items&&!!(pending.length||counts.cancelled);
+  renderOperationView(view);return view.box;
 }
 function renderOperationCards(result){
   const log=$('operation-log');if(log&&((result.warnings||[]).length||result.jobs.some(activeOperation)))log.open=true;
   const parent=$('operations'),keys=new Set(result.jobs.map(job=>job.id));
   for(const [key,view] of operationViews)if(!keys.has(key)){
-    view.rowsRenderer?.dispose();view.controlsRenderer.dispose();operationViews.delete(key);
+    view.renderer.dispose();operationViews.delete(key);
   }
   const desired=[...(result.warnings||[]).map(warning=>make('p','warning',warning)),...result.jobs.map(operationCard)];
   if(!desired.length)desired.push(make('p','','本次扫描还没有文件操作记录。'));
   for(const child of [...parent.children])if(!desired.includes(child))child.remove();
   desired.forEach((child,index)=>{if(parent.children[index]!==child)parent.insertBefore(child,parent.children[index]||null);});
 }
-async function reviewRemaining(id,button,result){
-  if(operating||saving||!data)return;
+async function reviewRemaining(id){
+  const view=operationViews.get(id);
+  if(operating||saving||!data||!view||!view.canReview||view.recovering)return;
   let showSelection=false;
-  saving=true;button.disabled=true;error();render();
+  saving=true;view.recovering=true;view.recovery=null;view.recoveryPage=0;error();render();operationCard(view.job);
   try{
     const advice=await api('api/operations/'+id+'/remaining');
+    if(operationViews.get(id)!==view||!view.canReview||operating)return;
     selected=new Set(advice.ids);
     showSelection=advice.ids.length>0;
     for(const filter of filters)$(filter).value='';
     $('risk').value='selected';$('view-mode').value='list';page=0;
-    result.replaceChildren(make('p','',`已勾选 ${advice.ids.length} 项，跳过 ${advice.skipped.length} 项。${advice.message}`));
-    if(advice.skipped.length){const details=make('details');details.append(make('summary','','查看跳过原因'));for(const item of advice.skipped)details.append(make('p','path',item.path+'：'+item.reason));result.append(details);}
+    view.recovery={advice};
     $('notice').textContent=advice.ids.length?`已勾选 ${advice.ids.length} 个未处理文件。请核对分类位置与目标文件夹，再重新预览确认。`:'没有可直接继续核对的文件，请查看此批次的跳过原因。';
-  }catch(err){result.replaceChildren(make('p','warning',err.message));error(err.message);}
-  finally{saving=false;render();button.disabled=operating;if(showSelection)$('selection').scrollIntoView({block:'start'});}
+  }catch(err){if(operationViews.get(id)===view){view.recovery={error:err.message};error(err.message);}}
+  finally{saving=false;view.recovering=false;render();if(operationViews.get(id)===view){operationCard(view.job);if(showSelection)$('selection').scrollIntoView({block:'start'});}}
 }
-async function stopOperation(id,button){
-  button.disabled=true;
+async function stopOperation(id){
   try{
     await api('api/operations/stop',{id});
     $('notice').textContent='已请求安全停止，请等待逐项结果；已完成项保留。';

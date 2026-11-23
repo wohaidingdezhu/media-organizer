@@ -1,6 +1,4 @@
 import React from 'react';
-import {flushSync} from 'react-dom';
-import {createRoot} from 'react-dom/client';
 
 export function OperationFilters({state, actions}) {
   return <>
@@ -22,15 +20,4 @@ export function OperationPager({state, actions}) {
     <span>明细 {state.matching}/{state.total} 项 · 第 {state.page + 1}/{state.pages} 页（每页 50 项）</span>
     <button type="button" disabled={state.page + 1 >= state.pages} onClick={actions.next}>下一页明细</button>
   </>;
-}
-
-export function mountOperationControls(filters, pager, actions) {
-  const filterRoot = createRoot(filters), pagerRoot = createRoot(pager);
-  return {
-    render(state) { flushSync(() => {
-      filterRoot.render(<OperationFilters state={state} actions={actions} />);
-      pagerRoot.render(<OperationPager state={state} actions={actions} />);
-    }); },
-    dispose() { filterRoot.unmount(); pagerRoot.unmount(); },
-  };
 }
