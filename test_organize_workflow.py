@@ -228,8 +228,9 @@ class E{constructor(t,s){this.tagName=(t||'div').toUpperCase();this.textContent=
 const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new E());return nodes.get(id);};
 const items=Array.from({length:203},(_,i)=>({path:'/src/'+i+'.jpg',relative:'照片/2021/05/'+i+'.jpg',target:'/copies/'+i+'.jpg',role:'照片'}));
 const skipped=Array.from({length:151},(_,i)=>({path:'/skip/'+i,reason:'问题'+i}));const scope={$,saving:false,operating:false,make:(t,c,s)=>new E(t,s),executionPreview:{quick:true,queue:true,batch_count:2,items,skipped,groups:[]}};
-const path=require('path'),{mountTestExecutionPreview}=require(path.join(path.dirname(process.argv[1]),'frontend/view-test-dom.cjs'));
+const path=require('path'),{mountTestExecutionPreview,mountTestExecutionControls}=require(path.join(path.dirname(process.argv[1]),'frontend/view-test-dom.cjs'));
 scope.mountExecutionPreview=host=>mountTestExecutionPreview(host,tag=>new E(tag));
+scope.mountExecutionControls=(host,actions)=>mountTestExecutionControls(host,actions,tag=>new E(tag),node=>nodes.set(node.id,node));
 vm.createContext(scope);
 const source=fs.readFileSync(process.argv[1],'utf8');vm.runInContext(source.slice(source.indexOf('let executionPage='),source.indexOf('async function previewOperation')),scope);scope.renderExecutionPreview();
 if(!JSON.stringify($('execution-items').children).includes('自动执行 2 批'))throw Error('queue scope missing');
@@ -250,7 +251,7 @@ const copies=Array.from({length:51},(_,i)=>({id:'copy'+i,path:'/src/'+i+'.jpg',t
 const scope={...browse,$,mountIssueList:ui.mount,data:{items:[]},make:(t,c,s)=>new E(t,s),saving:false,operating:false,selected:new Set(),mediaIds:{},picture(){},fileSize:String,render(){},error(m){throw Error(m);},Blob,URL:{createObjectURL(blob){csv=blob;return 'blob:generated';},revokeObjectURL(){}},setTimeout(f){f();},api:async(route,body)=>{if(route==='api/organized-results')return {items:copies,message:'success records'};if(route==='api/organized-results/action'){action=body;return {opened:true};}return {destination:'/copies',all_batches:true,revision:'saved'};}};
 const path=require('path'),{mountTestOrganizedNavigation,mountTestOrganizedCopies}=require(path.join(path.dirname(process.argv[1]),'frontend/view-test-dom.cjs'));
 scope.mountOrganizedNavigation=(breadcrumbs,folders,onNavigate)=>mountTestOrganizedNavigation(breadcrumbs,folders,onNavigate,tag=>new E(tag));
-scope.photos=new Map();scope.photoPreviewSource=()=>'';
+scope.photos=new Map();scope.photoPreviewSource=()=>'';scope.syncExecutionControls=()=>{};
 scope.mountOrganizedCopies=(host,actions)=>mountTestOrganizedCopies(host,actions,tag=>new E(tag));
 vm.createContext(scope);const source=fs.readFileSync(process.argv[1],'utf8');vm.runInContext(source.slice(source.indexOf('// Source-scoped preferences')),scope);
 (async()=>{await scope.refreshOrganizedResults();if(!$('organized-summary').textContent.includes('51 项'))throw Error('result count');$('organized-folders').children[0].onclick();$('organized-next').onclick();if(!JSON.stringify($('organized-items').children).includes('file50.jpg'))throw Error('result pagination');const button=$('organized-items').children[0].children.find(e=>e.textContent==='查看整理照片');await button.onclick();if(action.id!=='copy50'||action.action!=='open')throw Error('wrong copy action');$('organized-search').value='file10.jpg';$('organized-search').oninput();if(!$('organized-summary').textContent.includes('1 项'))throw Error('result search');
@@ -330,7 +331,7 @@ const media=Array.from({length:205},(_,i)=>({path:'/video/'+i+'.mp4',id:'v'+i,ki
 const scope={...browse,$,mountIssueList:ui.mount,make:(t,c,s)=>new E(t,s),data:{items:media},saving:false,operating:false,executionPreview:{token:'old'},selected:new Set(['unrelated']),mediaIds:Object.fromEntries(media.map(item=>[item.path,item.id])),picture(){},fileSize:String,render(){scope.syncQuickIssueControls();},error(m){throw Error(m);},Blob,URL:{createObjectURL(b){csv=b;return 'blob:sample';},revokeObjectURL(){}},setTimeout(f){f();},api:async(route,body)=>{if(route==='api/organized-results')return {items:[],message:'records'};if(body?.action==='correct')correction=body;return {destination:'',all_batches:true,revision:'saved'};}};
 const path=require('path'),{mountTestOrganizedNavigation,mountTestOrganizedCopies}=require(path.join(path.dirname(process.argv[1]),'frontend/view-test-dom.cjs'));
 scope.mountOrganizedNavigation=(breadcrumbs,folders,onNavigate)=>mountTestOrganizedNavigation(breadcrumbs,folders,onNavigate,tag=>new E(tag));
-scope.photos=new Map();scope.photoPreviewSource=()=>'';
+scope.photos=new Map();scope.photoPreviewSource=()=>'';scope.syncExecutionControls=()=>{};
 scope.mountOrganizedCopies=(host,actions)=>mountTestOrganizedCopies(host,actions,tag=>new E(tag));
 vm.createContext(scope);const source=fs.readFileSync(process.argv[1],'utf8');vm.runInContext(source.slice(source.indexOf('// Source-scoped preferences')),scope);
 (async()=>{

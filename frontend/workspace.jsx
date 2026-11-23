@@ -1,3 +1,4 @@
+import {mountExecutionControls} from './execution-controls.jsx';
 import {mountOrganizedCopies} from './organized-cards.jsx';
 import {mountOrganizedNavigation} from './organized-navigation.jsx';
 import {mountExecutionPreview} from './execution-preview.jsx';
@@ -46,3 +47,5 @@ globalThis.mountExecutionPreview = mountExecutionPreview;
 globalThis.mountOrganizedNavigation = mountOrganizedNavigation;
 
 globalThis.mountOrganizedCopies = mountOrganizedCopies;
+
+globalThis.mountExecutionControls = mountExecutionControls;

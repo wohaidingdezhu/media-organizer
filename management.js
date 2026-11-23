@@ -29,6 +29,7 @@ async function openBundleReview(item){
     for(const file of result.items){const row=make('li');row.append(make('strong','',file.label+' · '+fileSize(file.bytes)),make('div','path',file.path));if(file.plan){row.append(make('p','minor','分类计划：'+(names[file.plan.state]||file.plan.state)),make('div','path',file.plan.target||'暂无分类建议'));if(file.plan.blocked_reason)row.append(make('p','warning',file.plan.blocked_reason));}else row.append(make('p','minor','附属文件：整组复制时沿用本组媒体的目录，保留原名。'));$('bundle-review-items').append(row);}
     for(const file of result.skipped){const row=make('li','warning');row.append(make('strong','','未自动关联：'+file.reason),make('div','path',file.path));$('bundle-review-items').append(row);}
     syncBundleReviewControls();
+  if(typeof syncExecutionControls==='function')syncExecutionControls();
   for(const id of ['quick-choose','quick-preview','quick-destination','quick-save-settings','quick-all-batches','quick-correct'])$(id).disabled=saving||operating;
   }catch(err){if(revision!==bundleReviewRevision)return;$('bundle-review-summary').textContent='配套清单未读取，请重试。';$('bundle-review-error').textContent=err.message;$('bundle-review-error').hidden=false;$('bundle-review-retry').hidden=false;}
 }
@@ -123,6 +124,7 @@ function syncBrowseFilterSummary(){
 function syncBrowseControls(){
   syncBrowseFilterSummary();
   syncBundleReviewControls();
+  if(typeof syncExecutionControls==='function')syncExecutionControls();
   for(const id of ['quick-choose','quick-preview','quick-destination','quick-save-settings','quick-all-batches','quick-correct'])$(id).disabled=saving||operating;
   if(typeof syncOrganizedCards==='function')syncOrganizedCards();
   if(typeof syncQuickIssueControls==='function')syncQuickIssueControls();
@@ -157,62 +159,82 @@ $('check-disks').onclick=checkDisks;
 async function loadExtras(){const results=await Promise.allSettled([api('api/photos'),api('api/changes')]);if(results[0].status==='fulfilled'){const items=results[0].value.items;photos=new Map(items.map(item=>[item.id,item]));optionsFor('photo-month',items.map(item=>item.month),'全部照片年月');render();renderOrganizedResults();if($('picture-viewer').open)renderPictureViewer(true);}else error('照片清单读取失败：'+results[0].reason.message);if(results[1].status==='fulfilled'){const result=results[1].value;const labels={added:'新增',changed:'发生变化',absent:'本次未扫描到'};$('changes-list').replaceChildren();$('changes-list').append(make('p','',result.message||`对比 ${result.previous_created_at}：新增 ${result.counts.added} · 变化 ${result.counts.changed} · 本次未扫描到 ${result.counts.absent}`));for(const item of result.items.slice(0,200))$('changes-list').append(make('p','path',labels[item.state]+'：'+item.path));if(result.items.length>200)$('changes-list').append(make('p','','仅展示前 200 项。'));}else $('changes-list').textContent='比较失败：'+results[1].reason.message;checkDisks();refreshOperations();refreshBasket();}
 const oldBuildFolders=buildFolders;buildFolders=function(){oldBuildFolders();optionsFor('source-folder',data.items.map(item=>item.source_folder),'全部原文件夹');};
 $('choose-destination').onclick=async()=>{if(operating||saving)return;const button=$('choose-destination');button.disabled=true;try{const result=await api('api/operations/destination',{});if(result.destination)$('destination').value=result.destination;}catch(err){error(err.message);}finally{render();}};
-let executionPage=0, executionKeeper='', executionRowsView;
+let executionPage=0, executionKeeper='', executionRowsView, executionControlsView;
+let executionConfirmed=false,executionSubmitting=false;
+function syncExecutionControls(){
+  if(!executionControlsView)executionControlsView=mountExecutionControls($('execution-controls'),{
+    previous:()=>changeExecutionPage(-1),next:()=>changeExecutionPage(1),
+    confirm:checked=>{
+      if(executionSubmitting||saving||operating||!executionPreview?.token)return;
+      executionConfirmed=checked;syncExecutionControls();
+    },
+    cancel:()=>cancelExecution(),submit:()=>submitExecution(),
+  });
+  const result=executionPreview,pages=Math.max(1,Math.ceil(((result?.items?.length||0)+(result?.skipped?.length||0))/100));
+  executionControlsView({busy:saving||operating,submitting:executionSubmitting,confirmed:executionConfirmed,
+    hasPreview:!!result,available:!!result?.token,page:executionPage,pages,
+    pageLabel:`确认清单第 ${executionPage+1}/${pages} 页 · 共 ${result?.items?.length||0} 项${result?.mode==='trash'?'待清理':'复制'}、${result?.skipped?.length||0} 项未加入`});
+}
 function renderExecutionPreview(){
   const result=executionPreview;if(!result)return;
   const pages=Math.max(1,Math.ceil((result.items.length+(result.skipped||[]).length)/100));
   executionPage=Math.max(0,Math.min(executionPage,pages-1));
   if(!executionRowsView)executionRowsView=mountExecutionPreview($('execution-items'));
   executionRowsView({preview:result,keeper:executionKeeper,page:executionPage});
-  $('execution-page').textContent=`确认清单第 ${executionPage+1}/${pages} 页 · 共 ${result.items.length} 项${result.mode==='trash'?'待清理':'复制'}、${(result.skipped||[]).length} 项未加入`;
-  $('execution-previous').disabled=executionPage===0;$('execution-next').disabled=executionPage>=pages-1;
+  syncExecutionControls();
 }
 function changeExecutionPage(change){
-  if(saving||operating)return;
+  if(!executionPreview||executionSubmitting||saving||operating)return;
   executionPage+=change;renderExecutionPreview();$('execution-items').scrollTop=0;
 }
-$('execution-previous').onclick=()=>changeExecutionPage(-1);
-$('execution-next').onclick=()=>changeExecutionPage(1);
 async function previewOperation(mode,bundle=false,photoBundle=false,quick=false,explicitIds=null,keeper=''){
-  if(operating||saving||!quick&&!(explicitIds?explicitIds.length:selected.size))return;
+  if(executionSubmitting||operating||saving||!quick&&!(explicitIds?explicitIds.length:selected.size))return;
   saving=true;error();$('notice').textContent='正在检查文件和目标位置…';render();
   try{
     executionPreview=await api(quick?'api/operations/quick-preview':'api/operations/preview',quick?{destination:$('quick-destination').value.trim(),all_batches:$('quick-all-batches').checked}:{mode,bundle,photo_bundle:photoBundle,ids:explicitIds||[...selected],destination:$('destination').value.trim()});
     $('execution-help').textContent=mode==='trash'?'只将清单中的文件移到系统废纸篓 / 回收站，可恢复。其他文件保持原位置；若中途失败，停止后续项，请查看操作记录。':'只复制清单中的文件并保留原件；若中途失败，保留已成功项并停止后续项，请查看操作记录。';
     $('execution-title').textContent=quick?'确认省心整理（复制并保留原件）':photoBundle?'确认照片和配套文件整组复制':bundle?'确认影片和附件整组复制':mode==='copy'?'确认复制到分类目录':'确认移到废纸篓 / 回收站';
     $('execution-summary').textContent=`${executionPreview.items.length} 个文件 · ${fileSize(executionPreview.bytes)} · ${mode==='copy'?'复制后保留原件，目标副本使用 SHA-256 校验':'移到系统废纸篓 / 回收站，可通过文件管理器恢复'}`;
-    executionKeeper=keeper;executionPage=0;renderExecutionPreview();
+    executionKeeper=keeper;executionPage=0;executionConfirmed=false;renderExecutionPreview();
     if(quick&&typeof updateQuickIssues==='function')updateQuickIssues(executionPreview);
-    $('execution-confirm').disabled=quick&&!executionPreview.token;$('execution-confirm').checked=false;$('execution-start').disabled=true;$('execution-error').hidden=true;$('execution').showModal();$('notice').textContent='检查完成，请核对整份清单；可翻页查看全部确认项。';
-  }catch(err){executionPreview=null;error(err.message);$('notice').textContent='';}finally{saving=false;render();}
+    $('execution').showModal();$('notice').textContent='检查完成，请核对整份清单；可翻页查看全部确认项。';
+  }catch(err){executionPreview=null;error(err.message);$('notice').textContent='';}finally{saving=false;render();syncExecutionControls();}
 }
 $('copy-files').onclick=()=>previewOperation('copy');$('trash-files').onclick=()=>previewOperation('trash');
 $('copy-bundles').onclick=()=>previewOperation('copy',true);
 $('copy-photo-bundles').onclick=()=>previewOperation('copy',false,true);
 $('quick-preview').onclick=()=>previewOperation('copy',false,false,true);
 $('quick-choose').onclick=async()=>{if(operating||saving)return;saving=true;render();try{const result=await api('api/operations/destination',{});if(result.destination)$('quick-destination').value=result.destination;}catch(err){error(err.message);}finally{saving=false;render();}};
-$('execution-confirm').onchange=()=>$('execution-start').disabled=!$('execution-confirm').checked||!executionPreview?.token||operating||saving;
 function notifyReview(type,detail){if(typeof CustomEvent==='function'&&typeof window!=='undefined'&&typeof window.dispatchEvent==='function')window.dispatchEvent(new CustomEvent(type,{detail}));}
-function cancelPreview(){const mode=executionPreview?.mode;executionPreview=null;$('notice').textContent='已取消预览，未执行文件操作。';if(mode)notifyReview('media-review-cancelled',{mode});}
-$('execution-cancel').onclick=()=>{if(operating||saving)return;cancelPreview();$('execution').close();};
-$('execution').addEventListener('cancel',event=>{if(operating||saving)event.preventDefault();else cancelPreview();});
+function cancelPreview(){
+  const mode=executionPreview?.mode;executionPreview=null;executionConfirmed=false;executionPage=0;
+  $('notice').textContent='已取消预览，未执行文件操作。';syncExecutionControls();
+  if(mode)notifyReview('media-review-cancelled',{mode});
+}
+function cancelExecution(){
+  if(executionSubmitting)return;
+  cancelPreview();$('execution').close();
+}
+$('execution').addEventListener('cancel',event=>{event.preventDefault();cancelExecution();});
+// Keep the submitting dialog open when native Escape is pressed repeatedly.
+document.addEventListener('keydown',event=>{
+  if(event.key==='Escape'&&executionSubmitting&&$('execution').open)event.preventDefault();
+},true);
 let submittedOperationId='';
-$('execution-start').onclick=async()=>{
-  if(!executionPreview?.token||!$('execution-confirm').checked||operating||saving)return;
-  saving=operating=true;monitorRevision++;clearTimeout(operationTimer);render();
-  for(const id of ['execution-start','execution-cancel','execution-confirm','execution-previous','execution-next'])$(id).disabled=true;
-  $('execution-start').textContent='正在提交…';
+async function submitExecution(){
+  if(!executionPreview?.token||!executionConfirmed||executionSubmitting||operating||saving)return;
+  executionSubmitting=true;saving=true;operating=true;monitorRevision++;clearTimeout(operationTimer);render();
+  syncExecutionControls();
   try{
     const started=await api('api/operations/start',{token:executionPreview.token});submittedOperationId=started.id;
     selected.clear();if($('risk').value==='selected')$('risk').value='';$('notice').textContent='操作已开始，请保持本机服务运行，完成后重新扫描。';
   }catch(err){
     error('启动请求未确认：'+err.message+'。正在读取操作记录，请勿重复执行。');
   }finally{
-    executionPreview=null;$('execution').close();saving=false;operating=true;
-    $('execution-start').textContent='确认执行';$('execution-cancel').disabled=false;
-    refreshOperations();
+    executionPreview=null;executionConfirmed=false;executionSubmitting=false;$('execution').close();saving=false;operating=true;
+    syncExecutionControls();refreshOperations();
   }
-};
+}
 function activeOperation(job){return ['running','external_running'].includes(job.status);}
 const operationViews=new Map();
 function operationItemState(job,item){
@@ -458,6 +480,7 @@ $('organized-reset').onclick=()=>{$('organized-kind').value='';$('organized-sort
 $('organized-previous').onclick=()=>{organizedPage--;renderOrganizedResults();};$('organized-next').onclick=()=>{organizedPage++;renderOrganizedResults();};
 $('organized-folder-previous').onclick=()=>{organizedFolderPage--;renderOrganizedResults();};$('organized-folder-next').onclick=()=>{organizedFolderPage++;renderOrganizedResults();};
 // Initialize the organizing workspace once all controls are wired.
+syncExecutionControls();
 loadQuickSettings();
 refreshOrganizedResults();
 syncQuickIssueControls();

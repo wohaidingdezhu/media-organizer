@@ -9,7 +9,7 @@ import unittest
 HARNESS = r'''
 const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
 const root=process.argv[1];
-const {loadView,mountTestView,mountTestScanStatus,mountTestExecutionPreview}=require(root+'/frontend/view-test-dom.cjs');
+const {loadView,mountTestView,mountTestScanStatus,mountTestExecutionPreview,mountTestExecutionControls}=require(root+'/frontend/view-test-dom.cjs');
 const {ReportDialog}=loadView('report-dialog.jsx');
 const {DashboardFolderList}=loadView('dashboard-folders.jsx');
 class E{
@@ -22,8 +22,9 @@ class E{
 const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new E());return nodes.get(id);};
 const a={id:'a'.repeat(64),name:'a.jpg',path:'C:\\generated\\a.jpg',kind:'照片',bytes:12},b={...a,id:'b'.repeat(64),name:'b.jpg',path:'/generated/b.jpg'};
 let requests=[],failure=false,renders=0;
-const scope={$,make:(t,c,s)=>new E(t,s||''),data:{items:[a,b]},mediaAvailable:true,mediaIds:{[a.path]:a.id,[b.path]:b.id},handledTrash:new Set(),selected:new Set([b.id]),saving:false,operating:false,executionPreview:null,quickIssues:[],fileSize:n=>n+' B',render(){renders++;},error(message){$('error').textContent=message||'';$('error').hidden=!message;},api:async(route,body)=>{requests.push({route,body});if(failure)throw Error('至少保留一份');return {mode:body.mode,items:[{path:a.path,target:'系统废纸篓 / 回收站'}],bytes:12};}};
+const scope={document:{addEventListener(){}},$,make:(t,c,s)=>new E(t,s||''),data:{items:[a,b]},mediaAvailable:true,mediaIds:{[a.path]:a.id,[b.path]:b.id},handledTrash:new Set(),selected:new Set([b.id]),saving:false,operating:false,executionPreview:null,quickIssues:[],fileSize:n=>n+' B',render(){renders++;},error(message){$('error').textContent=message||'';$('error').hidden=!message;},api:async(route,body)=>{requests.push({route,body});if(failure)throw Error('至少保留一份');return {mode:body.mode,items:[{path:a.path,target:'系统废纸篓 / 回收站'}],bytes:12};}};
 scope.mountExecutionPreview=host=>mountTestExecutionPreview(host,tag=>new E(tag));
+scope.mountExecutionControls=(host,actions)=>mountTestExecutionControls(host,actions,tag=>new E(tag),node=>nodes.set(node.id,node));
 scope.mountReportDialog=host=>mountTestView(host,tag=>new E(tag),ReportDialog,true);
 scope.mountDashboardFolders=host=>mountTestView(host,tag=>new E(tag),DashboardFolderList).render;
 scope.mountDashboardScanStatus=(banner,panel)=>mountTestScanStatus(banner,panel,tag=>new E(tag),node=>nodes.set(node.id,node));
@@ -141,7 +142,7 @@ assert(!dialog.isConnected);assert.equal(reloads,0);assert.deepEqual(decisions,[
 (async()=>{
 let history={jobs:[{id:'other',mode:'trash',status:'complete'}],handled:{trash:[],copy:[]},warnings:[],record_count:1},notifications=[];
 Object.assign(scope,{operationTimer:null,monitorRevision:0,monitorFailures:0,renderOperationCards(){},clearTimeout(){},setTimeout(){return 1;},api:async()=>history,window:{dispatchEvent:event=>notifications.push(event)},CustomEvent:class{constructor(type,options){this.type=type;this.detail=options.detail;}}});
-vm.runInContext(management.slice(management.indexOf('function notifyReview('),management.indexOf("$('execution-start').onclick")),scope);vm.runInContext(management.slice(management.indexOf('function activeOperation('),management.indexOf('const operationViews=')),scope);vm.runInContext(management.slice(management.indexOf('async function refreshOperations()'),management.indexOf("$('refresh-operations').onclick")),scope);vm.runInContext("submittedOperationId='mine'",scope);
+vm.runInContext(management.slice(management.indexOf('function notifyReview('),management.indexOf('async function submitExecution(')),scope);vm.runInContext(management.slice(management.indexOf('function activeOperation('),management.indexOf('const operationViews=')),scope);vm.runInContext(management.slice(management.indexOf('async function refreshOperations()'),management.indexOf("$('refresh-operations').onclick")),scope);vm.runInContext("submittedOperationId='mine'",scope);
 await scope.refreshOperations();assert.equal(notifications.length,0);history.jobs=[{id:'mine',mode:'trash',status:'running'}];await scope.refreshOperations();assert.equal(notifications.length,0);history.jobs[0].status='complete';await scope.refreshOperations();assert.equal(notifications.length,1);assert.equal(notifications[0].type,'media-operation-finished');assert.equal(notifications[0].detail.status,'complete');assert.equal(notifications[0].detail.mode,'trash');await scope.refreshOperations();assert.equal(notifications.length,1);
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """)
@@ -150,15 +151,16 @@ await scope.refreshOperations();assert.equal(notifications.length,0);history.job
         self.node(r"""
 (async()=>{
 Object.assign(scope,{monitorRevision:0,operationTimer:null,clearTimeout(){},refreshOperations(){},error(message){$('error').textContent=message;}});
-vm.runInContext(management.slice(management.indexOf("$('execution-confirm').onchange"),management.indexOf('function activeOperation(')),scope);
+vm.runInContext(management.slice(management.indexOf('function notifyReview('),management.indexOf('function activeOperation(')),scope);
 scope.executionPreview={mode:'trash',token:'generated-token'};
-$('execution').showModal();$('execution-confirm').checked=true;
+$('execution').showModal();scope.syncExecutionControls();$('execution-confirm').checked=true;$('execution-confirm').onchange();
 let rejectStart,calls=0;
 scope.api=()=>{calls++;return new Promise((resolve,reject)=>rejectStart=reject);};
 const pending=$('execution-start').onclick();
 assert(scope.saving);assert($('execution-start').textContent.includes('正在提交'));
-scope.operating=false;
+scope.operating=false;scope.saving=false;scope.syncExecutionControls();
 $('execution-confirm').onchange();
+await scope.previewOperation('trash',false,false,false,[a.id]);
 assert($('execution-start').disabled);
 await $('execution-start').onclick();
 $('execution-cancel').onclick();
@@ -176,7 +178,23 @@ assert.equal($('execution-start').textContent,'确认执行');
     def test_legacy_comparison_cancel_does_not_close_comparison_or_start_operation(self):
         self.node(r"""
 let notifications=[];scope.window={dispatchEvent:event=>notifications.push(event)};scope.CustomEvent=class{constructor(type,options){this.type=type;this.detail=options.detail;}};
-vm.runInContext(management.slice(management.indexOf('function notifyReview('),management.indexOf("$('execution-start').onclick")),scope);scope.executionPreview={mode:'trash',token:'preview-only'};scope.operating=true;let prevented=false;$('execution').events.cancel({preventDefault(){prevented=true;}});assert(prevented);assert(scope.executionPreview);scope.operating=false;$('execution-cancel').onclick();assert.equal(scope.executionPreview,null);assert.equal(notifications.length,1);assert.equal(requests.length,0);
+vm.runInContext(management.slice(management.indexOf('function notifyReview('),management.indexOf('async function submitExecution(')),scope);scope.executionPreview={mode:'trash',token:'preview-only'};vm.runInContext('executionSubmitting=true',scope);let prevented=false;$('execution').events.cancel({preventDefault(){prevented=true;}});assert(prevented);assert(scope.executionPreview);vm.runInContext('executionSubmitting=false',scope);scope.syncExecutionControls();$('execution-cancel').onclick();assert.equal(scope.executionPreview,null);assert.equal(notifications.length,1);assert.equal(requests.length,0);
+""")
+
+    def test_readonly_confirmation_can_close_while_another_batch_is_running(self):
+        self.node(r"""
+(async()=>{
+vm.runInContext(management.slice(management.indexOf('function notifyReview('),management.indexOf('async function submitExecution(')),scope);
+await scope.previewOperation('trash',false,false,false,[a.id]);assert($('execution').open);
+scope.operating=true;$('execution-cancel').onclick();
+assert(!$('execution').open,'another batch trapped the read-only confirmation');
+assert.deepEqual([...scope.selected],[b.id]);
+scope.operating=false;await scope.previewOperation('trash',false,false,false,[a.id]);
+scope.operating=true;let prevented=false;
+$('execution').events.cancel({preventDefault(){prevented=true;}});
+assert(prevented&&!$('execution').open);assert.equal(scope.executionPreview,null);
+assert(requests.every(call=>call.route==='api/operations/preview'));
+})().catch(error=>{console.error(error);process.exitCode=1;});
 """)
 
     def test_direct_entry_waits_for_media_then_previews_once_and_rejects_missing_files(self):

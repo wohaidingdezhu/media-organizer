@@ -353,11 +353,17 @@ async function verifyPendingSubmission() {
     assert(node('execution-start').disabled);
     assert(node('execution-start').textContent.includes('正在提交'));
     await dom.window.eval('refreshOperations()');
+    dom.window.eval('saving=false; syncBrowseControls()');
     node('execution-confirm').dispatchEvent(new dom.window.Event('change'));
     await node('execution-start').onclick();
     assert(node('execution-start').disabled);
     assert.equal(calls.filter(call => call.path === 'api/operations/start').length, 1);
     assert(node('execution-cancel').disabled);
+    for (let index = 0; index < 3; index++) {
+      const key = new dom.window.KeyboardEvent('keydown', {key:'Escape', bubbles:true, cancelable:true, repeat:index > 0});
+      document.body.dispatchEvent(key);
+      assert(key.defaultPrevented, 'pending submission blocks repeated native Escape');
+    }
     const cancel = new dom.window.Event('cancel', {cancelable:true});
     node('execution').dispatchEvent(cancel);
     assert(cancel.defaultPrevented && node('execution').open);
@@ -368,6 +374,53 @@ async function verifyPendingSubmission() {
     assert.equal(node('execution-start').textContent, '确认执行');
     await node('execution-start').onclick();
     assert.equal(calls.filter(call => call.path === 'api/operations/start').length, 1);
+    assert.deepEqual(errors, []);
+  } finally {
+    dom.window.close();
+  }
+}
+
+async function verifyExternalBatchConfirmation() {
+  const ui = fixture(photos, 'photos.html');
+  const {dom, calls, errors} = ui, {document} = dom.window;
+  const node = id => get(document, id);
+  const job = {id:'b'.repeat(24), mode:'copy', status:'external_running', total:1,
+    items:[], planned_items:[{path:'/generated/other.mp4', target:'/copies/other.mp4', bytes:12}]};
+  async function openPreview() {
+    document.querySelector('#photo-wall [data-trash-id]').click();
+    ui.finish();
+    await until(() => node('execution').open, 'React confirmation ready');
+  }
+  try {
+    await until(() => document.querySelector('#photo-wall input')?.disabled === false, 'photo row ready');
+    document.querySelector('#photo-wall input').click();
+    await openPreview();
+    node('execution-confirm').click();
+    assert(!node('execution-start').disabled);
+    ui.updateJobs([job]);
+    await dom.window.eval('refreshOperations()');
+    assert(node('execution-start').disabled && node('execution-confirm').disabled);
+    assert(node('execution-error').textContent.includes('当前清单暂不能提交'));
+    assert(!node('execution-cancel').disabled);
+    node('execution-cancel').click();
+    assert(!node('execution').open);
+    assert.equal(dom.window.eval('selected.size'), 1);
+
+    ui.updateJobs([]);
+    await dom.window.eval('refreshOperations()');
+    await openPreview();
+    assert(!node('execution-confirm').checked);
+    ui.updateJobs([job]);
+    await dom.window.eval('refreshOperations()');
+    const key = new dom.window.KeyboardEvent('keydown', {key:'Escape', bubbles:true, cancelable:true});
+    document.body.dispatchEvent(key);
+    assert(!key.defaultPrevented, 'an external batch allows native Escape');
+    const escape = new dom.window.Event('cancel', {cancelable:true});
+    node('execution').dispatchEvent(escape);
+    assert(escape.defaultPrevented && !node('execution').open);
+    assert.equal(dom.window.eval('selected.size'), 1);
+    assert.equal(calls.filter(call => call.path === 'api/operations/start').length, 0);
+    assert.equal(calls.filter(call => call.path === 'api/operations/stop').length, 0);
     assert.deepEqual(errors, []);
   } finally {
     dom.window.close();
@@ -499,7 +552,7 @@ async function verifyOperationProgress() {
   }
 }
 
-(async () => { await verifyDuplicates(); await verifyWorkspace(); await verifyOperationProgress(); await verifyLargeConfirmation(); await verifyPendingSubmission(); await verifyResultNavigation(); await verifyOrganizedCopyCards(); })().catch(error => {
+(async () => { await verifyDuplicates(); await verifyWorkspace(); await verifyOperationProgress(); await verifyLargeConfirmation(); await verifyExternalBatchConfirmation(); await verifyPendingSubmission(); await verifyResultNavigation(); await verifyOrganizedCopyCards(); })().catch(error => {
   console.error(error);
   process.exitCode = 1;
 });
