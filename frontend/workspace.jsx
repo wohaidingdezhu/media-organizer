@@ -1,9 +1,8 @@
-import {mountOperationControls} from './operation-controls.jsx';
+import {mountOperationCard} from './operation-card.jsx';
 import {mountExecutionControls} from './execution-controls.jsx';
 import {mountOrganizedCopies} from './organized-cards.jsx';
 import {mountOrganizedNavigation} from './organized-navigation.jsx';
 import {mountExecutionPreview} from './execution-preview.jsx';
-import {mountOperationRows} from './operation-progress.jsx';
 import {mountDashboardScanStatus} from './dashboard-scan-status.jsx';
 import {mountDashboardBackup} from './dashboard-backup.jsx';
 import {mountDashboardCatalog} from './dashboard-catalog.jsx';
@@ -41,8 +40,6 @@ globalThis.mountDashboardCatalog = mountDashboardCatalog;
 globalThis.mountDashboardBackup = mountDashboardBackup;
 globalThis.mountDashboardScanStatus = mountDashboardScanStatus;
 
-globalThis.mountOperationRows = mountOperationRows;
-
 globalThis.mountExecutionPreview = mountExecutionPreview;
 
 globalThis.mountOrganizedNavigation = mountOrganizedNavigation;
@@ -51,4 +48,4 @@ globalThis.mountOrganizedCopies = mountOrganizedCopies;
 
 globalThis.mountExecutionControls = mountExecutionControls;
 
-globalThis.mountOperationControls = mountOperationControls;
+globalThis.mountOperationCard = mountOperationCard;

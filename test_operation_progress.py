@@ -22,9 +22,9 @@ function text(root){return root.hidden?'':[root.textContent,...root.children.map
 function control(root,label){return all(root).find(node=>node.textContent===label);}
 function check(value,message){if(!value)throw Error(message);}
 const path=require('path');
-const {loadView,mountTestView,mountTestOperationControls}=require(path.join(path.dirname(process.argv[1]),'frontend/view-test-dom.cjs'));
-const {OperationRows}=loadView('operation-progress.jsx');
-const scope={mountOperationControls:(filters,pager,actions)=>mountTestOperationControls(filters,pager,actions,tag=>new E(tag)),mountOperationRows:host=>mountTestView(host,tag=>new E(tag),rows=>OperationRows({rows})),$,make:(tag,cls,content)=>new E(tag,content||''),fileSize:String,operating:false,saving:false,stopOperation:async(id)=>{stopped=id;},reviewRemaining:async(id)=>{reviewed=id;}};
+const {loadView,mountTestView}=require(path.join(path.dirname(process.argv[1]),'frontend/view-test-dom.cjs'));
+const {OperationCard}=loadView('operation-card.jsx');
+const scope={mountOperationCard:(host,actions)=>mountTestView(host,tag=>new E(tag),state=>OperationCard({state,actions})),$,make:(tag,cls,content)=>new E(tag,content||''),fileSize:String,operating:false,saving:false,stopOperation:async(id)=>{stopped=id;},reviewRemaining:async(id)=>{reviewed=id;}};
 vm.createContext(scope);const source=fs.readFileSync(process.argv[1],'utf8');vm.runInContext(source.slice(source.indexOf('function activeOperation'),source.indexOf('async function reviewRemaining')),scope);
 const planned=Array.from({length:10000},(_,i)=>({path:'C:\\样例\\source-'+String(i).padStart(5,'0')+'.jpg',target:'C:\\副本\\photo-'+i+'.jpg',bytes:100,role:'照片'}));
 function job(overrides={}){return {id:'a'.repeat(24),mode:'copy',quick:true,queue:true,batch_count:50,completed_batches:0,status:'running',total:planned.length,planned_items:planned,items:[],...overrides};}

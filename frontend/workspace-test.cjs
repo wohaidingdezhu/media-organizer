@@ -33,7 +33,7 @@ function fixture(html, route, initialJobs = []) {
   const console = new VirtualConsole();
   console.on('jsdomError', error => errors.push(error.message));
   const calls = [];
-  const basket = new Set(), resultRequests = [], copyRequests = [];
+  const basket = new Set(), resultRequests = [], copyRequests = [], remainingRequests = [];
   let delayResults = false;
   let dupeLoads = 0;
   let completePreview, completeStop, completeHistory, failStart;
@@ -53,6 +53,11 @@ function fixture(html, route, initialJobs = []) {
         const payload = options?.body ? JSON.parse(options.body) : null;
         calls.push({path, payload});
         const reply = value => ({ok: true, json: async () => value});
+        if (/^api\/operations\/[a-f0-9]+\/remaining$/.test(path)) {
+          return new Promise((resolve, reject) => remainingRequests.push({
+            resolve:advice => resolve(reply(advice)), reject,
+          }));
+        }
         switch (path) {
           case 'api/media':
             return reply({available: true, ids_by_path: Object.fromEntries(items.map(item => [item.path, item.id]))});
@@ -114,7 +119,7 @@ function fixture(html, route, initialJobs = []) {
       };
     },
   });
-  return {dom, errors, calls, resultRequests, copyRequests, deferResults:() => {delayResults = true;}, finish: preview => completePreview(preview),
+  return {dom, errors, calls, resultRequests, copyRequests, remainingRequests, deferResults:() => {delayResults = true;}, finish: preview => completePreview(preview),
     failStart:() => failStart(), stop:succeeds => completeStop(succeeds), updateJobs:jobs => {operationJobs = jobs;},
     finishHistory:() => {assert(completeHistory); completeHistory(); completeHistory = null;},
     waitingHistory:() => Boolean(completeHistory)};
@@ -569,7 +574,77 @@ async function verifyOperationProgress() {
   }
 }
 
-(async () => { await verifyDuplicates(); await verifyWorkspace(); await verifyOperationProgress(); await verifyLargeConfirmation(); await verifyExternalBatchConfirmation(); await verifyPendingSubmission(); await verifyResultNavigation(); await verifyOrganizedCopyCards(); })().catch(error => {
+async function verifyOperationRecovery() {
+  const planned = items.map(item => ({...item, target:item.path + '.copy'}));
+  const job = {id:'c'.repeat(24), mode:'copy', total:201, status:'cancelled', planned_items:planned,
+    items:[{...planned[0], status:'cancelled'}]};
+  const ui = fixture(organize, 'organize.html', [job]);
+  const {dom, calls, errors, remainingRequests} = ui, {document} = dom.window;
+  const button = label => [...document.querySelectorAll('#operations button')].find(b => b.textContent === label);
+  const recoveryButton = () => button('核对此批次未处理项');
+  const refresh = async jobs => {
+    if (jobs) ui.updateJobs(jobs);
+    const count = calls.filter(call => call.path === 'api/operations').length;
+    get(document, 'refresh-operations').click();
+    await until(() => calls.filter(call => call.path === 'api/operations').length > count, 'recovery history refresh');
+    await pause(20);
+  };
+  const selectedIds = () => JSON.stringify(dom.window.eval('[...selected]'));
+  try {
+    await until(() => recoveryButton() && !recoveryButton().disabled, 'recoverable stopped batch');
+    const recover = recoveryButton();
+    recover.click(); recover.click();
+    assert.equal(remainingRequests.length, 1, 'repeat recovery sends one request');
+    assert.equal(recover.textContent, '正在核对未处理项…');
+    assert(document.querySelector('#operations [role="status"]').textContent.includes('请稍候'));
+    await refresh();
+    assert(recover.disabled, 'poll does not unlock pending recovery');
+    remainingRequests[0].reject(Error('模拟核对连接中断'));
+    await until(() => !recover.disabled, 'failed recovery allows retry');
+    assert(document.querySelector('#operations [role="status"]').textContent.includes('模拟核对连接中断'));
+
+    recover.click();
+    const skipped = Array.from({length:201}, (_, index) => ({path:'/generated/跳过-' + index + '.mp4', reason:'请核对磁盘状态'}));
+    const advice = {ids:items.slice(1,3).map(item => item.id), skipped, message:'已完成项保留。'};
+    remainingRequests[1].resolve(advice);
+    await until(() => !recover.disabled, 'recovery result returns');
+    assert.equal(selectedIds(), JSON.stringify(advice.ids));
+    const result = document.querySelector('#operations [role="status"]');
+    assert(result.textContent.includes('已勾选 2 项，跳过 201 项'));
+    assert.equal(result.querySelectorAll('p.path').length, 50, 'skip reasons render one page');
+    const details = result.querySelector('details'); details.open = true;
+    for (let page = 1; page < 5; page++) button('下一页跳过原因').click();
+    assert(result.textContent.includes('/generated/跳过-200.mp4'));
+    assert.equal(result.querySelectorAll('p.path').length, 1);
+    assert(button('下一页跳过原因').disabled);
+    await refresh();
+    assert.equal(result.querySelector('details'), details);
+    assert(details.open, 'refresh retains expanded reasons');
+    assert(result.textContent.includes('第 5/5 页'));
+
+    const before = selectedIds();
+    recover.click();
+    await refresh([]);
+    remainingRequests[2].resolve({...advice, ids:[items[10].id]});
+    await pause(20);
+    assert.equal(selectedIds(), before, 'removed history response cannot replace selection');
+    assert.equal(document.querySelectorAll('#operations .operation').length, 0);
+
+    await refresh([job]);
+    recoveryButton().click();
+    const other = {...job, id:'d'.repeat(24), status:'running'};
+    await refresh([job, other]);
+    remainingRequests[3].resolve({...advice, ids:[items[11].id]});
+    await pause(20);
+    assert.equal(selectedIds(), before, 'new active operation blocks stale recovery selection');
+    assert.equal(calls.filter(call => call.path === 'api/operations/start').length, 0);
+    assert.deepEqual(errors, []);
+  } finally {
+    dom.window.close();
+  }
+}
+
+(async () => { await verifyDuplicates(); await verifyWorkspace(); await verifyOperationProgress(); await verifyOperationRecovery(); await verifyLargeConfirmation(); await verifyExternalBatchConfirmation(); await verifyPendingSubmission(); await verifyResultNavigation(); await verifyOrganizedCopyCards(); })().catch(error => {
   console.error(error);
   process.exitCode = 1;
 });
