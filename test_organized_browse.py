@@ -29,12 +29,13 @@ const text=node=>[node.textContent,...node.children.map(text)].join(' ');
 const cards=()=>$('organized-items').children.filter(node=>node.tag==='article');
 let records=[],calls=[],failure=null;
 $('organized-descendants').checked=true;$('organized-sort').value='name';
-const scope={...browse,$,make:(tag,cls,value)=>new E(tag,value||''),organizedItems:[],organizedNode:'',organizedPage:0,organizedFolderPage:0,operating:false,saving:false,mediaIds:{},picture(){},fileSize:value=>value+' B',error:message=>calls.push({error:message}),api:async(route,body)=>{
+const scope={...browse,$,photos:new Map(),photoPreviewSource:id=>scope.photos.get(id)?.preview||'',make:(tag,cls,value)=>new E(tag,value||''),organizedItems:[],organizedNode:'',organizedPage:0,organizedFolderPage:0,operating:false,saving:false,mediaIds:{},picture(){},fileSize:value=>value+' B',error:message=>calls.push({error:message}),api:async(route,body)=>{
   if(route==='api/organized-results')return {items:records,message:'generated records'};
   calls.push({route,body});if(failure)throw Error(failure);return {opened:true};
 }};
-const path=require('path'),{mountTestOrganizedNavigation}=require(path.join(path.dirname(process.argv[2]),'frontend/view-test-dom.cjs'));
+const path=require('path'),{mountTestOrganizedNavigation,mountTestOrganizedCopies}=require(path.join(path.dirname(process.argv[2]),'frontend/view-test-dom.cjs'));
 scope.mountOrganizedNavigation=(breadcrumbs,folders,onNavigate)=>mountTestOrganizedNavigation(breadcrumbs,folders,onNavigate,tag=>new E(tag));
+scope.mountOrganizedCopies=(host,actions)=>mountTestOrganizedCopies(host,actions,tag=>new E(tag));
 vm.createContext(scope);const source=fs.readFileSync(process.argv[2],'utf8');
 vm.runInContext(source.slice(source.indexOf('async function openOrganizedCopy'),
   source.indexOf('// Initialize the organizing workspace')),scope);
@@ -118,6 +119,47 @@ const retry=scope.refreshOrganizedResults();
 pending[5].resolve({items:records,message:'恢复成功'});await retry;
 assert($('organized-message').textContent.includes('恢复成功'));assert.equal(scope.organizedPage,1);
 assert.equal(calls.length,0);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+''')
+
+    def test_copy_launch_lock_survives_rerender_page_roundtrip_and_recovers_after_failure(self):
+        self.node(r'''
+(async()=>{
+records=Array.from({length:65},(_,i)=>copy('v'+i,['/copies'],'video'+i+'.mp4','视频',100000000000));
+await scope.refreshOrganizedResults();
+let resolve,reject,requests=0;
+scope.api=()=>{requests++;return new Promise((done,no)=>{resolve=done;reject=no;});};
+const play=()=>cards()[0].children.find(button=>button.getAttribute('data-copy-action')==='open');
+const first=play(),pending=first.onclick();
+assert(first.disabled);assert(first.textContent.includes('正在打开'));
+scope.renderOrganizedResults();assert.equal(play(),first);
+$('organized-next').onclick();$('organized-previous').onclick();
+assert(play().disabled);await play().onclick();assert.equal(requests,1);
+reject(Error('模拟播放器不可用'));await pending;
+assert(!play().disabled);assert.equal(requests,1);assert(calls.some(call=>call.error==='模拟播放器不可用'));
+const retry=play().onclick();assert.equal(requests,2);
+scope.operating=true;resolve({opened:true});await retry;
+assert(play().disabled);scope.operating=false;scope.syncOrganizedCards();assert(!play().disabled);
+assert(records.every(item=>item.kind==='视频'));
+})().catch(error=>{console.error(error);process.exitCode=1;});
+''')
+
+    def test_different_copies_of_one_source_have_independent_pending_actions(self):
+        self.node(r'''
+(async()=>{
+const first=copy('first',['/copies/a'],'photo.jpg');
+records=[first,{...copy('second',['/copies/b'],'photo.jpg'),path:first.path}];
+await scope.refreshOrganizedResults();
+const pending=[];
+scope.api=(route,body)=>new Promise(resolve=>pending.push({body,resolve}));
+const opens=()=>cards().map(card=>card.children.find(button=>button.getAttribute('data-copy-action')==='open'));
+const one=opens()[0].onclick();assert(!opens()[1].disabled);
+const two=opens()[1].onclick();assert.equal(pending.length,2);
+assert.notEqual(pending[0].body.id,pending[1].body.id);
+pending[0].resolve({opened:true});await one;
+assert(!opens()[0].disabled);assert(opens()[1].disabled);
+pending[1].resolve({opened:true});await two;
+assert(opens().every(button=>!button.disabled));
 })().catch(error=>{console.error(error);process.exitCode=1;});
 ''')
 

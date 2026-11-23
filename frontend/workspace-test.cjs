@@ -33,7 +33,7 @@ function fixture(html, route, initialJobs = []) {
   const console = new VirtualConsole();
   console.on('jsdomError', error => errors.push(error.message));
   const calls = [];
-  const basket = new Set(), resultRequests = [];
+  const basket = new Set(), resultRequests = [], copyRequests = [];
   let delayResults = false;
   let dupeLoads = 0;
   let completePreview, completeStop, completeHistory, failStart;
@@ -82,6 +82,10 @@ function fixture(html, route, initialJobs = []) {
                 resolve(reply({stopped:true}));
               };
             });
+          case 'api/organized-results/action':
+            return new Promise((resolve, reject) => copyRequests.push({
+              payload, resolve:() => resolve(reply({opened:true})), reject,
+            }));
           case 'api/organized-results':
             if (delayResults) return new Promise((resolve, reject) => resultRequests.push({
               resolve:data => resolve(reply(data)), reject,
@@ -110,7 +114,7 @@ function fixture(html, route, initialJobs = []) {
       };
     },
   });
-  return {dom, errors, calls, resultRequests, deferResults:() => {delayResults = true;}, finish: preview => completePreview(preview),
+  return {dom, errors, calls, resultRequests, copyRequests, deferResults:() => {delayResults = true;}, finish: preview => completePreview(preview),
     failStart:() => failStart(), stop:succeeds => completeStop(succeeds), updateJobs:jobs => {operationJobs = jobs;},
     finishHistory:() => {assert(completeHistory); completeHistory(); completeHistory = null;},
     waitingHistory:() => Boolean(completeHistory)};
@@ -253,6 +257,79 @@ async function verifyResultNavigation() {
     assert(node('organized-page').textContent.includes('2/2'));
     assert.equal(document.querySelectorAll('#organized-items article').length, 15);
     assert.equal(calls.filter(call => call.path === 'api/organized-results/action').length, 0);
+    assert.deepEqual(errors, []);
+  } finally {
+    dom.window.close();
+  }
+}
+
+async function verifyOrganizedCopyCards() {
+  const ui = fixture(organize, 'organize.html');
+  const {dom, errors, resultRequests, copyRequests} = ui, {document} = dom.window;
+  const node = id => get(document, id);
+  const copied = items.slice(0, 65).map((item, index) => ({...item, id:'copy-' + index,
+    target:'/copies/旅行/' + item.name, folder:'/copies/旅行', result_parts:['/copies','旅行'], can_open:true}));
+  copied[1] = {...copied[1], kind:'视频', name:'样例-2.mp4', path:'/generated/video.mp4',
+    target:'/copies/旅行/样例-2.mp4', bytes:100 * 1024 ** 3};
+  const result = {items:copied, message:'生成的照片和视频副本'};
+  const card = id => document.querySelector('[data-organized-id="' + id + '"]');
+  const action = (id, name) => card(id).querySelector('[data-copy-action="' + name + '"]');
+  try {
+    await until(() => !node('organized-refresh').disabled &&
+      node('organized-message').textContent.includes('生成样例记录'), 'result browser ready');
+    ui.deferResults();
+    node('organized-refresh').click();
+    resultRequests[0].resolve(result);
+    await until(() => card('copy-0') && card('copy-1'), 'React copy cards ready');
+    assert(card('copy-1').textContent.includes('100.00 GB'));
+    const photo = card('copy-0'), image = photo.querySelector('img');
+    assert(image && image.getAttribute('src') === 'previews/sample.png');
+    image.dispatchEvent(new dom.window.Event('error'));
+    await until(() => photo.querySelector('.photo-placeholder'), 'broken preview has a visible fallback');
+    assert(photo.textContent.includes('预览读取失败'));
+    const play = action('copy-1', 'open');
+    play.focus();
+    play.click();
+    play.click();
+    assert(play.disabled && play.textContent.includes('正在打开'));
+    assert.equal(copyRequests.length, 1);
+    assert.deepEqual(copyRequests[0].payload, {id:'copy-1', action:'open'});
+    const refreshing = dom.window.eval('refreshOrganizedResults()');
+    resultRequests[1].resolve(result);
+    await refreshing;
+    assert.equal(action('copy-1', 'open'), play);
+    assert.equal(document.activeElement, play);
+    assert.equal(card('copy-0'), photo);
+    assert(photo.querySelector('.photo-placeholder'));
+    node('organized-next').click();
+    node('organized-previous').click();
+    assert(action('copy-1', 'open').disabled);
+    action('copy-1', 'open').click();
+    assert.equal(copyRequests.length, 1);
+    copyRequests[0].resolve();
+    await until(() => !action('copy-1', 'open').disabled, 'video launch unlocks after completion');
+
+    action('copy-0', 'open').click();
+    card('copy-0').querySelector('.photo-preview-button').click();
+    assert(node('picture-viewer').open);
+    const viewerActions = [...document.querySelectorAll('#picture-body [data-copy-id]')];
+    assert(viewerActions.length === 2 && viewerActions.every(button => button.disabled));
+    viewerActions[0].click();
+    viewerActions[1].click();
+    assert.equal(copyRequests.length, 2);
+    assert.deepEqual(copyRequests[1].payload, {id:'copy-0', action:'open'});
+    node('picture-close').click();
+    copyRequests[1].reject(Error('模拟副本已移走'));
+    await until(() => !action('copy-0', 'open').disabled, 'failed photo launch can be retried');
+    assert(node('error').textContent.includes('模拟副本已移走'));
+
+    dom.window.eval('error()');
+    action('copy-0', 'open').click();
+    node('organized-next').click();
+    copyRequests[2].reject(Error('旧页面的错误'));
+    await pause(20);
+    assert(node('error').hidden, 'off-page action errors do not replace the current feedback');
+    assert(node('organized-page').textContent.includes('2/2'));
     assert.deepEqual(errors, []);
   } finally {
     dom.window.close();
@@ -422,7 +499,7 @@ async function verifyOperationProgress() {
   }
 }
 
-(async () => { await verifyDuplicates(); await verifyWorkspace(); await verifyOperationProgress(); await verifyLargeConfirmation(); await verifyPendingSubmission(); await verifyResultNavigation(); })().catch(error => {
+(async () => { await verifyDuplicates(); await verifyWorkspace(); await verifyOperationProgress(); await verifyLargeConfirmation(); await verifyPendingSubmission(); await verifyResultNavigation(); await verifyOrganizedCopyCards(); })().catch(error => {
   console.error(error);
   process.exitCode = 1;
 });
