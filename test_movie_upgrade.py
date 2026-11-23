@@ -469,9 +469,9 @@ class Element{constructor(tag,text=''){this.tag=tag;this.tagName=tag.toUpperCase
 function make(tag,cls,text){return new Element(tag,text||'');}
 function text(node){return node.hidden?'':[node.textContent,...node.children.map(text)].join(' ');}
 const path=require('path');
-const {loadView,mountTestView}=require(path.join(path.dirname(process.argv[2]),'frontend/view-test-dom.cjs'));
+const {loadView,mountTestView,mountTestOperationControls}=require(path.join(path.dirname(process.argv[2]),'frontend/view-test-dom.cjs'));
 const {OperationRows}=loadView('operation-progress.jsx');
-const scope={mountOperationRows:host=>mountTestView(host,tag=>new Element(tag),rows=>OperationRows({rows})),make,operating:false,saving:false,fileSize:n=>String(n)};vm.createContext(scope);
+const scope={mountOperationControls:(filters,pager,actions)=>mountTestOperationControls(filters,pager,actions,tag=>new Element(tag)),mountOperationRows:host=>mountTestView(host,tag=>new Element(tag),rows=>OperationRows({rows})),make,operating:false,saving:false,fileSize:n=>String(n)};vm.createContext(scope);
 vm.runInContext(fs.readFileSync(process.argv[1],'utf8'),scope);
 const summary={videos:2,counts:{subtitle:1,nfo:0,cover:1,still:0},missing:['NFO','剧照'],identity_missing:0,items:[{label:'字幕',path:'C:\\sample\\film.srt'}],skipped:[{path:'orphan.srt',reason:'未唯一关联'}]};
 const shown=text(scope.attachmentSummary(summary));

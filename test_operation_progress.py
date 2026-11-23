@@ -22,9 +22,9 @@ function text(root){return root.hidden?'':[root.textContent,...root.children.map
 function control(root,label){return all(root).find(node=>node.textContent===label);}
 function check(value,message){if(!value)throw Error(message);}
 const path=require('path');
-const {loadView,mountTestView}=require(path.join(path.dirname(process.argv[1]),'frontend/view-test-dom.cjs'));
+const {loadView,mountTestView,mountTestOperationControls}=require(path.join(path.dirname(process.argv[1]),'frontend/view-test-dom.cjs'));
 const {OperationRows}=loadView('operation-progress.jsx');
-const scope={mountOperationRows:host=>mountTestView(host,tag=>new E(tag),rows=>OperationRows({rows})),$,make:(tag,cls,content)=>new E(tag,content||''),fileSize:String,operating:false,saving:false,stopOperation:async(id)=>{stopped=id;},reviewRemaining:async(id)=>{reviewed=id;}};
+const scope={mountOperationControls:(filters,pager,actions)=>mountTestOperationControls(filters,pager,actions,tag=>new E(tag)),mountOperationRows:host=>mountTestView(host,tag=>new E(tag),rows=>OperationRows({rows})),$,make:(tag,cls,content)=>new E(tag,content||''),fileSize:String,operating:false,saving:false,stopOperation:async(id)=>{stopped=id;},reviewRemaining:async(id)=>{reviewed=id;}};
 vm.createContext(scope);const source=fs.readFileSync(process.argv[1],'utf8');vm.runInContext(source.slice(source.indexOf('function activeOperation'),source.indexOf('async function reviewRemaining')),scope);
 const planned=Array.from({length:10000},(_,i)=>({path:'C:\\样例\\source-'+String(i).padStart(5,'0')+'.jpg',target:'C:\\副本\\photo-'+i+'.jpg',bytes:100,role:'照片'}));
 function job(overrides={}){return {id:'a'.repeat(24),mode:'copy',quick:true,queue:true,batch_count:50,completed_batches:0,status:'running',total:planned.length,planned_items:planned,items:[],...overrides};}
@@ -102,6 +102,21 @@ scope.operationCard({...record,stop_requested:true});finish();await retry;
 check(stop.disabled&&stop.textContent==='正在安全停止…','acknowledged stop was unlocked');
 await stop.onclick();check(calls===2,'acknowledged stop submitted again');
 })().catch(error=>{console.error(error);process.exitCode=1;});
+''')
+
+    def test_search_includes_recycle_path_and_keeps_each_batch_filter_independent(self):
+        self.run_ui(r'''
+const recycled={...planned[0],status:'success',trashed_path:'/recycle/独特照片名.jpg'};
+const one=job({mode:'trash',quick:false,status:'complete',total:1,planned_items:[planned[0]],items:[recycled]});
+const first=scope.operationCard(one),search=all(first).find(node=>node.tag==='input');
+search.value='独特照片名';search.oninput();check(text(first).includes('明细 1/1 项'),'actual recycle path not searchable');
+scope.operationCard(one);check(search.value==='独特照片名','poll lost search');
+const second=scope.operationCard(job({id:'b'.repeat(24)}));
+check(all(second).find(node=>node.tag==='input').value==='','batch searches leaked');
+search.value='不存在';search.oninput();
+check(text(first).includes('当前筛选没有文件'),'no-match feedback missing');
+check(control(first,'上一页明细').disabled&&control(first,'下一页明细').disabled,'empty paging enabled');
+search.value='';search.oninput();check(text(first).includes('明细 1/1 项'),'clearing search did not recover');
 ''')
 
     def test_stop_targets_whole_queue_and_legacy_history_keeps_unknown_outcomes(self):
