@@ -66,15 +66,41 @@ cards()[2].children[0].onclick();assert(text($('picture-body')).includes('缺少
 ''')
 
 
+    def test_copy_lock_is_shared_between_card_and_large_photo_viewer(self):
+        self.node(r'''
+(async()=>{
+records=[copy('photo',['/copies'],'photo.jpg')];await scope.refreshOrganizedResults();
+let finish,requests=0;
+scope.api=()=>{requests++;return new Promise(resolve=>finish=resolve);};
+const cardOpen=cards()[0].children.find(node=>node.getAttribute('data-copy-action')==='open');
+const pending=cardOpen.onclick();
+cards()[0].children[0].onclick();
+assert($('picture-viewer').open);assert(button('打开整理副本').disabled);
+await button('打开整理副本').onclick();await button('定位整理副本').onclick();assert.equal(requests,1);
+finish({opened:true});await pending;
+assert(!button('打开整理副本').disabled);assert(!button('定位整理副本').disabled);
+const locate=button('定位整理副本').onclick();
+assert(cardOpen.disabled);await cardOpen.onclick();assert.equal(requests,2);
+finish({opened:true});await locate;assert(!cardOpen.disabled);
+assert.deepEqual([...scope.selected],['preserved']);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+''')
+
     def test_late_photo_catalog_populates_copy_thumbnails_without_manual_refresh(self):
         self.node(r'''
 (async()=>{
 records=[copy('a',['/copies'],'a.jpg')];scope.mediaIds[records[0].path]='source-id';await scope.refreshOrganizedResults();
 assert.equal(cards()[0].querySelectorAll('img').length,0);
+cards()[0].children[0].onclick();assert($('picture-viewer').open);
+assert.equal($('picture-body').querySelectorAll('img').length,0);
+$('picture-error').textContent='当前副本需要核对';$('picture-error').hidden=false;
 Object.assign(scope,{optionsFor(){},checkDisks(){},refreshOperations(){},refreshBasket(){}});
 scope.api=async route=>route==='api/photos'?{items:[{id:'source-id',preview:'previews/late.png',month:'2021/05'}]}:{message:'generated comparison',items:[]};
 vm.runInContext(source.slice(source.indexOf('async function loadExtras'),source.indexOf('const oldBuildFolders')),scope);
 await scope.loadExtras();assert.equal(cards()[0].querySelectorAll('img')[0].src,'previews/late.png');
+assert.equal($('picture-body').querySelectorAll('img')[0].src,'previews/late.png');
+assert($('picture-viewer').open);assert.deepEqual([...scope.selected],['preserved']);
+assert(!$('picture-error').hidden);assert.equal($('picture-error').textContent,'当前副本需要核对');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 ''')
 

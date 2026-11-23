@@ -102,4 +102,13 @@ function mountTestOrganizedNavigation(breadcrumbs, folders, onNavigate, createEl
   };
 }
 
-module.exports = {loadView, mountTestView, mountTestScanStatus, mountTestExecutionPreview, mountTestOrganizedNavigation};
+function mountTestOrganizedCopies(host, actions, createElement) {
+  const React = require('react');
+  const {OrganizedCopyCard} = loadView('organized-cards.jsx');
+  return mountTestView(host, createElement, state => state.items.length
+    ? state.items.map(item => React.cloneElement(OrganizedCopyCard({item, state, actions}), {key:item.id}))
+    : React.createElement('p', {className:'empty'}, state.emptyMessage)).render;
+}
+
+module.exports = {loadView, mountTestView, mountTestScanStatus, mountTestExecutionPreview,
+  mountTestOrganizedNavigation, mountTestOrganizedCopies};
