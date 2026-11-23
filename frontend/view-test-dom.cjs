@@ -110,5 +110,15 @@ function mountTestOrganizedCopies(host, actions, createElement) {
     : React.createElement('p', {className:'empty'}, state.emptyMessage)).render;
 }
 
-module.exports = {loadView, mountTestView, mountTestScanStatus, mountTestExecutionPreview,
+function mountTestExecutionControls(host, actions, createElement, register) {
+  const {ExecutionControls} = loadView('execution-controls.jsx');
+  const view = mountTestView(host, createElement, state => ExecutionControls({state, actions}));
+  function registerChildren(node) {
+    if (node.id) register(node);
+    for (const child of node.children) registerChildren(child);
+  }
+  return state => {view.render(state); registerChildren(host);};
+}
+
+module.exports = {mountTestExecutionControls, loadView, mountTestView, mountTestScanStatus, mountTestExecutionPreview,
   mountTestOrganizedNavigation, mountTestOrganizedCopies};

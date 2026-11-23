@@ -288,9 +288,10 @@ class Element{constructor(tag,text){this.tag=tag;this.tagName=tag.toUpperCase();
 const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);};
 let payload;
 const scope={$,make:(tag,cls,text)=>new Element(tag,text),operating:false,saving:false,selected:new Set(['photo']),error(){},render(){},fileSize:n=>String(n),api:async(route,body)=>{payload=body;return {items:[{path:'/generated/IMG.MOV',target:'/generated/copies/IMG.MOV',role:'配对视频候选'}],bytes:1,bundle_kind:'photo',bundles:[{title:'IMG',counts:{'照片':1,'RAW':1,'配对视频候选':1,'XMP':1,'AAE':1}}],skipped:[{path:'/generated/IMG.jpeg',reason:'配对不明确'}]};}};
-const path=require('path'),{mountTestExecutionPreview}=require(path.join(path.dirname(process.argv[1]),'frontend/view-test-dom.cjs'));
+const path=require('path'),{mountTestExecutionPreview,mountTestExecutionControls}=require(path.join(path.dirname(process.argv[1]),'frontend/view-test-dom.cjs'));
 scope.mountExecutionPreview=host=>mountTestExecutionPreview(host,tag=>new Element(tag));
-vm.createContext(scope);const source=fs.readFileSync(process.argv[1],'utf8');vm.runInContext(source.slice(source.indexOf('let executionPage='),source.indexOf("$('execution-confirm').onchange")),scope);
+scope.mountExecutionControls=(host,actions)=>mountTestExecutionControls(host,actions,tag=>new Element(tag),node=>nodes.set(node.id,node));
+vm.createContext(scope);const source=fs.readFileSync(process.argv[1],'utf8');vm.runInContext(source.slice(source.indexOf('let executionPage='),source.indexOf('function notifyReview(')),scope);
 (async()=>{await $('copy-photo-bundles').onclick();if(!payload.photo_bundle||payload.bundle||payload.mode!=='copy')throw Error('wrong photo operation');if(!$('execution').open||$('execution-confirm').checked||!$('execution-start').disabled)throw Error('confirmation required');const text=JSON.stringify($('execution-items').children);if(!text.includes('不能证明')&&!text.includes('人工核对'))throw Error('missing candidate warning');if(!text.includes('XMP 1')||!text.includes('配对不明确'))throw Error('missing counts or skipped reasons');if(!$('execution-title').textContent.includes('照片'))throw Error('wrong title');})().catch(e=>{console.error(e);process.exitCode=1;});
 '''
         result = subprocess.run([node, '-e', code, str(Path(__file__).parent / 'management.js')], text=True, encoding='utf-8', capture_output=True, timeout=15)
