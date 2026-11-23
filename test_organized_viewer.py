@@ -51,6 +51,23 @@ $('picture-previous').onclick();assert.equal(scope.pictureSequence[scope.picture
 })().catch(error=>{console.error(error);process.exitCode=1;});
 ''')
 
+    def test_broken_copy_preview_has_one_fallback_and_retains_verified_copy_actions(self):
+        self.node(r'''
+(async()=>{
+records=[copy('a',['C:\\copies'],'a.jpg'),copy('b',['/copies'],'b.jpg')];
+for(const item of records){scope.mediaIds[item.path]='source-'+item.id;scope.photos.set('source-'+item.id,{preview:'previews/'+item.id+'.png'});}
+await scope.refreshOrganizedResults();cards()[0].children[0].onclick();
+const first=$('picture-body').querySelectorAll('img')[0];first.onerror();first.onerror();
+assert(first.hidden);assert(text($('picture-body')).includes('小预览读取失败'));
+assert.equal($('picture-body').querySelectorAll('div').filter(node=>node.textContent.includes('小预览读取失败')).length,1);
+assert(!button('打开整理副本').disabled);assert.equal(calls.length,0,'preview failure must not open an original or copy');
+await button('打开整理副本').onclick();assert.equal(calls[0].body.id,'a');assert.equal(calls[0].body.action,'open');
+$('picture-next').onclick();const second=$('picture-body').querySelectorAll('img')[0];
+assert.notEqual(second,first);assert(!second.hidden);assert(!text($('picture-body')).includes('小预览读取失败'));
+second.onerror();assert(second.hidden);assert(text($('picture-body')).includes('可尝试打开整理副本'));
+})().catch(error=>{console.error(error);process.exitCode=1;});
+''')
+
     def test_busy_missing_identity_and_late_errors_do_not_open_wrong_file_or_pollute_view(self):
         self.node(r'''
 (async()=>{
