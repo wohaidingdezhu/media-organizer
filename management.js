@@ -247,33 +247,34 @@ function operationItemText(job,item){
   return `${label}：${item.role?'['+item.role+'] ':''}${item.path}\n→ ${item.trashed_path||item.target}${item.error?'\n'+item.error:''}`;
 }
 function renderOperationRows(view){
-  const query=view.search.value.trim().toLocaleLowerCase(),status=view.filter.value;
-  const rows=view.records.filter(item=>(!status||operationItemState(view.job,item)===status)&&(!query||(item.path+' '+item.target+' '+(item.error||'')).toLocaleLowerCase().includes(query)));
+  const query=view.query.trim().toLocaleLowerCase(),status=view.filterStatus;
+  const rows=view.records.filter(item=>(!status||operationItemState(view.job,item)===status)&&(!query||(item.path+' '+item.target+' '+(item.trashed_path||'')+' '+(item.error||'')).toLocaleLowerCase().includes(query)));
   const pages=Math.max(1,Math.ceil(rows.length/50));view.page=Math.max(0,Math.min(view.page,pages-1));
   if(!view.rowsRenderer)view.rowsRenderer=mountOperationRows(view.rows);
   view.rowsRenderer.render(rows.slice(view.page*50,(view.page+1)*50).map(item=>({
     path:item.path, attention:operationItemState(view.job,item)==='attention',
     text:operationItemText(view.job,item),
   })));
-  view.position.textContent=`明细 ${rows.length}/${view.records.length} 项 · 第 ${view.page+1}/${pages} 页（每页 50 项）`;
-  view.previous.disabled=view.page===0;view.next.disabled=view.page>=pages-1;
+  view.pages=pages;
+  view.controlsRenderer.render({id:view.job.id,query:view.query,filter:view.filterStatus,
+    page:view.page,pages,total:view.records.length,matching:rows.length});
 }
 function operationCard(job){
   let view=operationViews.get(job.id);
   if(!view){
-    view={page:0,box:make('div','operation'),title:make('strong'),date:make('p','muted'),counts:make('p'),current:make('pre'),error:make('p','warning'),
-      stop:make('button'),stopHint:make('p','muted'),search:make('input'),filter:make('select'),rows:make('div'),position:make('span'),
-      previous:make('button','','上一页明细'),next:make('button','','下一页明细'),attention:make('button'),
+    view={page:0,query:'',filterStatus:'',box:make('div','operation'),title:make('strong'),date:make('p','muted'),counts:make('p'),current:make('pre'),error:make('p','warning'),
+      stop:make('button'),stopHint:make('p','muted'),rows:make('div'),attention:make('button'),
       unknown:make('p','warning'),incomplete:make('p','warning'),review:make('button','','核对此批次未处理项'),reviewResult:make('div')};
-    view.search.type='search';view.search.value='';view.search.placeholder='搜索本批次路径或错误…';view.search.setAttribute('aria-label','搜索批次 '+job.id+' 的文件');
-    view.filter.setAttribute('aria-label','筛选批次 '+job.id+' 的文件状态');
-    for(const[value,label]of [['','全部明细'],['attention','需要核对'],['processing','处理中'],['pending','未开始'],['success','成功'],['cancelled','已安全取消']]){const option=make('option','',label);option.value=value;view.filter.append(option);}view.filter.value='';
-    const controls=make('div','manage-controls'),pager=make('div','pager');controls.append(view.filter,view.search);pager.append(view.previous,view.position,view.next);
+    const controls=make('div','manage-controls'),pager=make('div','pager');
+    view.controlsRenderer=mountOperationControls(controls,pager,{
+      search:value=>{view.query=value;view.page=0;renderOperationRows(view);},
+      filter:value=>{view.filterStatus=value;view.page=0;renderOperationRows(view);},
+      previous:()=>{if(view.page>0){view.page--;renderOperationRows(view);}},
+      next:()=>{if(view.page+1<view.pages){view.page++;renderOperationRows(view);}},
+    });
     view.box.append(view.title,view.date,view.counts,view.current,view.error,view.stop,view.stopHint,view.attention,controls,view.rows,pager,view.unknown,view.review,view.reviewResult,view.incomplete,
       make('p','muted','记录保存在本次报告的 operations 文件夹。已成功项不会自动撤销；结果未确认时先在 文件管理器 核对。'));
-    view.search.oninput=view.filter.onchange=()=>{view.page=0;renderOperationRows(view);};
-    view.previous.onclick=()=>{view.page--;renderOperationRows(view);};view.next.onclick=()=>{view.page++;renderOperationRows(view);};
-    view.attention.onclick=()=>{view.filter.value='attention';view.search.value='';view.page=0;renderOperationRows(view);};
+    view.attention.onclick=()=>{view.filterStatus='attention';view.query='';view.page=0;renderOperationRows(view);};
     view.stop.onclick=async()=>{
       if(view.stopping||view.job.stop_requested||!activeOperation(view.job))return;
       view.stopping=true;operationCard(view.job);
@@ -308,7 +309,7 @@ function renderOperationCards(result){
   const log=$('operation-log');if(log&&((result.warnings||[]).length||result.jobs.some(activeOperation)))log.open=true;
   const parent=$('operations'),keys=new Set(result.jobs.map(job=>job.id));
   for(const [key,view] of operationViews)if(!keys.has(key)){
-    view.rowsRenderer?.dispose();operationViews.delete(key);
+    view.rowsRenderer?.dispose();view.controlsRenderer.dispose();operationViews.delete(key);
   }
   const desired=[...(result.warnings||[]).map(warning=>make('p','warning',warning)),...result.jobs.map(operationCard)];
   if(!desired.length)desired.push(make('p','','本次扫描还没有文件操作记录。'));

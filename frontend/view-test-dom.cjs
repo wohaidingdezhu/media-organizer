@@ -120,5 +120,15 @@ function mountTestExecutionControls(host, actions, createElement, register) {
   return state => {view.render(state); registerChildren(host);};
 }
 
-module.exports = {mountTestExecutionControls, loadView, mountTestView, mountTestScanStatus, mountTestExecutionPreview,
+function mountTestOperationControls(filters, pager, actions, createElement) {
+  const {OperationFilters, OperationPager} = loadView('operation-controls.jsx');
+  const filterView = mountTestView(filters, createElement, OperationFilters);
+  const pagerView = mountTestView(pager, createElement, OperationPager);
+  return {
+    render(state) {filterView.render({state,actions}); pagerView.render({state,actions});},
+    dispose() {filterView.dispose(); pagerView.dispose();},
+  };
+}
+
+module.exports = {mountTestOperationControls, mountTestExecutionControls, loadView, mountTestView, mountTestScanStatus, mountTestExecutionPreview,
   mountTestOrganizedNavigation, mountTestOrganizedCopies};
