@@ -34,9 +34,10 @@ const scope={...browse,$,photos:new Map(),photoPreviewSource:id=>scope.photos.ge
   if(route==='api/organized-results')return {items:records,message:'generated records'};
   calls.push({route,body});if(failure)throw Error(failure);return {opened:true};
 }};
-const path=require('path'),{mountTestOrganizedNavigation,mountTestOrganizedCopies}=require(path.join(path.dirname(process.argv[2]),'frontend/view-test-dom.cjs'));
+const path=require('path'),{mountTestOrganizedNavigation,mountTestOrganizedCopies,mountTestPictureViewer}=require(path.join(path.dirname(process.argv[2]),'frontend/view-test-dom.cjs'));
 scope.mountOrganizedNavigation=(breadcrumbs,folders,onNavigate)=>mountTestOrganizedNavigation(breadcrumbs,folders,onNavigate,tag=>new E(tag));
 scope.mountOrganizedCopies=(host,actions)=>mountTestOrganizedCopies(host,actions,tag=>new E(tag));
+scope.mountPictureViewer=(host,actions)=>mountTestPictureViewer(host,actions,tag=>new E(tag),node=>nodes.set(node.id,node));
 vm.createContext(scope);const source=fs.readFileSync(process.argv[2],'utf8');
 vm.runInContext(source.slice(source.indexOf('async function openOrganizedCopy'),
   source.indexOf('// Initialize the organizing workspace')),scope);

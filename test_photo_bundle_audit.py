@@ -119,7 +119,7 @@ const items=[{id:'jpg',name:'IMG.JPG',kind:'照片',path:'/generated/IMG.JPG',st
 const audit={photo_ids:['jpg','raw'],items:[{id:'jpg',path:items[0].path,label:'照片',bytes:12,plan:{state:'include',target:'用户/样例/照片/IMG.JPG'}},{id:'raw',path:items[1].path,label:'RAW',bytes:45,plan:{state:'pending',target:'照片/RAW/IMG.dng'}},{id:'mov',path:items[2].path,label:'配对视频候选',bytes:9,plan:{state:'hold',target:'视频/IMG.mov'}},{path:'/generated/IMG.xmp',label:'XMP',bytes:3,plan:null}],counts:{'照片':1,'RAW':1,'配对视频候选':1,'XMP':1,'AAE':0},skipped:[{path:'/generated/IMG.jpeg',reason:'同名照片有多项候选'}],message:'同名视频仅为候选，不能证明是 Live Photo。',identity_missing:1};
 let apiCalls=[],planReads=0;
 const scope={$,make:(tag,cls,text)=>new Element(tag,text||''),data:{items},selected:new Set(['mov']),mediaIds:Object.fromEntries(items.map(item=>[item.path,item.id])),handledTrash:new Set(),saving:false,operating:false,bundleReviewInfo:null,bundleReviewAnchor:null,bundleReviewRevision:0,names:{include:'已纳入',pending:'待核对',hold:'暂缓'},fileSize:n=>String(n),filters:['state','kind','risk'],wallUsers:{reset(){}},page:4,buildFolders(){},render(){scope.syncBundleReviewControls();},api:async route=>{apiCalls.push(route);return audit;},request:async()=>{planReads++;return {items};}};
-vm.createContext(scope);const source=fs.readFileSync(process.argv[1],'utf8');vm.runInContext(source.slice(0,source.indexOf('function picture(')),scope);
+vm.createContext(scope);const source=fs.readFileSync(process.argv[1],'utf8');vm.runInContext(source.slice(0,source.indexOf('function photoPreviewSource(')),scope);
 """
 
     def test_actual_review_ui_displays_candidates_plans_warnings_and_only_selects_photos(self):

@@ -121,5 +121,15 @@ function mountTestExecutionControls(host, actions, createElement, register) {
 }
 
 
-module.exports = {mountTestExecutionControls, loadView, mountTestView, mountTestScanStatus, mountTestExecutionPreview,
+function mountTestPictureViewer(host, actions, createElement, register) {
+  const {PictureViewer} = loadView('picture-viewer.jsx');
+  const view = mountTestView(host, createElement, state => PictureViewer({state, actions}));
+  function registerChildren(node) {
+    if (node.id) register(node);
+    for (const child of node.children) registerChildren(child);
+  }
+  return state => {view.render(state); registerChildren(host);};
+}
+
+module.exports = {mountTestPictureViewer, mountTestExecutionControls, loadView, mountTestView, mountTestScanStatus, mountTestExecutionPreview,
   mountTestOrganizedNavigation, mountTestOrganizedCopies};
