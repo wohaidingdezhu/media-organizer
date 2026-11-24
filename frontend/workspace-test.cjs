@@ -33,8 +33,8 @@ function fixture(html, route, initialJobs = []) {
   const console = new VirtualConsole();
   console.on('jsdomError', error => errors.push(error.message));
   const calls = [];
-  const basket = new Set(), resultRequests = [], copyRequests = [], remainingRequests = [], mediaRequests = [];
-  let delayResults = false;
+  const basket = new Set(), resultRequests = [], copyRequests = [], remainingRequests = [], mediaRequests = [], basketRequests = [];
+  let delayResults = false, delayBasket = false;
   let dupeLoads = 0;
   let completePreview, rejectPreview, completeStop, completeHistory, failStart;
   let operationJobs = initialJobs, delayHistory = false;
@@ -109,6 +109,7 @@ function fixture(html, route, initialJobs = []) {
             return reply({logical_bytes: 2412, duplicate_logical_bytes: 2400, hardlink_references: 0, warnings: [],
               roots: [], kinds: [], photo_months: [], folders: [], largest: items.slice(0, 100), largest_limit: 100});
           case 'api/basket':
+            if (delayBasket) return new Promise((resolve,reject)=>basketRequests.push({payload,resolve:value=>resolve(reply(value)),reject}));
             if (payload?.action === 'add') for (const id of payload.ids) basket.add(id);
             return reply({ids: [...basket], limit: 200});
           case 'api/operations/preview':
@@ -124,7 +125,7 @@ function fixture(html, route, initialJobs = []) {
       };
     },
   });
-  return {dom, errors, calls, resultRequests, copyRequests, remainingRequests, mediaRequests, failPreview:message=>rejectPreview(Error(message)), deferResults:() => {delayResults = true;}, finish: preview => completePreview(preview),
+  return {dom, errors, calls, basketRequests, deferBasket:()=>{delayBasket=true;}, resultRequests, copyRequests, remainingRequests, mediaRequests, failPreview:message=>rejectPreview(Error(message)), deferResults:() => {delayResults = true;}, finish: preview => completePreview(preview),
     failStart:() => failStart(), stop:succeeds => completeStop(succeeds), updateJobs:jobs => {operationJobs = jobs;},
     finishHistory:() => {assert(completeHistory); completeHistory(); completeHistory = null;},
     waitingHistory:() => Boolean(completeHistory)};
@@ -579,6 +580,50 @@ async function verifyOperationProgress() {
   }
 }
 
+async function verifyBasketControls() {
+  const ui = fixture(photos, 'photos.html');
+  const {dom, basketRequests, calls, errors} = ui, {document} = dom.window;
+  const node = id => get(document,id);
+  try {
+    await until(()=>node('basket-refresh')&&!node('basket-refresh').disabled,'React basket ready');
+    dom.window.eval('data.items=data.items.map((item,index)=>({...item,kind:index%2?"视频":"照片"}));selected=new Set(data.items.slice(0,200).map(item=>item.id));render()');
+    ui.deferBasket();
+    const add=node('basket-add');add.click();add.click();
+    assert.equal(basketRequests.length,1);
+    assert.equal(basketRequests[0].payload.ids.length,200);
+    assert(add.disabled&&add.textContent==='正在加入…');
+    assert(node('basket-summary').textContent.includes('正在保存'));
+    dom.window.eval('updateBasketControls()');
+    assert.equal(node('basket-add'),add);
+    assert(add.disabled);
+    basketRequests[0].reject(Error('模拟候选保存失败'));
+    await until(()=>!add.disabled,'basket failure allows retry');
+    assert.equal(dom.window.eval('selected.size'),200);
+    assert(node('basket-summary').textContent.includes('模拟候选保存失败'));
+    add.click();basketRequests[1].resolve({ids:items.slice(0,200).map(item=>item.id),limit:200});
+    await until(()=>!node('basket-clear').disabled,'saved candidates ready');
+    node('basket-refresh').click();node('basket-refresh').click();
+    assert.equal(basketRequests.length,3);
+    assert(node('basket-select').disabled&&node('basket-view').disabled);
+    dom.window.eval('showBasket(true)');
+    assert.equal(dom.window.eval('selected.size'),200,'pending refresh preserves current picks');
+    basketRequests[2].resolve({ids:items.slice(0,200).map(item=>item.id),limit:200});
+    await until(()=>!node('basket-select').disabled,'refresh completes');
+    dom.window.eval('mediaIds[data.items[0].path]="changed-identity"');
+    node('basket-select').click();
+    assert.equal(dom.window.eval('selected.size'),199);
+    assert(!dom.window.eval('selected.has(data.items[0].id)'));
+    node('basket-clear').click();node('basket-clear').click();
+    assert.equal(basketRequests.length,4);
+    assert.equal(basketRequests[3].payload.action,'clear');
+    basketRequests[3].resolve({ids:[],limit:200});
+    await until(()=>node('basket-summary').textContent.includes('0/200'),'candidate clear finishes');
+    assert.equal(dom.window.eval('selected.size'),0);
+    assert.equal(calls.filter(call=>call.path.startsWith('api/operations/')&&['preview','start'].some(name=>call.path.endsWith(name))).length,0);
+    assert.deepEqual(errors,[]);
+  } finally {dom.window.close();}
+}
+
 async function verifyPhotoViewerActions() {
   const ui = fixture(photos, 'photos.html');
   const {dom, mediaRequests, calls, errors} = ui, {document} = dom.window;
@@ -741,7 +786,7 @@ async function verifyOperationRecovery() {
   }
 }
 
-(async () => { await verifyDuplicates(); await verifyWorkspace(); await verifyOperationProgress(); await verifyOperationRecovery(); await verifyPhotoViewerFallback(); await verifyPhotoViewerActions(); await verifyLargeConfirmation(); await verifyExternalBatchConfirmation(); await verifyPendingSubmission(); await verifyResultNavigation(); await verifyOrganizedCopyCards(); })().catch(error => {
+(async () => { await verifyDuplicates(); await verifyWorkspace(); await verifyOperationProgress(); await verifyOperationRecovery(); await verifyPhotoViewerFallback(); await verifyPhotoViewerActions(); await verifyBasketControls(); await verifyLargeConfirmation(); await verifyExternalBatchConfirmation(); await verifyPendingSubmission(); await verifyResultNavigation(); await verifyOrganizedCopyCards(); })().catch(error => {
   console.error(error);
   process.exitCode = 1;
 });

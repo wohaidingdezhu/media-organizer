@@ -1,17 +1,29 @@
 // Saved scan statistics and manual candidates; neither action executes cleanup.
-let basketIds=new Set(),basketReady=false,basketLoading=false,basketError='',basketLimit=200;
+let basketIds=new Set(),basketReady=false,basketLoading=false,basketError='',basketLimit=200,basketAction='',basketView;
 function updateBasketControls(){
   if(!data)return;
-  const chosen=data.items.filter(item=>selected.has(item.id)),trashed=data.items.filter(item=>basketIds.has(item.id)&&handledTrash.has(item.path)).length;
+  const chosen=[];let trashed=0,bytes=0,selectable=false;
+  for(const item of data.items){
+    if(selected.has(item.id))chosen.push(item);
+    if(!basketIds.has(item.id))continue;
+    bytes+=item.bytes;
+    if(handledTrash.has(item.path))trashed++;
+    else if(mediaIds[item.path]===item.id)selectable=true;
+  }
   const busy=saving||operating||basketLoading;
-  $('basket-summary').textContent=basketError||(!basketReady?'正在读取候选篮…':`${basketIds.size}/${basketLimit} 个候选 · ${fileSize(data.items.filter(item=>basketIds.has(item.id)).reduce((sum,item)=>sum+item.bytes,0))} 逻辑大小${trashed?' · '+trashed+' 项已有清理成功记录，可逐项移出':''}。候选记录仅属于本次扫描。`);
-  $('basket-summary').className=basketError?'warning':'';
-  $('basket-add').disabled=!basketReady||busy||!chosen.some(item=>!basketIds.has(item.id)&&!handledTrash.has(item.path));
-  $('basket-view').disabled=!basketReady||saving;
-  $('basket-select').disabled=!basketReady||saving||operating||!data.items.some(item=>basketIds.has(item.id)&&!handledTrash.has(item.path)&&mediaIds[item.path]);
-  $('basket-remove').disabled=!basketReady||busy||!chosen.some(item=>basketIds.has(item.id));
-  $('basket-clear').disabled=!basketReady||busy||!basketIds.size;
-  $('basket-refresh').disabled=saving||basketLoading;
+  if(!basketView)basketView=mountBasketControls($('basket-controls'),{
+    add:()=>mutateBasket('add',data.items.filter(item=>selected.has(item.id)&&!basketIds.has(item.id)&&!handledTrash.has(item.path)).map(item=>item.id)),
+    remove:()=>mutateBasket('remove',[...selected].filter(id=>basketIds.has(id))),
+    clear:()=>mutateBasket('clear',[]),view:()=>showBasket(false),select:()=>showBasket(true),refresh:refreshBasket,
+  });
+  basketView({error:basketError,loading:basketLoading,action:basketAction,
+    summary:basketError||(!basketReady?'正在读取候选篮…':`${basketIds.size}/${basketLimit} 个候选 · ${fileSize(bytes)} 逻辑大小${trashed?' · '+trashed+' 项已有清理成功记录，可逐项移出':''}。候选记录仅属于本次扫描。`),
+    canAdd:basketReady&&!busy&&chosen.some(item=>!basketIds.has(item.id)&&!handledTrash.has(item.path)),
+    canView:basketReady&&!saving&&!basketLoading,
+    canSelect:basketReady&&!busy&&selectable,
+    canRemove:basketReady&&!busy&&chosen.some(item=>basketIds.has(item.id)),
+    canClear:basketReady&&!busy&&basketIds.size>0,canRefresh:!saving&&!basketLoading,
+  });
 }
 function acceptBasket(result){basketIds=new Set(result.ids);if($('risk').value==='basket')for(const id of selected)if(!basketIds.has(id))selected.delete(id);basketLimit=result.limit;basketReady=true;basketError='';}
 async function refreshBasket(){
@@ -23,24 +35,20 @@ async function refreshBasket(){
 }
 async function mutateBasket(action,ids){
   if(saving||operating||basketLoading||!basketReady)return;
-  saving=true;basketError='';error();render();
+  saving=true;basketAction=action;basketError='';error();render();
   try{
     acceptBasket(await api('api/basket',{action,ids}));
     $('notice').textContent=action==='add'?'候选已保存，可继续搜索其他文件；原媒体未变化。':action==='remove'?'已移出候选篮；原媒体未变化。':'候选篮已清空；原媒体未变化。';
   }catch(err){basketError=err.message;error('候选篮未更新：'+err.message);}
-  finally{saving=false;render();}
+  finally{saving=false;basketAction='';render();}
 }
 function resetListFilters(){for(const id of filters)$(id).value='';$('view-mode').value='list';page=0;selected.clear();}
 function showBasket(selectAll){
-  if(saving||!basketReady||!data||(selectAll&&operating))return;
+  if(saving||basketLoading||!basketReady||!data||(selectAll&&operating))return;
   resetListFilters();$('risk').value='basket';
-  if(selectAll){selected=new Set(data.items.filter(item=>basketIds.has(item.id)&&!handledTrash.has(item.path)&&mediaIds[item.path]).map(item=>item.id));$('notice').textContent=`已勾选候选篮中 ${selected.size} 个可预览文件，仍须核对并重新预览确认；跳过已清理或缺少操作信息的项。`;}
+  if(selectAll){selected=new Set(data.items.filter(item=>basketIds.has(item.id)&&!handledTrash.has(item.path)&&mediaIds[item.path]===item.id).map(item=>item.id));$('notice').textContent=`已勾选候选篮中 ${selected.size} 个可预览文件，仍须核对并重新预览确认；跳过已清理或缺少操作信息的项。`;}
   render();$('selection').scrollIntoView({block:'start'});
 }
-$('basket-add').onclick=()=>mutateBasket('add',data.items.filter(item=>selected.has(item.id)&&!basketIds.has(item.id)&&!handledTrash.has(item.path)).map(item=>item.id));
-$('basket-remove').onclick=()=>mutateBasket('remove',[...selected].filter(id=>basketIds.has(id)));
-$('basket-clear').onclick=()=>mutateBasket('clear',[]);
-$('basket-view').onclick=()=>showBasket(false);$('basket-select').onclick=()=>showBasket(true);$('basket-refresh').onclick=refreshBasket;
 
 function storageFilter(field,value){
   if(saving||!data)return;
