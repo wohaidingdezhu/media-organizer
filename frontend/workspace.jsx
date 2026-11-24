@@ -1,3 +1,4 @@
+import {mountBasketControls} from './basket-controls.jsx';
 import {mountPictureViewer} from './picture-viewer.jsx';
 import {mountOperationCard} from './operation-card.jsx';
 import {mountExecutionControls} from './execution-controls.jsx';
@@ -52,3 +53,5 @@ globalThis.mountExecutionControls = mountExecutionControls;
 globalThis.mountOperationCard = mountOperationCard;
 
 globalThis.mountPictureViewer = mountPictureViewer;
+
+globalThis.mountBasketControls = mountBasketControls;
