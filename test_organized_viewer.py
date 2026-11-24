@@ -9,7 +9,7 @@ from test_organized_browse import HARNESS
 VIEWER = r'''
 Object.assign(scope,{photos:new Map(),visible:[],data:{items:[]},selected:new Set(['preserved']),handledTrash:new Set(),bundleReviewInfo:null,bundleReviewAnchor:null,bundleReviewRevision:0,pictureSequence:[],pictureIndex:0,pictureCompare:false,pictureCopies:false,folderPreview:null,folderIds:[],filters:[],render(){},openMedia(){throw Error('original-media action called from copy viewer');}});
 vm.runInContext(source.slice(0,source.indexOf('function optionsFor')),scope);
-function button(label){const found=$('picture-body').querySelectorAll('button').find(node=>node.textContent===label);assert(found,'missing button '+label);return found;}
+function button(label){const found=$('picture-body').querySelectorAll('button').find(node=>node.textContent===label||node.getAttribute('data-copy-action')===({'打开整理副本':'open','定位整理副本':'reveal'}[label]||'no-action'));assert(found,'missing button '+label);return found;}
 function key(name,extra={}){let prevented=false;$('picture-viewer').events.keydown({key:name,target:{tagName:'BUTTON'},preventDefault(){prevented=true;},...extra});return prevented;}
 '''
 
@@ -58,13 +58,13 @@ records=[copy('a',['C:\\copies'],'a.jpg'),copy('b',['/copies'],'b.jpg')];
 for(const item of records){scope.mediaIds[item.path]='source-'+item.id;scope.photos.set('source-'+item.id,{preview:'previews/'+item.id+'.png'});}
 await scope.refreshOrganizedResults();cards()[0].children[0].onclick();
 const first=$('picture-body').querySelectorAll('img')[0];first.onerror();first.onerror();
-assert(first.hidden);assert(text($('picture-body')).includes('小预览读取失败'));
+assert($('picture-body').querySelectorAll('img')[0].hidden);assert(text($('picture-body')).includes('小预览读取失败'));
 assert.equal($('picture-body').querySelectorAll('div').filter(node=>node.textContent.includes('小预览读取失败')).length,1);
 assert(!button('打开整理副本').disabled);assert.equal(calls.length,0,'preview failure must not open an original or copy');
 await button('打开整理副本').onclick();assert.equal(calls[0].body.id,'a');assert.equal(calls[0].body.action,'open');
 $('picture-next').onclick();const second=$('picture-body').querySelectorAll('img')[0];
 assert.notEqual(second,first);assert(!second.hidden);assert(!text($('picture-body')).includes('小预览读取失败'));
-second.onerror();assert(second.hidden);assert(text($('picture-body')).includes('可尝试打开整理副本'));
+second.onerror();assert($('picture-body').querySelectorAll('img')[0].hidden);assert(text($('picture-body')).includes('可尝试打开整理副本'));
 })().catch(error=>{console.error(error);process.exitCode=1;});
 ''')
 
@@ -110,7 +110,7 @@ records=[copy('a',['/copies'],'a.jpg')];scope.mediaIds[records[0].path]='source-
 assert.equal(cards()[0].querySelectorAll('img').length,0);
 cards()[0].children[0].onclick();assert($('picture-viewer').open);
 assert.equal($('picture-body').querySelectorAll('img').length,0);
-$('picture-error').textContent='当前副本需要核对';$('picture-error').hidden=false;
+scope.setPictureError('当前副本需要核对');
 Object.assign(scope,{optionsFor(){},checkDisks(){},refreshOperations(){},refreshBasket(){}});
 scope.api=async route=>route==='api/photos'?{items:[{id:'source-id',preview:'previews/late.png',month:'2021/05'}]}:{message:'generated comparison',items:[]};
 vm.runInContext(source.slice(source.indexOf('async function loadExtras'),source.indexOf('const oldBuildFolders')),scope);

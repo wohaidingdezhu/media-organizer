@@ -11,6 +11,7 @@ const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
 const root=process.argv[1];
 const {loadView,mountTestView,mountTestScanStatus,mountTestExecutionPreview,mountTestExecutionControls}=require(root+'/frontend/view-test-dom.cjs');
 const {ReportDialog}=loadView('report-dialog.jsx');
+const {PictureViewer}=loadView('picture-viewer.jsx');
 const {DashboardFolderList}=loadView('dashboard-folders.jsx');
 class E{
  constructor(tag='div',text=''){this.tagName=tag.toUpperCase();this.textContent=text;this.children=[];this.attrs={};this.value='';this.hidden=false;this.open=false;this.style={};this.events={};this.classList={values:new Set(),contains(n){return this.values.has(n);},add(n){this.values.add(n);},toggle(n,v){if(v)this.values.add(n);else this.values.delete(n);}};}
@@ -32,6 +33,14 @@ vm.createContext(scope);
 const management=fs.readFileSync(root+'/management.js','utf8');
 vm.runInContext(management.slice(0,management.indexOf('function bundleReviewIds')),scope);
 vm.runInContext(management.slice(management.indexOf('let executionPage='),management.indexOf("$('copy-files').onclick")),scope);
+function trashButton(item){
+ const host=new E(),state={copies:false,compare:false,index:0,total:1,error:'',busy:scope.saving||scope.operating,
+   items:[{key:item.id,item,preview:'',size:'12 B',month:'日期未提供',canTrash:scope.mediaAvailable&&scope.mediaIds[item.path]===item.id&&!scope.handledTrash.has(item.path)}]};
+ mountTestView(host,tag=>new E(tag),()=>PictureViewer({state,actions:{trash:scope.previewTrashItem}})).render();
+ const walk=node=>[node,...node.children.flatMap(walk)];
+ return walk(host).find(node=>node.getAttribute('data-trash-id')===item.id);
+}
+
 '''
 
 
@@ -46,8 +55,8 @@ class DirectCleanupTests(unittest.TestCase):
     def test_single_delete_opens_only_clicked_preview_preserves_batch_and_requires_confirmation(self):
         self.node(r'''
 (async()=>{
- const host=new E();scope.appendTrashButton(a,host);assert(!host.children[0].disabled);
- await host.children[0].onclick();assert.equal(requests.length,1);assert.equal(requests[0].route,'api/operations/preview');
+ const button=trashButton(a);assert(!button.disabled);
+ await button.onclick();assert.equal(requests.length,1);assert.equal(requests[0].route,'api/operations/preview');
  assert.deepEqual(Array.from(requests[0].body.ids),[a.id]);assert.equal(requests[0].body.mode,'trash');
  assert.deepEqual(Array.from(scope.selected),[b.id]);assert($('execution').open);assert.equal($('execution-confirm').checked,false);assert($('execution-start').disabled);
  assert($('execution-page').textContent.includes('待清理'));assert(!$('execution-help').textContent.includes('复制'));
@@ -61,10 +70,10 @@ class DirectCleanupTests(unittest.TestCase):
         self.node(r'''
 (async()=>{
  failure=true;$('picture-viewer').open=true;await scope.previewTrashItem(a);
- assert(!$('execution').open);assert(!$('picture-error').hidden);assert($('picture-error').textContent.includes('至少保留一份'));
+ assert(!$('execution').open);assert(vm.runInContext('pictureError',scope).includes('至少保留一份'));
  assert.deepEqual(Array.from(scope.selected),[b.id]);assert.equal(requests.length,1);
  scope.mediaAvailable=false;await scope.previewTrashItem(b);assert.equal(requests.length,1);
- const host=new E();scope.appendTrashButton(b,host);assert(host.children[0].disabled);
+ assert(trashButton(b).disabled);
 })().catch(e=>{console.error(e);process.exitCode=1;});
 ''')
 

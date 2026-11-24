@@ -1,3 +1,4 @@
+import {mountPictureViewer} from './picture-viewer.jsx';
 import {mountOperationCard} from './operation-card.jsx';
 import {mountExecutionControls} from './execution-controls.jsx';
 import {mountOrganizedCopies} from './organized-cards.jsx';
@@ -49,3 +50,5 @@ globalThis.mountOrganizedCopies = mountOrganizedCopies;
 globalThis.mountExecutionControls = mountExecutionControls;
 
 globalThis.mountOperationCard = mountOperationCard;
+
+globalThis.mountPictureViewer = mountPictureViewer;

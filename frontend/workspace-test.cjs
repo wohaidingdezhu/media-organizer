@@ -33,10 +33,10 @@ function fixture(html, route, initialJobs = []) {
   const console = new VirtualConsole();
   console.on('jsdomError', error => errors.push(error.message));
   const calls = [];
-  const basket = new Set(), resultRequests = [], copyRequests = [], remainingRequests = [];
+  const basket = new Set(), resultRequests = [], copyRequests = [], remainingRequests = [], mediaRequests = [];
   let delayResults = false;
   let dupeLoads = 0;
-  let completePreview, completeStop, completeHistory, failStart;
+  let completePreview, rejectPreview, completeStop, completeHistory, failStart;
   let operationJobs = initialJobs, delayHistory = false;
   const history = () => ({jobs:operationJobs, record_count:operationJobs.length,
     warnings:[], handled:{copy:[],trash:[]}});
@@ -87,6 +87,10 @@ function fixture(html, route, initialJobs = []) {
                 resolve(reply({stopped:true}));
               };
             });
+          case 'api/media/action':
+            return new Promise((resolve, reject) => mediaRequests.push({
+              payload, resolve:() => resolve(reply({message:'已请求系统打开'})), reject,
+            }));
           case 'api/organized-results/action':
             return new Promise((resolve, reject) => copyRequests.push({
               payload, resolve:() => resolve(reply({opened:true})), reject,
@@ -109,7 +113,8 @@ function fixture(html, route, initialJobs = []) {
             return reply({ids: [...basket], limit: 200});
           case 'api/operations/preview':
           case 'api/operations/quick-preview':
-            return new Promise(resolve => {
+            return new Promise((resolve, reject) => {
+              rejectPreview = reject;
               completePreview = value => resolve(reply(value || {mode: 'trash', token: 'test-only', bytes: payload.ids.length * 12,
                 items: items.filter(item => payload.ids.includes(item.id)), skipped: []}));
             });
@@ -119,7 +124,7 @@ function fixture(html, route, initialJobs = []) {
       };
     },
   });
-  return {dom, errors, calls, resultRequests, copyRequests, remainingRequests, deferResults:() => {delayResults = true;}, finish: preview => completePreview(preview),
+  return {dom, errors, calls, resultRequests, copyRequests, remainingRequests, mediaRequests, failPreview:message=>rejectPreview(Error(message)), deferResults:() => {delayResults = true;}, finish: preview => completePreview(preview),
     failStart:() => failStart(), stop:succeeds => completeStop(succeeds), updateJobs:jobs => {operationJobs = jobs;},
     finishHistory:() => {assert(completeHistory); completeHistory(); completeHistory = null;},
     waitingHistory:() => Boolean(completeHistory)};
@@ -574,6 +579,65 @@ async function verifyOperationProgress() {
   }
 }
 
+async function verifyPhotoViewerActions() {
+  const ui = fixture(photos, 'photos.html');
+  const {dom, mediaRequests, calls, errors} = ui, {document} = dom.window;
+  const node = id => get(document, id);
+  const open = () => [...node('picture-body').querySelectorAll('button')].find(button => !button.hasAttribute('data-trash-id'));
+  const trash = () => node('picture-body').querySelector('[data-trash-id]');
+  try {
+    await until(() => document.querySelector('#photo-wall .photo-card .photo-preview-button'), 'photo cards ready');
+    const card = document.querySelector('#photo-wall .photo-card');
+    card.querySelector('input').click();
+    card.querySelector('.photo-preview-button').click();
+    const image = node('picture-body').querySelector('img'), first = open();
+    first.click(); first.click();
+    assert.equal(mediaRequests.length, 1);
+    assert(first.disabled && first.textContent === '正在打开…');
+    const next = node('picture-next');
+    next.focus();
+    dom.window.eval('syncBrowseControls()');
+    assert.equal(document.activeElement, next, 'refresh retains keyboard navigation focus');
+    assert.equal(open(), first, 'refresh retains the original-file action');
+    assert.equal(node('picture-body').querySelector('img'), image, 'refresh retains the loaded photo');
+    assert(open().disabled);
+    node('picture-next').click();
+    assert(node('picture-body').textContent.includes(items[1].path));
+    mediaRequests[0].reject(Error('第一张照片已移走'));
+    await pause(20);
+    assert(node('picture-error').hidden, 'late original-file error cannot pollute another photo');
+    node('picture-previous').click();
+    open().click();
+    assert.equal(mediaRequests.length, 2);
+    node('picture-close').click();
+    card.querySelector('.photo-preview-button').click();
+    assert(open().disabled, 'reopening cannot duplicate the same pending request');
+    mediaRequests[1].reject(Error('关闭前的打开错误'));
+    await until(() => !open().disabled, 'failed original open allows retry');
+    assert(node('picture-error').hidden, 'closed session error cannot pollute reopened photo');
+    open().click();
+    mediaRequests[2].resolve();
+    await until(() => !open().disabled, 'original open completes');
+    assert.deepEqual(mediaRequests[2].payload, {id:items[0].id, action:'open'});
+
+    trash().click(); trash().click();
+    assert.equal(calls.filter(call => call.path === 'api/operations/preview').length, 1);
+    ui.failPreview('至少保留一份');
+    await until(() => !node('picture-error').hidden, 'delete refusal is visible inside the viewer');
+    assert(node('picture-error').textContent.includes('至少保留一份'));
+    assert.deepEqual([...dom.window.eval('selected')], [items[0].id]);
+    trash().click();
+    node('picture-next').click();
+    ui.failPreview('上一张照片的核对失败');
+    await pause(20);
+    assert(node('picture-error').hidden, 'late delete refusal cannot pollute another photo');
+    assert.equal(calls.filter(call => call.path === 'api/operations/start').length, 0);
+    assert.deepEqual(errors, []);
+  } finally {
+    dom.window.close();
+  }
+}
+
 async function verifyPhotoViewerFallback() {
   const ui = fixture(photos, 'photos.html');
   const {dom, calls, errors} = ui, {document} = dom.window;
@@ -677,7 +741,7 @@ async function verifyOperationRecovery() {
   }
 }
 
-(async () => { await verifyDuplicates(); await verifyWorkspace(); await verifyOperationProgress(); await verifyOperationRecovery(); await verifyPhotoViewerFallback(); await verifyLargeConfirmation(); await verifyExternalBatchConfirmation(); await verifyPendingSubmission(); await verifyResultNavigation(); await verifyOrganizedCopyCards(); })().catch(error => {
+(async () => { await verifyDuplicates(); await verifyWorkspace(); await verifyOperationProgress(); await verifyOperationRecovery(); await verifyPhotoViewerFallback(); await verifyPhotoViewerActions(); await verifyLargeConfirmation(); await verifyExternalBatchConfirmation(); await verifyPendingSubmission(); await verifyResultNavigation(); await verifyOrganizedCopyCards(); })().catch(error => {
   console.error(error);
   process.exitCode = 1;
 });
