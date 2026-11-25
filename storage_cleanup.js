@@ -42,7 +42,7 @@ async function mutateBasket(action,ids){
   }catch(err){basketError=err.message;error('候选篮未更新：'+err.message);}
   finally{saving=false;basketAction='';render();}
 }
-function resetListFilters(){for(const id of filters)$(id).value='';$('view-mode').value='list';page=0;selected.clear();}
+function resetListFilters(){wallUsers.reset();folderBrowser.reset();for(const id of filters)$(id).value='';$('view-mode').value='list';page=0;selected.clear();}
 function showBasket(selectAll){
   if(saving||basketLoading||!basketReady||!data||(selectAll&&operating))return;
   resetListFilters();$('risk').value='basket';
