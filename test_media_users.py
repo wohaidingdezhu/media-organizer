@@ -372,6 +372,21 @@ class MediaUserTests(unittest.TestCase):
         self.assertIn('movieUsers.matches',page)
         self.assertNotIn('@@WALL_USERS@@',page)
         self.node("new(require('vm').Script)(JSON.parse(require('fs').readFileSync(0,'utf8')));", page.split('</script><script>')[1].split('</script>')[0])
+        self.node(r"""
+const assert=require('assert/strict'),{JSDOM,VirtualConsole}=require('jsdom');
+const html=JSON.parse(require('fs').readFileSync(0,'utf8')),errors=[];
+const log=new VirtualConsole();log.on('jsdomError',error=>errors.push(error.message));
+const dom=new JSDOM(html,{url:'http://127.0.0.1:43210/generated/library.html',runScripts:'dangerously',virtualConsole:log,beforeParse(window){
+ window.fetch=async()=>({ok:true,json:async()=>({users:[],items:[],groups:{},ids_by_path:{},available:true,revision:'r'})});
+}});
+setTimeout(()=>{try{
+ const host=dom.window.document.getElementById('movie-user-controls');
+ assert(host.querySelector('[aria-label="按用户名筛选"]'));
+ assert([...host.querySelectorAll('button')].some(button=>button.textContent==='清空影片勾选'));
+ assert.deepEqual(errors,[]);
+}finally{dom.window.close();}},30);
+""",page)
+
 
     def test_windows_unc_and_posix_reports_use_shared_group_names(self):
         for path in ('C:\\photos\\旅行.png', '\\\\server\\share\\旅行.png', '/photos/旅行.png'):

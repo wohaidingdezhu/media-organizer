@@ -33,8 +33,8 @@ function fixture(html, route, initialJobs = []) {
   const console = new VirtualConsole();
   console.on('jsdomError', error => errors.push(error.message));
   const calls = [];
-  const basket = new Set(), resultRequests = [], copyRequests = [], remainingRequests = [], mediaRequests = [], basketRequests = [];
-  let delayResults = false, delayBasket = false;
+  const basket = new Set(), resultRequests = [], copyRequests = [], remainingRequests = [], mediaRequests = [], basketRequests = [], userRequests = [];
+  let delayResults = false, delayBasket = false, delayUsers = false, userSnapshot = {items:[],users:[]};
   let dupeLoads = 0;
   let completePreview, rejectPreview, completeStop, completeHistory, failStart;
   let operationJobs = initialJobs, delayHistory = false;
@@ -66,7 +66,8 @@ function fixture(html, route, initialJobs = []) {
           case 'api/photos':
             return reply({items: items.map(item => ({...item, month: '2026/11', preview: 'previews/sample.png'}))});
           case 'api/users':
-            return reply({items: [], users: []});
+            if(delayUsers)return new Promise((resolve,reject)=>userRequests.push({payload,resolve:value=>resolve(reply(value)),reject}));
+            return reply(userSnapshot);
           case 'api/changes':
             return reply({message: '没有前次扫描', items: []});
           case 'api/roots':
@@ -125,7 +126,7 @@ function fixture(html, route, initialJobs = []) {
       };
     },
   });
-  return {dom, errors, calls, basketRequests, deferBasket:()=>{delayBasket=true;}, resultRequests, copyRequests, remainingRequests, mediaRequests, failPreview:message=>rejectPreview(Error(message)), deferResults:() => {delayResults = true;}, finish: preview => completePreview(preview),
+  return {dom, errors, calls, userRequests, setUsers:value=>{userSnapshot=value;}, deferUsers:()=>{delayUsers=true;}, basketRequests, deferBasket:()=>{delayBasket=true;}, resultRequests, copyRequests, remainingRequests, mediaRequests, failPreview:message=>rejectPreview(Error(message)), deferResults:() => {delayResults = true;}, finish: preview => completePreview(preview),
     failStart:() => failStart(), stop:succeeds => completeStop(succeeds), updateJobs:jobs => {operationJobs = jobs;},
     finishHistory:() => {assert(completeHistory); completeHistory(); completeHistory = null;},
     waitingHistory:() => Boolean(completeHistory)};
@@ -580,6 +581,46 @@ async function verifyOperationProgress() {
   }
 }
 
+async function verifyWallUserControls() {
+  const ui=fixture(photos,'photos.html');
+  const {dom,errors,userRequests}=ui,{document}=dom.window;
+  const host=()=>get(document,'wall-user-controls');
+  const select=label=>host().querySelector(`[aria-label="${label}"]`);
+  const button=prefix=>[...host().querySelectorAll('button')].find(node=>node.textContent.startsWith(prefix));
+  const snapshot={revision:'r',users:[{id:'u',name:'张三'}],items:items.map((item,index)=>({
+    id:'photo:'+index,user_id:'',username:'未分配',files:[{path:item.path}]}))};
+  try {
+    await until(()=>button('刷新用户名')&&!button('刷新用户名').disabled,'username toolbar ready');
+    ui.setUsers(snapshot);await dom.window.eval('wallUsers.load()');
+    dom.window.eval('selected=new Set(data.items.slice(0,200).map(item=>item.id));render()');
+    const assign=select('选择归属用户名'),filter=select('按用户名筛选');
+    change(dom.window,assign,'u');filter.focus();dom.window.eval('wallUsers.update()');
+    assert.equal(document.activeElement,filter);assert.equal(assign.value,'u');
+    ui.deferUsers();const save=button('保存勾选项归属');save.click();save.click();
+    assert.equal(userRequests.length,1);assert.equal(userRequests[0].payload.ids.length,200);
+    assert.equal(userRequests[0].payload.user_id,'u');assert.equal(userRequests[0].payload.revision,'r');
+    assert(save.disabled&&save.textContent==='正在保存归属…');
+    dom.window.eval('wallUsers.update()');assert.equal(button('正在保存归属'),save);
+    userRequests[0].reject(Error('归属版本冲突'));
+    await until(()=>!save.disabled,'failed save allows recovery');
+    assert(host().textContent.includes('归属版本冲突'));assert.equal(dom.window.eval('selected.size'),200);
+    button('刷新用户名').click();button('正在读取用户名').click();assert.equal(userRequests.length,2);
+    userRequests[1].resolve({...snapshot,revision:'r2'});
+    await until(()=>!save.disabled,'refresh recovers current revision');assert.equal(assign.value,'u');
+    save.click();assert.equal(userRequests[2].payload.revision,'r2');
+    userRequests[2].resolve({...snapshot,revision:'r3',items:snapshot.items.map((unit,index)=>index<200?{...unit,user_id:'u',username:'张三'}:unit)});
+    await until(()=>!save.disabled,'assignment completes');
+    assert(host().textContent.includes('已保存 200 项归属'));
+    dom.window.eval('selected.add(data.items[200].id);render()');assert(save.disabled&&save.textContent.includes('201'));
+    dom.window.eval('selected=new Set([data.items[0].id]);render()');
+    button('刷新用户名').click();
+    userRequests[3].resolve({...snapshot,revision:'r4',users:[]});
+    await until(()=>button('刷新用户名')&&!button('刷新用户名').disabled,'removed user refresh');
+    assert.equal(assign.value,'','removed owner cannot remain selected');
+    assert.deepEqual(errors,[]);
+  } finally {dom.window.close();}
+}
+
 async function verifyBasketControls() {
   const ui = fixture(photos, 'photos.html');
   const {dom, basketRequests, calls, errors} = ui, {document} = dom.window;
@@ -800,7 +841,7 @@ async function verifyOperationRecovery() {
   }
 }
 
-(async () => { await verifyDuplicates(); await verifyWorkspace(); await verifyOperationProgress(); await verifyOperationRecovery(); await verifyPhotoViewerFallback(); await verifyPhotoViewerActions(); await verifyBasketControls(); await verifyLargeConfirmation(); await verifyExternalBatchConfirmation(); await verifyPendingSubmission(); await verifyResultNavigation(); await verifyOrganizedCopyCards(); })().catch(error => {
+(async () => { await verifyDuplicates(); await verifyWorkspace(); await verifyOperationProgress(); await verifyOperationRecovery(); await verifyPhotoViewerFallback(); await verifyPhotoViewerActions(); await verifyBasketControls(); await verifyWallUserControls(); await verifyLargeConfirmation(); await verifyExternalBatchConfirmation(); await verifyPendingSubmission(); await verifyResultNavigation(); await verifyOrganizedCopyCards(); })().catch(error => {
   console.error(error);
   process.exitCode = 1;
 });
