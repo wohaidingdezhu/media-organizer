@@ -1236,7 +1236,7 @@ def render_video_library(data):
     <section><h2>影片海报墙</h2><p class="muted">按作品和版本归组，分段按段号排列；没有编号时默认保留原目录区别。可用“修正作品、版本和分段”拆分或合并。封面优先使用同目录的同名或编号图片，其次尝试从视频截帧；无法生成时显示占位图。分组只靠文件名，不表示内容相同。每页 50 组。</p><p class="muted" id="tag-help">标签可筛选；通过“媒体整理助手.app”或“打开资料库.command”打开本地服务后可以编辑并跨扫描保留。</p><div class="controls"><input id="search" type="search" aria-label="搜索影片、路径、标签和附属文件" placeholder="搜索编号、影片名、路径、标签、字幕…"><select id="filter" aria-label="筛选影片"><option value="all">全部影片</option><option value="unwatched">未标记已观看</option><option value="watched">已观看</option><option value="favorite">收藏</option><option value="review">有视频问题或精确重复</option><option value="duplicates">精确重复涉及视频</option><option value="sidecars">有附属文件</option><option value="posters">有封面</option><option value="missing-posters">缺少封面</option></select><select id="tag-filter" aria-label="按标签筛选"><option value="">全部标签</option></select><select id="movie-folder" aria-label="按影片原文件夹筛选" style="max-width:min(480px,100%)"><option value="">全部原文件夹</option></select><select id="movie-rating" aria-label="按个人评分筛选"><option value="">全部评分</option><option value="unrated">未评分</option><option value="1">1 星及以上</option><option value="2">2 星及以上</option><option value="3">3 星及以上</option><option value="4">4 星及以上</option><option value="5">5 星</option></select><select id="movie-sort" aria-label="影片排序"><option value="title">名称顺序</option><option value="size">整组大小从大到小</option><option value="newest">文件修改时间从新到旧</option><option value="oldest">文件修改时间从旧到新</option><option value="rating">个人评分从高到低</option></select><button id="movie-reset" type="button">重置筛选</button></div><p class="muted">原文件夹匹配任一文件时仍展示完整影片分组。大小为整组视频逻辑总大小；时间取组内最新文件修改时间，不代表上映或入库时间。待核对清单仅按搜索词筛选。</p><div id="movie-user-controls" class="controls"></div><div id="groups" class="wall"></div><div class="pager"><button id="previous" type="button">上一页</button><span id="page-label"></span><button id="next" type="button">下一页</button></div></section>
     <section><h2>待核对清单</h2><p class="muted">包含本次扫描发现的视频读取或文件头问题、精确重复、未唯一关联的字幕/NFO，以及同名文件夹候选。未启用文件头检查时，不会据此判断视频能否播放。下方显示与搜索词匹配的前 200 条；完整数据见 <a href="library_issues.csv">问题 CSV</a>。</p><div id="issues"></div></section>
     <p class="muted">播放使用系统默认播放器；分段或多个版本请展开文件列表选择。已观看与收藏需手动标记，播放不会自动标为已观看。本页面使用本次扫描结果。其他跳过项与照片问题请查看<a href="report.html#issues">总报告</a>；完整原始数据见 <a href="report.json">JSON</a>。</p></main>
-    <script id="library-data" type="application/json">@@DATA@@</script><script>
+    <script data-media-frontend>@@FRONTEND@@</script><script id="library-data" type="application/json">@@DATA@@</script><script>
     const library = JSON.parse(document.getElementById('library-data').textContent);
     const search = document.getElementById('search');
     const filter = document.getElementById('filter');
@@ -1395,12 +1395,12 @@ def render_video_library(data):
         document.getElementById('tag-help').textContent = '编辑标签会立即保存到本机 reports/library-tags.json；重新扫描后仍可按标签查找。'; })
       .catch(() => { document.getElementById('tag-help').textContent = '标签服务暂不可用；当前仅显示扫描时保存的标签。'; });
     </script></body></html>'''
-    replacements = {"CREATED": html.escape(data["created_at"], quote=True), "POSTER_TOTAL": str(library.get("poster_count", 0)), "VIDEO_FILES": str(library["video_files"]),
+    replacements = {"FRONTEND": (BASE / "issue_list_bundle.js").read_text(encoding="utf-8"), "CREATED": html.escape(data["created_at"], quote=True), "POSTER_TOTAL": str(library.get("poster_count", 0)), "VIDEO_FILES": str(library["video_files"]),
                     "DUPLICATE_FILES": str(library["duplicate_files"]), "ISSUE_TOTAL": str(len(library["issues"])), "DATA": payload,
                     "DETAILS": (BASE / "library_details.js").read_text(encoding="utf-8"),
                     "BROWSE": (BASE / "library_browse.js").read_text(encoding="utf-8"),
                     "WALL_USERS": (BASE / "wall_users.js").read_text(encoding="utf-8")}
-    return re.sub(r"@@(CREATED|POSTER_TOTAL|VIDEO_FILES|DUPLICATE_FILES|ISSUE_TOTAL|DATA|DETAILS|BROWSE|WALL_USERS)@@", lambda match: replacements[match.group(1)], template)
+    return re.sub(r"@@(CREATED|POSTER_TOTAL|VIDEO_FILES|DUPLICATE_FILES|ISSUE_TOTAL|DATA|DETAILS|BROWSE|WALL_USERS|FRONTEND)@@", lambda match: replacements[match.group(1)], template)
 
 
 def write_reports(directory, data):
