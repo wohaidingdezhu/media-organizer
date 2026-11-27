@@ -44,6 +44,9 @@ macOS 安装 `requirements.txt` 后运行 `./.venv/bin/python -m unittest -v`，
 Windows 先运行 `安装Windows依赖.bat`，再运行 `.\.venv\Scripts\python.exe -X utf8 -m unittest -v`。
 完整矩阵在 PR 提交更新与 main 推送时执行；开发分支的单独 push 不再重复启动同一套检查。合并前核实 PR，合并后还须核对 main 推送的实际运行结果，并明确区分两者，不能用 PR 成功代替主分支结果。
 
+CI 使用 setup-python/setup-node 的 pip/npm 下载缓存，仍执行依赖安装、`npm ci` 和前端重建；不缓存虚拟环境、`node_modules`、测试结果或安装包。依赖清单变化会更新缓存键。完整六组平台/Python 矩阵和三组桌面检查保持不变。
+`python -X utf8 ci_tests.py --workers 2` 使用标准 unittest 发现全部用例，再按整个模块分配给最多两个独立进程，避免同一模块的 fixture 被拆开；重复发现的用例也保留。所有进程结束后才汇总，测试失败、导入失败、进程异常或未发现测试都会失败；平台跳过原因继续逐项输出。可用 `--workers 1` 对照同一组测试，原来的 `python -m unittest -v` 仍可直接使用。并行仅用于生成样例测试，不改变应用的扫描或文件操作并发。
+
 后台文件检查的 `stop()` 是非阻塞停止请求。临时媒体测试须在清理目录前等待检查结束，超时应明确失败，不能忽略 Windows 文件占用错误或跳过相关用例。
 
 GitHub Actions 会在两端自动安装同一依赖并编译 Mac 降级后端。保持一套业务与页面代码；不得增加两份扫描或资料库实现来适配平台。缺少符号链接权限可以明确跳过符号链接样例，Windows 目录联接测试仍应运行。
