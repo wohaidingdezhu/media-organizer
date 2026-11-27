@@ -19,9 +19,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-desktop.txt
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
       - name: Install frontend dependencies and verify the bundled UI
         run: |
           npm ci
@@ -35,7 +41,7 @@ jobs:
           swiftc native/image_probe.swift -o native/image_probe
           swiftc native/video_cover.swift -o native/video_cover
       - name: Test with generated sample files
-        run: python -X utf8 -m unittest -v
+        run: python -X utf8 ci_tests.py --workers 2
   package:
     timeout-minutes: 25
     name: Desktop package (${{ matrix.os }})
@@ -51,6 +57,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-desktop.txt
       - name: Install declared packaging and shared media dependencies
         run: python -m pip install -r requirements-desktop.txt
       - name: Build apps and exercise bundled backend with generated media
