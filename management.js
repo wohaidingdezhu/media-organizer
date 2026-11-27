@@ -154,7 +154,7 @@ $('batch-folder-input').oninput=()=>{clearFolderPreview();folderError();};
 $('batch-folder-preview').onclick=async()=>{if(saving||operating)return;clearFolderPreview();folderError();saving=true;render();try{folderPreview=await request({action:'folder-preview',ids:folderIds,folder:$('batch-folder-input').value});$('batch-folder-summary').textContent=`${folderPreview.items.length} 项 · ${folderPreview.changed_count} 项位置变化 · ${folderPreview.reset_count} 项需重新核对；尚未保存`;
   for(const item of folderPreview.items){const row=make('li');row.append(make('div','path',item.path),make('div','path',item.before+' → '+item.after),make('p','minor',item.changed?'位置变化，保存后为待核对':'位置未变，保留当前状态'));$('batch-folder-items').append(row);}
 }catch(err){folderError(err.message);}finally{saving=false;render();}};
-$('batch-folder-save').onclick=async()=>{if(saving||operating||!folderPreview||!folderPreview.changed_count)return;const preview=folderPreview;saving=true;folderError();render();try{data=await request({action:'folder-apply',ids:folderIds,folder:preview.folder,revision:preview.revision});selected=new Set(folderIds);buildFolders();for(const id of filters)$(id).value='';$('risk').value='selected';if($('view-mode').value==='wall')$('kind').value='照片';page=0;$('batch-folder-dialog').close();$('notice').textContent=`已保存 ${preview.changed_count} 项分类调整。请核对并纳入计划，再预览复制；原件不变。`;}
+$('batch-folder-save').onclick=async()=>{if(saving||operating||!folderPreview||!folderPreview.changed_count)return;const preview=folderPreview;saving=true;folderError();render();try{data=await request({action:'folder-apply',ids:folderIds,folder:preview.folder,revision:preview.revision});selected=new Set(folderIds);buildFolders();wallUsers.reset();folderBrowser.reset();for(const id of filters)$(id).value='';$('risk').value='selected';if($('view-mode').value==='wall')$('kind').value='照片';page=0;$('batch-folder-dialog').close();$('notice').textContent=`已保存 ${preview.changed_count} 项分类调整。请核对并纳入计划，再预览复制；原件不变。`;}
 catch(err){clearFolderPreview();folderError(err.message+'；请取消后读取最新进度，再重新预览。');}finally{saving=false;render();}};
 $('batch-folder-cancel').onclick=()=>{$('batch-folder-dialog').close();clearFolderPreview();};
 $('batch-folder-dialog').addEventListener('cancel',event=>{if(saving)event.preventDefault();});
@@ -319,6 +319,7 @@ async function reviewRemaining(id){
   try{
     const advice=await api('api/operations/'+id+'/remaining');
     if(operationViews.get(id)!==view||!view.canReview||operating)return;
+    wallUsers.reset();folderBrowser.reset();
     selected=new Set(advice.ids);
     showSelection=advice.ids.length>0;
     for(const filter of filters)$(filter).value='';

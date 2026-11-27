@@ -62,6 +62,9 @@ function fixture(html, route, initialJobs = []) {
           case 'api/media':
             return reply({available: true, ids_by_path: Object.fromEntries(items.map(item => [item.path, item.id]))});
           case 'api/organization':
+            if(payload?.action==='folder-preview')return reply({folder:payload.folder,revision:'r',
+              changed_count:payload.ids.length,reset_count:payload.ids.length,
+              items:items.filter(item=>payload.ids.includes(item.id)).map(item=>({path:item.path,before:item.suggested_path,after:payload.folder+'/'+item.name,changed:true}))});
             return reply({items, counts: {total: 201, pending: 201, include: 0, hold: 0}, folder_count: 1, review: {blocked: 0}});
           case 'api/photos':
             return reply({items: items.map(item => ({...item, month: '2026/11', preview: 'previews/sample.png'}))});
@@ -771,6 +774,30 @@ async function verifyPhotoViewerFallback() {
   }
 }
 
+async function verifyBatchFolderReviewContext() {
+  const ui=fixture(photos,'photos.html');const {dom,calls,errors}=ui,{document}=dom.window;
+  const node=id=>get(document,id);
+  try {
+    await until(()=>dom.window.eval('!!data&&!saving&&!operating')&&document.querySelector('[aria-label="按用户名筛选"]'),'batch controls ready');
+    dom.window.eval('selected=new Set(data.items.slice(0,200).map(item=>item.id));render()');
+    change(dom.window,document.querySelector('[aria-label="按用户名筛选"]'),'unassigned');
+    assert.equal(dom.window.eval('visible.length'),0);
+    node('batch-folder').click();
+    assert(node('batch-folder-dialog').open);
+    change(dom.window,node('batch-folder-input'),'照片/重新核对');
+    node('batch-folder-preview').click();
+    await until(()=>!node('batch-folder-save').disabled,'200-file directory preview ready');
+    node('batch-folder-save').click();
+    await until(()=>!node('batch-folder-dialog').open,'directory plan saved');
+    assert.equal(dom.window.eval('selected.size'),200);
+    assert.equal(dom.window.eval('visible.length'),200,'saved plan stays visible across owner filters');
+    assert.equal(node('risk').value,'selected');
+    assert.equal(calls.filter(call=>call.payload?.action==='folder-apply').length,1);
+    assert.equal(calls.filter(call=>call.path==='api/operations/start').length,0);
+    assert.deepEqual(errors,[]);
+  } finally {dom.window.close();}
+}
+
 async function verifyOperationRecovery() {
   const planned = items.map(item => ({...item, target:item.path + '.copy'}));
   const job = {id:'c'.repeat(24), mode:'copy', total:201, status:'cancelled', planned_items:planned,
@@ -800,12 +827,16 @@ async function verifyOperationRecovery() {
     await until(() => !recover.disabled, 'failed recovery allows retry');
     assert(document.querySelector('#operations [role="status"]').textContent.includes('模拟核对连接中断'));
 
+    const owner=document.querySelector('[aria-label="按用户名筛选"]');
+    change(dom.window,owner,'unassigned');
+    assert.equal(dom.window.eval('visible.length'),0,'old owner filter restricts recovery list');
     recover.click();
     const skipped = Array.from({length:201}, (_, index) => ({path:'/generated/跳过-' + index + '.mp4', reason:'请核对磁盘状态'}));
     const advice = {ids:items.slice(1,3).map(item => item.id), skipped, message:'已完成项保留。'};
     remainingRequests[1].resolve(advice);
     await until(() => !recover.disabled, 'recovery result returns');
     assert.equal(selectedIds(), JSON.stringify(advice.ids));
+    assert.equal(dom.window.eval('visible.length'),2,'recovered picks are visible across owner filters');
     const result = document.querySelector('#operations [role="status"]');
     assert(result.textContent.includes('已勾选 2 项，跳过 201 项'));
     assert.equal(result.querySelectorAll('p.path').length, 50, 'skip reasons render one page');
@@ -841,7 +872,7 @@ async function verifyOperationRecovery() {
   }
 }
 
-(async () => { await verifyDuplicates(); await verifyWorkspace(); await verifyOperationProgress(); await verifyOperationRecovery(); await verifyPhotoViewerFallback(); await verifyPhotoViewerActions(); await verifyBasketControls(); await verifyWallUserControls(); await verifyLargeConfirmation(); await verifyExternalBatchConfirmation(); await verifyPendingSubmission(); await verifyResultNavigation(); await verifyOrganizedCopyCards(); })().catch(error => {
+(async () => { await verifyDuplicates(); await verifyWorkspace(); await verifyOperationProgress(); await verifyOperationRecovery(); await verifyBatchFolderReviewContext(); await verifyPhotoViewerFallback(); await verifyPhotoViewerActions(); await verifyBasketControls(); await verifyWallUserControls(); await verifyLargeConfirmation(); await verifyExternalBatchConfirmation(); await verifyPendingSubmission(); await verifyResultNavigation(); await verifyOrganizedCopyCards(); })().catch(error => {
   console.error(error);
   process.exitCode = 1;
 });
