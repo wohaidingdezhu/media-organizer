@@ -13,7 +13,7 @@ import file_operations
 import library_server
 from media_actions import MediaActions, file_signature, media_id
 from test_library_server import MemoryServer, request
-from test_support import make_symlink
+from test_support import make_symlink, stop_file_checks
 
 
 class MissingRecoveryTests(unittest.TestCase):
@@ -45,7 +45,47 @@ class MissingRecoveryTests(unittest.TestCase):
             self.server, url = library_server.create_library_server(self.report, self.output)
         self.prefix = urlsplit(url).path.removesuffix('library.html')
         self.origin = f'http://127.0.0.1:{self.server.server_port}'
-        self.addCleanup(self.server.missing_monitor.stop)
+        self.addCleanup(stop_file_checks, self.server.missing_monitor)
+
+    def test_fixture_cleanup_waits_for_active_file_check_before_removing_source(self):
+        monitor = self.server.missing_monitor
+        cleanup, args, kwargs = self._cleanups[-1]
+        entered, release = threading.Event(), threading.Event()
+        stopping, finished = threading.Event(), threading.Event()
+        failures = []
+        original_stop = monitor.stop
+
+        def blocked(_identifier):
+            entered.set()
+            release.wait(3)
+            return 'available'
+
+        def signal_stop():
+            original_stop()
+            stopping.set()
+
+        def close_fixture_monitor():
+            try:
+                cleanup(*args, **kwargs)
+            except BaseException as error:
+                failures.append(error)
+            finally:
+                finished.set()
+
+        with mock.patch.object(monitor.media, 'availability', side_effect=blocked), mock.patch.object(monitor, 'stop', side_effect=signal_stop):
+            self.assertTrue(monitor.request_scan(force=True))
+            self.assertTrue(entered.wait(2))
+            waiter = threading.Thread(target=close_fixture_monitor)
+            waiter.start()
+            try:
+                self.assertTrue(stopping.wait(2) or finished.is_set())
+                self.assertFalse(finished.is_set(), 'temporary sources could be removed while their check still runs')
+            finally:
+                release.set()
+                waiter.join(3)
+            self.assertFalse(waiter.is_alive())
+            self.assertEqual(failures, [])
+            self.assertFalse(monitor.status()['scanning'])
 
     def run_check(self):
         monitor = self.server.missing_monitor

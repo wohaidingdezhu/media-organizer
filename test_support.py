@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import unittest
+import time
 
 
 def make_symlink(link, target, **options):
@@ -15,3 +16,13 @@ def make_symlink(link, target, **options):
 
 def sample_path(value):
     return str(Path("C:" + value)) if os.name == "nt" else value
+
+
+def stop_file_checks(monitor, timeout=3):
+    """Drain generated-file checks before removing Windows fixture directories."""
+    monitor.stop()
+    deadline = time.monotonic() + timeout
+    while monitor.status()['scanning'] and time.monotonic() < deadline:
+        time.sleep(.005)
+    if monitor.status()['scanning']:
+        raise AssertionError('background file check did not stop before fixture cleanup')

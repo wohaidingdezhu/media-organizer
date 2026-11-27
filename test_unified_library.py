@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from test_support import stop_file_checks
 from unittest import mock
 from urllib.parse import urlsplit
 
@@ -58,7 +59,7 @@ class UnifiedLibraryTests(unittest.TestCase):
     def server(self, directory):
         with mock.patch.object(library_server, 'ThreadingHTTPServer', MemoryServer):
             server, url = library_server.create_library_server(directory, self.output)
-        self.addCleanup(server.missing_monitor.stop)
+        self.addCleanup(stop_file_checks, server.missing_monitor)
         return server, urlsplit(url).path.removesuffix('library.html')
 
     def test_separate_scans_share_browsing_labels_favorites_and_scope_removal(self):

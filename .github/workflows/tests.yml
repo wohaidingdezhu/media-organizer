@@ -1,6 +1,7 @@
 name: macOS and Windows tests
 on:
   push:
+    branches: [main]
   pull_request:
 jobs:
   test:
