@@ -167,7 +167,16 @@ async function checkDisks(){try{const result=await api('api/roots');$('disk-stat
 $('check-disks').onclick=checkDisks;
 async function loadExtras(){const results=await Promise.allSettled([api('api/photos'),api('api/changes')]);if(results[0].status==='fulfilled'){const items=results[0].value.items;photos=new Map(items.map(item=>[item.id,item]));optionsFor('photo-month',items.map(item=>item.month),'全部照片年月');render();renderOrganizedResults();if($('picture-viewer').open)renderPictureViewer(true);}else error('照片清单读取失败：'+results[0].reason.message);if(results[1].status==='fulfilled'){const result=results[1].value;const labels={added:'新增',changed:'发生变化',absent:'本次未扫描到'};$('changes-list').replaceChildren();$('changes-list').append(make('p','',result.message||`对比 ${result.previous_created_at}：新增 ${result.counts.added} · 变化 ${result.counts.changed} · 本次未扫描到 ${result.counts.absent}`));for(const item of result.items.slice(0,200))$('changes-list').append(make('p','path',labels[item.state]+'：'+item.path));if(result.items.length>200)$('changes-list').append(make('p','','仅展示前 200 项。'));}else $('changes-list').textContent='比较失败：'+results[1].reason.message;checkDisks();refreshOperations();refreshBasket();}
 const oldBuildFolders=buildFolders;buildFolders=function(){oldBuildFolders();optionsFor('source-folder',data.items.map(item=>item.source_folder),'全部原文件夹');};
-$('choose-destination').onclick=async()=>{if(operating||saving)return;const button=$('choose-destination');button.disabled=true;try{const result=await api('api/operations/destination',{});if(result.destination)$('destination').value=result.destination;}catch(err){error(err.message);}finally{render();}};
+$('choose-destination').onclick=async()=>{
+  if(operating||saving)return;
+  const button=$('choose-destination'),label=button.textContent;
+  saving=true;error();button.textContent='正在选择目标…';render();
+  try{
+    const result=await api('api/operations/destination',{});
+    if(result.destination)$('destination').value=result.destination;
+  }catch(err){error(err.message);}
+  finally{saving=false;button.textContent=label;render();}
+};
 let executionPage=0, executionKeeper='', executionRowsView, executionControlsView;
 let executionConfirmed=false,executionSubmitting=false;
 function syncExecutionControls(){
