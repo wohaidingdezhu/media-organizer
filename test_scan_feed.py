@@ -4,6 +4,7 @@ import io
 import json
 from pathlib import Path
 import unittest
+from test_support import stop_file_checks
 from unittest import mock
 
 from PIL import Image
@@ -244,7 +245,7 @@ class ScanFeedTests(unittest.TestCase):
         from urllib.parse import urlsplit
         with mock.patch.object(library_server, 'ThreadingHTTPServer', MemoryServer):
             server, url = library_server.create_library_server(directory, self.output, pending_provider=reader.snapshot)
-        self.addCleanup(server.missing_monitor.stop)
+        self.addCleanup(stop_file_checks, server.missing_monitor)
         prefix = urlsplit(url).path.removesuffix('library.html')
         _, body = request(server, prefix + 'api/center')
         first = json.loads(body)

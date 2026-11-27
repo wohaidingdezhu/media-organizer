@@ -42,6 +42,10 @@
 macOS 安装 `requirements.txt` 后运行 `./.venv/bin/python -m unittest -v`，验证共用媒体路径；原生降级测试另需编译 Mac 原生组件。应用启动脚本与资料库入口都必须使用同一项目 `.venv`。
 两平台开发环境使用 Node.js 22+。首次运行 `npm ci` 安装前端构建和测试依赖。修改 `frontend/` 后运行 `npm run build:ui`，把生成的 `issue_list_bundle.js` 和源码一起提交。两平台 CI 会重新构建并检查产物是否与提交一致。应用运行不依赖 Node.js。
 Windows 先运行 `安装Windows依赖.bat`，再运行 `.\.venv\Scripts\python.exe -X utf8 -m unittest -v`。
+完整矩阵在 PR 提交更新与 main 推送时执行；开发分支的单独 push 不再重复启动同一套检查。合并前核实 PR，合并后还须核对 main 推送的实际运行结果，并明确区分两者，不能用 PR 成功代替主分支结果。
+
+后台文件检查的 `stop()` 是非阻塞停止请求。临时媒体测试须在清理目录前等待检查结束，超时应明确失败，不能忽略 Windows 文件占用错误或跳过相关用例。
+
 GitHub Actions 会在两端自动安装同一依赖并编译 Mac 降级后端。保持一套业务与页面代码；不得增加两份扫描或资料库实现来适配平台。缺少符号链接权限可以明确跳过符号链接样例，Windows 目录联接测试仍应运行。
 
 ## 将兼容检查设为 GitHub 合并硬性条件
